@@ -1,0 +1,75 @@
+{
+  "_comment": "DRAFT suggested matches from the latest agent run. Review each row, copy keepers to config/interface-equivalences.json, then set INTERFACE_EQUIVALENCES_FILE. Rows with box=[] are phantoms \u2014 fix or remove NSO config instead of confirming.",
+  "equivalences": [
+    {
+      "device": "renc-data-sw",
+      "nso": "FourHundredGigE0/0/0/32",
+      "box": "Hu0/0/0/32",
+      "note": "suggested: same port address, different type \u2014 confirm or delete"
+    },
+    {
+      "device": "renc-data-sw",
+      "nso": "FourHundredGigE0/0/0/36",
+      "box": [
+        "Te0/0/0/36/0",
+        "Te0/0/0/36/1",
+        "Te0/0/0/36/2",
+        "Te0/0/0/36/3"
+      ],
+      "note": "suggested: breakout children \u2014 confirm list or delete"
+    },
+    {
+      "device": "renc-data-sw",
+      "nso": "FourHundredGigE0/0/0/40",
+      "box": "Hu0/0/0/40",
+      "note": "suggested: same port address, different type \u2014 confirm or delete"
+    },
+    {
+      "device": "renc-data-sw",
+      "nso": "FourHundredGigE0/0/0/44",
+      "box": "Hu0/0/0/44",
+      "note": "suggested: same port address, different type \u2014 confirm or delete"
+    },
+    {
+      "device": "renc-data-sw",
+      "nso": "FourHundredGigE0/0/0/48",
+      "box": "Hu0/0/0/48",
+      "note": "suggested: same port address, different type \u2014 confirm or delete"
+    },
+    {
+      "device": "renc-data-sw",
+      "nso": "FourHundredGigE0/0/0/52",
+      "box": [
+        "Hu0/0/0/52/0",
+        "Hu0/0/0/52/1",
+        "Hu0/0/0/52/2",
+        "Hu0/0/0/52/3"
+      ],
+      "note": "suggested: breakout children \u2014 confirm list or delete"
+    },
+    {
+      "device": "renc-data-sw",
+      "nso": "HundredGigE0/0/0/22",
+      "box": [],
+      "note": "suggested: no live candidate (phantom?) \u2014 delete NSO config or leave empty box after review"
+    },
+    {
+      "device": "renc-data-sw",
+      "nso": "HundredGigE0/0/0/30",
+      "box": "Fo0/0/0/30",
+      "note": "suggested: same port address, different type \u2014 confirm or delete"
+    },
+    {
+      "device": "renc-data-sw",
+      "nso": "HundredGigE0/0/0/7.2099",
+      "box": [],
+      "note": "suggested: no live candidate (phantom?) \u2014 delete NSO config or leave empty box after review"
+    },
+    {
+      "device": "uky-data-sw",
+      "nso": "FourHundredGigE0/0/0/34",
+      "box": [],
+      "note": "suggested: no live candidate (phantom?) \u2014 delete NSO config or leave empty box after review"
+    }
+  ]
+}

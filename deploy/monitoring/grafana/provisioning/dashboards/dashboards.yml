@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: NSO Summary
+    orgId: 1
+    folder: NSO
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards

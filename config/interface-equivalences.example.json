@@ -1,0 +1,21 @@
+{
+  "equivalences": [
+    {
+      "device": "renc-data-sw",
+      "nso": "FourHundredGigE0/0/0/32",
+      "box": "Hu0/0/0/32",
+      "note": "optics at 100G; NSO name stale — admin confirmed"
+    },
+    {
+      "device": "renc-data-sw",
+      "nso": "FourHundredGigE0/0/0/36",
+      "box": [
+        "Te0/0/0/36/0",
+        "Te0/0/0/36/1",
+        "Te0/0/0/36/2",
+        "Te0/0/0/36/3"
+      ],
+      "note": "breakout — admin confirmed"
+    }
+  ]
+}

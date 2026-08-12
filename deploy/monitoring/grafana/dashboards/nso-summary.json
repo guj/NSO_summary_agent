@@ -1,0 +1,82 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "nso_test_metric",
+          "legendFormat": "test metric",
+          "refId": "A"
+        }
+      ],
+      "title": "Pushgateway smoke test (nso_test_metric)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "content": "Phase 1 metrics (after agent push):\n\n- `nso_fleet_devices_in_sync`\n- `nso_services_up{service_type=...}` / `nso_services_down`\n- `nso_isis_adjacencies_up` / `_down`\n- `nso_bgp_sessions_up` / `_down`\n- `nso_topology_issues{layer=...}`\n- `nso_summary_last_run_timestamp_seconds`\n- `nso_summary_run_duration_seconds`\n- `nso_summary_run_success`",
+        "mode": "markdown"
+      },
+      "title": "NSO Phase 1 metrics",
+      "type": "text"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["nso", "summary"],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "NSO Summary",
+  "uid": "nso-summary",
+  "version": 1
+}

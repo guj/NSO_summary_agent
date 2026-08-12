@@ -1,0 +1,3 @@
+cpu_five_min_pct: 80
+memory_used_pct: 85
+# temperature_c: null   # reserved; not collected or shown yet

@@ -1,0 +1,6 @@
+Write 2–4 short bullets for operators about this one device.
+
+Use only facts in the JSON (issues, hardware outcome/summary/error, evidence).
+Do not invent peers, interfaces, or statuses.
+If BGP/ISIS issues are listed, mention them by code; do not contradict topology.
+If nothing notable, say the device has no device-scoped issues in the seed/spine.
