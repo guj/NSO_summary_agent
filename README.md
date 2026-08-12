@@ -11,7 +11,7 @@ MCP (collect) → aggregate/delta (Python) → FABRIC AI (summarize) → stdout 
 ## Prerequisites
 
 - Python 3.12+
-- Running [fabric-nso-mcp-server](https://github.com/fabric-testbed/fabric-nso-mcp-server) (same binary as Cursor `myNso` MCP)
+- Running [fabric-nso-mcp-server](https://github.com/fabric-testbed/fabric-nso-mcp-server) 
 - `FABRIC_AI_API_KEY` and access to `FABRIC_AI_API_URL` (OpenAI-compatible, e.g. `https://ai.fabric-testbed.net`)
 
 ## Setup
