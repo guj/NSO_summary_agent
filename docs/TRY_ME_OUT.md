@@ -3,7 +3,7 @@
 Hands-on guide for running this repo. For operator details (report sections, Slack/email, scheduling, topology), see [README.md](../README.md) and [FAQ.md](FAQ.md).
 
 ```
-MCP (collect) → aggregate/delta (Python) → FABRIC AI (summarize) → stdout / Slack / state/
+MCP (collect) → aggregate/delta (Python) → LLM (summarize) → stdout / Slack / state/
 ```
 
 ## What you need
@@ -11,7 +11,7 @@ MCP (collect) → aggregate/delta (Python) → FABRIC AI (summarize) → stdout 
 - Python **3.12+**
 - A built [fabric-nso-mcp-server](https://github.com/fabric-testbed/fabric-nso-mcp-server) binary (`cisco-nso-mcp-server`)
 - Reachable NSO (`NSO_ADDRESS`, credentials)
-- A FABRIC AI API key from [cm.fabric-testbed.net](https://cm.fabric-testbed.net) (for LLM-backed reports)
+- An LLM API key for optional narrative/plans: set `FABRIC_AI_API_KEY` / `FABRIC_AI_API_URL` / `FABRIC_AI_MODEL` (OpenAI-compatible). Defaults are FABRIC AI; any compatible provider works — see [README](../README.md).
 
 Do **not** commit or share: `.env`, `state/`, or real passwords/keys.
 
@@ -40,7 +40,7 @@ Edit `.env` at least:
 | `MCP_SERVER_CMD` | Absolute path to **your** `cisco-nso-mcp-server` |
 | `NSO_ADDRESS` / `NSO_PORT` / `NSO_USERNAME` / `NSO_PASSWORD` | Your NSO |
 | `NSO_VERIFY` | Optional; default verifies HTTPS (`1`). Set `0` for self-signed lab certs |
-| `FABRIC_AI_API_KEY` | Your FABRIC AI key |
+| `FABRIC_AI_API_KEY` / `URL` / `MODEL` | LLM via **OpenAI-compatible** URL only (not Anthropic `…/anthropic`). Defaults = FABRIC AI |
 
 Then load env for the shell session:
 
@@ -82,7 +82,21 @@ nso-summary-run
 
 Writes under `state/` (including `report.md`). If `SLACK_WEBHOOK_URL` and/or SMTP/`EMAIL_TO` are set, delivers the report after a successful run. See README: [Automatic Slack / email delivery](../README.md#automatic-slack--email-delivery).
 
-### 5. Run without installing the console script
+### 5. Diagnostic MAS operator report (dry-run)
+
+```bash
+nso-diagnostic-run --skip-llm --dry-run
+# with LLM dataplane/drill + concise operator layout:
+nso-diagnostic-run --dry-run
+# optional detailed-device appendix:
+nso-diagnostic-run --full --dry-run
+```
+
+Prints Scope / Devices / Services / follow-up (see README § Diagnostic MAS CLI).
+`--publish` delivers Slack (mrkdwn blocks) + email (HTML) and writes
+`state/diagnostic_mas/`.
+
+### 6. Run without installing the console script
 
 ```bash
 python -m agent.run --dry-run
@@ -90,24 +104,25 @@ python -m agent.run --dry-run
 
 Same CLI flags as `nso-summary-run`.
 
-### 6. Run the unit tests
+### 7. Run the unit tests
 
 ```bash
 pip install -e ".[dev]"
 pytest
 ```
 
-Tests live under `tests/` and are meant for **pytest**. Most use mocks — no live NSO or FABRIC key required.
+Tests live under `tests/` and are meant for **pytest**. Most use mocks — no live NSO or LLM API key required.
 
 ## Optional next steps
 
 | Goal | Where to look |
 | ---- | ------------- |
 | Change which report sections appear | `REPORT_SECTIONS` in `.env` — [README § Report format](../README.md#report-format) |
+| Diagnostic operator report / publish | [README § Diagnostic MAS CLI](../README.md#diagnostic-mas-cli) |
 | Schedule 3× daily runs | [README § Scheduled reports](../README.md#scheduled-reports-3-daily) |
 | Local Prometheus / Grafana | `deploy/monitoring/` — set `PROMETHEUS_PUSHGATEWAY_URL` for Phase 1 push |
 | Topology Graphviz image | [README § Graphviz export](../README.md#graphviz-export-scriptsexport_topology_dotpy) — `scripts/export_topology_dot.py` or `dot -Tpng …` |
-| FABRIC key expiry / renewal | [README § FABRIC AI API key lifetime](../README.md#fabric-ai-api-key-lifetime) |
+| LLM API key expiry / renewal | [README § FABRIC AI API key lifetime](../README.md#fabric-ai-api-key-lifetime) (default OpenAI-compatible endpoint) |
 | Devices / topology questions | [FAQ.md](FAQ.md) |
 
 ## Quick success criteria

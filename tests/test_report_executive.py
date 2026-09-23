@@ -160,9 +160,7 @@ def test_device_health_notes_skip_admin_down_and_down_down():
         },
     ]
     assert device_notes_label("lbnl-data-sw", phys, {}) == ""
-    assert device_notes_label("uky-data-sw", phys, {}) == (
-        "Mapping unknown — see Detailed Analysis"
-    )
+    assert device_notes_label("uky-data-sw", phys, {}) == "Mapping unknown"
 
 
 def test_device_health_sync_column():

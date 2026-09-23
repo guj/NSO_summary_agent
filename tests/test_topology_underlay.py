@@ -79,6 +79,53 @@ def test_parse_configured_isis_interfaces_ios_xr():
     assert names == ["HundredGigE0/0/0/0.2400", "HundredGigE0/0/0/0.2402"]
 
 
+@pytest.mark.asyncio
+async def test_static_isis_prefer_get_device_config(monkeypatch):
+    from nso_facts.topology import underlay as underlay_mod
+
+    calls: list[tuple[str, dict[str, Any] | None]] = []
+
+    async def fake_call_mcp(client, tool, params=None):
+        calls.append((tool, params))
+        assert tool == "get_device_config"
+        return IOS_XR_ISIS_CONFIG
+
+    monkeypatch.setattr(underlay_mod, "call_mcp", fake_call_mcp)
+    names = await underlay_mod._static_isis_interfaces_for_device(object(), "sw1")
+    assert names == ["HundredGigE0/0/0/0.2400", "HundredGigE0/0/0/0.2402"]
+    assert calls == [("get_device_config", {"device_name": "sw1"})]
+
+
+@pytest.mark.asyncio
+async def test_static_isis_explore_fallback_when_config_empty(monkeypatch):
+    from nso_facts.topology import underlay as underlay_mod
+
+    calls: list[str] = []
+
+    async def fake_call_mcp(client, tool, params=None):
+        calls.append(tool)
+        if tool == "get_device_config":
+            return {"status": "success", "data": {"config": {}}}
+        if tool == "explore_nso_path":
+            path = (params or {}).get("path", "")
+            depth = (params or {}).get("depth")
+            if path.endswith("/config") and depth == 1:
+                return {
+                    "status": "success",
+                    "data": {"tailf-ned-cisco-ios-xr:router": {}},
+                }
+            if "router/isis" in path or path.endswith(":router"):
+                return IOS_XR_ISIS_CONFIG
+            return {"status": "success", "data": {}}
+        raise AssertionError(f"unexpected {tool} {params}")
+
+    monkeypatch.setattr(underlay_mod, "call_mcp", fake_call_mcp)
+    names = await underlay_mod._static_isis_interfaces_for_device(object(), "sw1")
+    assert names == ["HundredGigE0/0/0/0.2400", "HundredGigE0/0/0/0.2402"]
+    assert calls[0] == "get_device_config"
+    assert "explore_nso_path" in calls
+
+
 def test_pair_adjacency_observations_bidirectional_up():
     observations = [
         AdjacencyObservation(
@@ -172,7 +219,6 @@ async def test_collect_static_underlay_matches_abbreviated_live_interfaces():
             }
         },
     }
-    config_root = {"status": "success", "data": {"tailf-ned-cisco-ios-xr:router": {}}}
     physical_edges = [
         {
             "local": {
@@ -189,16 +235,8 @@ async def test_collect_static_underlay_matches_abbreviated_live_interfaces():
     ]
     client = FakeClient(
         {
-            ("explore_nso_path", "tailf-ncs:devices/device=lbnl-data-sw/config"): config_root,
-            (
-                "explore_nso_path",
-                "tailf-ncs:devices/device=lbnl-data-sw/config/tailf-ned-cisco-ios-xr:router/isis",
-            ): lbnl_config,
-            ("explore_nso_path", "tailf-ncs:devices/device=uky-data-sw/config"): config_root,
-            (
-                "explore_nso_path",
-                "tailf-ncs:devices/device=uky-data-sw/config/tailf-ned-cisco-ios-xr:router/isis",
-            ): uky_config,
+            ("get_device_config", "lbnl-data-sw"): lbnl_config,
+            ("get_device_config", "uky-data-sw"): uky_config,
             (
                 "check_isis_adjacencies",
                 "lbnl-data-sw",
@@ -240,7 +278,7 @@ async def test_collect_static_underlay_matches_abbreviated_live_interfaces():
         result = await client_arg.call_tool(tool, {"params": params or {}})
         return _tool_data(result)
 
-    import agent.topology.underlay as underlay_mod
+    import nso_facts.topology.underlay as underlay_mod
 
     original = underlay_mod.call_mcp
     underlay_mod.call_mcp = call_mcp
@@ -261,22 +299,10 @@ async def test_collect_static_underlay_matches_abbreviated_live_interfaces():
 
 @pytest.mark.asyncio
 async def test_collect_static_and_operational_underlay():
-    config_root = {
-        "status": "success",
-        "data": {"tailf-ned-cisco-ios-xr:router": {}},
-    }
     client = FakeClient(
         {
-            ("explore_nso_path", "tailf-ncs:devices/device=lbnl-data-sw/config"): config_root,
-            (
-                "explore_nso_path",
-                "tailf-ncs:devices/device=lbnl-data-sw/config/tailf-ned-cisco-ios-xr:router/isis",
-            ): IOS_XR_ISIS_CONFIG,
-            ("explore_nso_path", "tailf-ncs:devices/device=renc-data-sw/config"): config_root,
-            (
-                "explore_nso_path",
-                "tailf-ncs:devices/device=renc-data-sw/config/tailf-ned-cisco-ios-xr:router/isis",
-            ): IOS_XR_ISIS_CONFIG,
+            ("get_device_config", "lbnl-data-sw"): IOS_XR_ISIS_CONFIG,
+            ("get_device_config", "renc-data-sw"): IOS_XR_ISIS_CONFIG,
             ("check_isis_adjacencies", "lbnl-data-sw"): ISIS_ADJ_LBNL,
             ("check_isis_adjacencies", "renc-data-sw"): ISIS_ADJ_RENC,
         }
@@ -288,7 +314,7 @@ async def test_collect_static_and_operational_underlay():
         result = await client_arg.call_tool(tool, {"params": params or {}})
         return _tool_data(result)
 
-    import agent.topology.underlay as underlay_mod
+    import nso_facts.topology.underlay as underlay_mod
 
     original = underlay_mod.call_mcp
     underlay_mod.call_mcp = call_mcp

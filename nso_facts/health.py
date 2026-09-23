@@ -75,7 +75,18 @@ def _collect_device_leaves(obj: Any, devices: list[str]) -> None:
 
 
 def parse_in_sync(sync_result: dict[str, Any] | None) -> bool | None:
-    """Extract service sync boolean from MCP check_service_sync responses."""
+    """Extract service sync boolean from MCP ``check_service_sync`` responses.
+
+    MCP payloads vary by NED/tooling. Accept common keys under ``data`` and
+    ``data.details``:
+
+    - ``in_sync`` / ``in-sync`` (bool or string)
+    - ``sync_state`` (e.g. ``"in-sync"`` / ``"out-of-sync"``) — do not ignore
+    - ``result`` (same string vocabulary)
+
+    Values are normalized by ``_coerce_sync_value`` (``in-sync`` and ``in_sync``
+    both count as synced).
+    """
     if not isinstance(sync_result, dict) or sync_result.get("status") != "success":
         return None
 
@@ -83,45 +94,43 @@ def parse_in_sync(sync_result: dict[str, Any] | None) -> bool | None:
     if not isinstance(data, dict):
         return None
 
-    direct = _coerce_sync_value(data.get("in_sync"))
-    if direct is not None:
-        return direct
+    for key in ("in_sync", "in-sync", "sync_state", "result"):
+        direct = _coerce_sync_value(data.get(key))
+        if direct is not None:
+            return direct
 
     details = data.get("details")
     if isinstance(details, dict):
-        nested = _coerce_sync_value(details.get("in-sync"))
-        if nested is not None:
-            return nested
-        nested = _coerce_sync_value(details.get("result"))
-        if nested is not None:
-            return nested
+        for key in ("in-sync", "in_sync", "sync_state", "result"):
+            nested = _coerce_sync_value(details.get(key))
+            if nested is not None:
+                return nested
 
     return None
 
 
-def classify_instance(
+def classify_system_status(
     sync_result: dict[str, Any] | None,
     device_results: list[str | None],
-    *,
-    live_l2_summary: str | None = None,
 ) -> str:
-    """Return up, down, degraded, or unknown for one service instance."""
-    for result in device_results:
-        if _is_device_down(result):
-            return "down"
+    """NSO/device sync layer only: up, degraded, or unknown — never down.
 
-    live = str(live_l2_summary or "").lower()
-    if live == "down":
-        return "down"
-    if live == "degraded":
-        return "degraded"
+    Status policy (service reporting):
+    - **Down** requires positive evidence a required service path failed
+      (AC/XC/segment down, missing required route, scoped traffic failure).
+      That comes from dataplane/live evidence via ``apply_dataplane_status``,
+      not from this sync classifier.
+    - **Unknown** when queries time out, tools error, or ``in_sync`` is None —
+      a query failure describes the investigation, not the service.
+    - **Degraded** for configuration drift (out-of-sync), not forwarding down.
+      In-sync does not prove forwarding works.
+    """
+    # Any sync/device query failure → unknown (incl. unreachable / timeout).
+    if any(_is_verification_gap(result) for result in device_results):
+        return "unknown"
 
     if sync_result and sync_result.get("status") == "error":
-        message = str(sync_result.get("error_message", "")).lower()
-        if "not found" in message:
-            return "unknown"
-        if _looks_unreachable(message):
-            return "down"
+        # Service sync MCP error: could not verify — not confirmed path failure.
         return "unknown"
 
     in_sync = parse_in_sync(sync_result)
@@ -140,7 +149,64 @@ def classify_instance(
     if known_devices and all(result == "in-sync" for result in known_devices):
         return "up"
 
+    # in_sync is None / missing and no usable device results → unknown
     return "unknown"
+
+
+def classify_dataplane_status(live_l2: dict[str, Any] | None) -> str:
+    """Collector never sets dataplane from live_l2 — always not_checked.
+
+    Use ``apply_dataplane_status`` after the LLM verify phase.
+    """
+    del live_l2
+    return "not_checked"
+
+
+_STATUS_RANK = {
+    "up": 0,
+    "not_checked": 0,  # ignored when combining; kept for completeness
+    "unknown": 1,
+    "degraded": 2,
+    "down": 3,
+}
+
+
+def combine_service_status(system_status: str, dataplane_status: str) -> str:
+    """Overall status = worst of system and dataplane (not_checked ignored)."""
+    layers: list[str] = []
+    sys = str(system_status or "unknown").lower()
+    dp = str(dataplane_status or "not_checked").lower()
+    if sys in _STATUS_RANK and sys != "not_checked":
+        layers.append(sys)
+    if dp in _STATUS_RANK and dp != "not_checked":
+        layers.append(dp)
+    if not layers:
+        return "unknown"
+    return max(layers, key=lambda s: _STATUS_RANK.get(s, 1))
+
+
+def classify_instance(
+    sync_result: dict[str, Any] | None,
+    device_results: list[str | None],
+    *,
+    live_l2_summary: str | None = None,
+) -> str:
+    """Overall status from system/sync only (dataplane is LLM, not hardcode).
+
+    ``live_l2_summary`` is ignored for status (kept for call-compat).
+    """
+    del live_l2_summary  # dataplane not hardcoded into overall status
+    return classify_system_status(sync_result, device_results)
+
+
+def apply_dataplane_status(record: dict[str, Any], dataplane_status: str) -> None:
+    """Set LLM dataplane result and recompute overall ``status`` in-place."""
+    dp = str(dataplane_status or "not_checked").lower()
+    if dp not in _STATUS_RANK:
+        dp = "unknown"
+    record["dataplane_status"] = dp
+    sys = str(record.get("system_status") or "unknown").lower()
+    record["status"] = combine_service_status(sys, dp)
 
 
 def build_instance_record(
@@ -154,14 +220,10 @@ def build_instance_record(
     name = instance_name(instance)
     devices = extract_devices(instance)
     device_results = [device_sync_map.get(device) for device in devices]
-    live_summary = None
-    if isinstance(live_l2, dict):
-        live_summary = live_l2.get("summary")
-    status = classify_instance(
-        sync_result, device_results, live_l2_summary=str(live_summary)
-        if live_summary is not None
-        else None
-    )
+    system_status = classify_system_status(sync_result, device_results)
+    # Dataplane is LLM-only; collector never marks dataplane up/down.
+    dataplane_status = "not_checked"
+    status = combine_service_status(system_status, dataplane_status)
     in_sync = parse_in_sync(sync_result)
 
     record: dict[str, Any] = {
@@ -173,9 +235,12 @@ def build_instance_record(
             device: device_sync_map.get(device)
             for device in devices
         },
+        "system_status": system_status,
+        "dataplane_status": dataplane_status,
         "status": status,
     }
     if isinstance(live_l2, dict):
+        # Evidence for LLM only — does not set dataplane_status
         record["live_l2"] = live_l2
     if sync_result and sync_result.get("status") == "error":
         record["sync_error"] = sync_result.get("error_message")
@@ -231,15 +296,44 @@ def _coerce_sync_value(value: Any) -> bool | None:
     return None
 
 
-def _is_device_down(result: str | None) -> bool:
+def _is_verification_gap(result: str | None) -> bool:
+    """True for sync/device query failures that do not prove forwarding is down.
+
+    Timeouts, tool/API errors, unreachable/connection-refused from NSO, and
+    similar investigation failures → ``unknown``, never service ``down``.
+    """
     if not result:
         return False
     lowered = result.lower()
-    return lowered.startswith("error") or "unreachable" in lowered
+    if lowered in {"in-sync", "out-of-sync", "out of sync", "not-in-sync"}:
+        return False
+    if lowered.startswith("error"):
+        return True
+    return any(
+        token in lowered
+        for token in (
+            "timed out",
+            "timeout",
+            "read timeout",
+            "unreachable",
+            "connection refused",
+        )
+    )
+
+
+def _is_confirmed_unreachable(message: str | None) -> bool:
+    """Device/NED unreachability wording (still a query failure for services)."""
+    if not message:
+        return False
+    lowered = message.lower()
+    return "unreachable" in lowered or "connection refused" in lowered
+
+
+def _is_device_down(result: str | None) -> bool:
+    """Deprecated alias — sync-layer 'device down' is a verification gap."""
+    return _is_verification_gap(result)
 
 
 def _looks_unreachable(message: str) -> bool:
-    return any(
-        token in message
-        for token in ("unreachable", "connection refused", "timed out", "timeout")
-    )
+    """True for timeout/API/unreachable query failures."""
+    return _is_verification_gap(message)

@@ -11,13 +11,16 @@ from nso_facts.topology.interfaces import interfaces_match
 _GROUP_NAME = re.compile(
     r"^(?P<group>\S+)\s+(?P<name>\S+)\s*$"
 )
-# Status line: XC ST, AC desc, AC ST, optional EVPN side...
+# Status line: XC ST, AC desc, AC ST (Segment 2 parsed from remainder)
 _STATUS_LINE = re.compile(
     r"^\s*(?P<st>UP|DN|AD|UR|SB|SR)\s+"
     r"(?P<ac>(?:Hu|FH|TF|Fo|Te|Gi|BE|BV|Nu|Mg|Lo)[\w/.\-]+)\s+"
-    r"(?P<ac_st>UP|DN|AD|UR|SB|SR)\b",
+    r"(?P<ac_st>UP|DN|AD|UR|SB|SR)\b"
+    r"(?P<rest>.*)$",
     re.IGNORECASE,
 )
+
+_SEG2_ST = frozenset({"UP", "DN", "AD", "UR", "SB", "SR"})
 
 _L2_SERVICE_TYPES = frozenset({"l2ptp", "l2sts"})
 
@@ -60,14 +63,23 @@ def parse_l2vpn_xconnect(text: str) -> list[dict[str, Any]]:
 
         sm = _STATUS_LINE.match(line)
         if sm:
-            rows.append(
-                {
-                    "group": group,
-                    "name": name,
-                    "st": sm.group("st").upper(),
-                    "ac": sm.group("ac"),
-                }
-            )
+            row: dict[str, Any] = {
+                "group": group,
+                "name": name,
+                "st": sm.group("st").upper(),
+                "ac": sm.group("ac"),
+                "ac_st": sm.group("ac_st").upper(),
+            }
+            rest = (sm.group("rest") or "").strip()
+            if rest:
+                # Trailing token is often Segment-2 ST (EVPN side)
+                parts = rest.rsplit(None, 1)
+                if len(parts) == 2 and parts[1].upper() in _SEG2_ST:
+                    row["seg2"] = parts[0].strip()
+                    row["seg2_st"] = parts[1].upper()
+                else:
+                    row["seg2"] = rest
+            rows.append(row)
     return rows
 
 
@@ -93,21 +105,29 @@ def ac_name_from_endpoint(interface: dict[str, Any] | None) -> str | None:
 
 
 def extract_l2_access_endpoints(instance: dict[str, Any]) -> list[dict[str, str]]:
-    """Collect {device, ac} from l2ptp/l2sts-style stp-a / stp-z (and similar)."""
+    """Collect {device, ac} from site/stp-style ends (interface dict or list)."""
     out: list[dict[str, str]] = []
     if not isinstance(instance, dict):
         return out
-    for key, val in instance.items():
+    for _key, val in instance.items():
         if not isinstance(val, dict):
             continue
         device = val.get("device")
-        iface = val.get("interface")
         if not isinstance(device, str) or not device:
             continue
-        ac = ac_name_from_endpoint(iface if isinstance(iface, dict) else None)
-        if not ac:
+        iface = val.get("interface")
+        iface_list: list[Any]
+        if isinstance(iface, dict):
+            iface_list = [iface]
+        elif isinstance(iface, list):
+            iface_list = iface
+        else:
             continue
-        out.append({"device": device, "ac": ac})
+        for one in iface_list:
+            ac = ac_name_from_endpoint(one if isinstance(one, dict) else None)
+            if not ac:
+                continue
+            out.append({"device": device, "ac": ac})
     return out
 
 
@@ -125,7 +145,10 @@ def summarize_live_l2(
     endpoints: list[dict[str, str]],
     rows_by_device: dict[str, list[dict[str, Any]]],
 ) -> dict[str, Any]:
-    """Build live_l2 payload with summary up|degraded|down|unknown."""
+    """Build live_l2 evidence (not used for hardcoded dataplane status)."""
+    if not endpoints:
+        return {"probed": False, "endpoints": [], "summary": "not_checked"}
+
     detailed: list[dict[str, Any]] = []
     states: list[str] = []
 
@@ -149,6 +172,12 @@ def summarize_live_l2(
         entry["st"] = st
         entry["xconnect"] = row.get("name")
         entry["group"] = row.get("group")
+        if row.get("ac_st"):
+            entry["ac_st"] = str(row.get("ac_st")).upper()
+        if row.get("seg2"):
+            entry["seg2"] = row.get("seg2")
+        if row.get("seg2_st"):
+            entry["seg2_st"] = str(row.get("seg2_st")).upper()
         detailed.append(entry)
         if st:
             states.append(st)

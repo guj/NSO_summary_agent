@@ -9,9 +9,12 @@ from unittest.mock import patch
 from agent.config import Settings
 from agent.fabric_key import (
     FabricKeyLifetime,
+    FabricModelResolve,
     _extract_expires,
+    format_fabric_model_line,
     get_fabric_api_key_lifetime,
     prepare_fabric_llm,
+    resolve_fabric_model,
 )
 
 
@@ -55,6 +58,56 @@ def _settings(**overrides) -> Settings:
     }
     base.update(overrides)
     return Settings(**base)
+
+
+def test_extract_allowance_and_format_line():
+    from agent.fabric_key import FabricKeyLifetime, _extract_allowance
+
+    spend, budget, reset = _extract_allowance(
+        {
+            "info": {
+                "expires": "2027-01-21T00:00:00Z",
+                "spend": 42.5,
+                "max_budget": 50.0,
+                "budget_reset_at": "2026-10-01T00:00:00Z",
+            }
+        }
+    )
+    assert spend == 42.5
+    assert budget == 50.0
+    assert reset is not None
+    line = FabricKeyLifetime(
+        expires_at=datetime(2027, 1, 21, tzinfo=UTC),
+        source="api",
+        detail="/key/info",
+        spend=spend,
+        max_budget=budget,
+        budget_reset_at=reset,
+    ).format_allowance_line()
+    assert line is not None
+    assert "spend=42.5" in line
+    assert "max_budget=50" in line
+    assert "remaining" in line
+    assert "7.5 remaining" in line or "7.500" in line
+
+
+def test_budget_exhausted_skips_llm(monkeypatch):
+    from agent.fabric_key import FabricKeyLifetime, prepare_fabric_llm
+
+    monkeypatch.setattr(
+        "agent.fabric_key.get_fabric_api_key_lifetime",
+        lambda _s: FabricKeyLifetime(
+            expires_at=datetime.now(UTC) + timedelta(days=30),
+            source="api",
+            detail="/key/info",
+            spend=50.01,
+            max_budget=50.0,
+        ),
+    )
+    lifetime, skip = prepare_fabric_llm(_settings())
+    assert lifetime.budget_exhausted
+    assert skip is True
+    assert lifetime.should_skip_llm
 
 
 def test_extract_expires_nested_info():
@@ -124,9 +177,11 @@ def test_prepare_fabric_llm_skips_when_expired(capsys):
         "agent.fabric_key.get_fabric_api_key_lifetime",
         return_value=FabricKeyLifetime(expires_at=expires, source="api", detail="/key/info"),
     ):
-        lifetime, force_skip = prepare_fabric_llm(_settings())
+        with patch("agent.fabric_key.resolve_fabric_model") as resolve_mock:
+            lifetime, force_skip = prepare_fabric_llm(_settings())
     assert force_skip is True
     assert lifetime.should_skip_llm
+    resolve_mock.assert_not_called()
     err = capsys.readouterr().err
     assert "LLM calls will be SKIPPED" in err
     assert "EXPIRED" in err
@@ -142,9 +197,11 @@ def test_prepare_fabric_llm_skips_when_auth_invalid(capsys):
             auth_invalid=True,
         ),
     ):
-        lifetime, force_skip = prepare_fabric_llm(_settings())
+        with patch("agent.fabric_key.resolve_fabric_model") as resolve_mock:
+            lifetime, force_skip = prepare_fabric_llm(_settings())
     assert force_skip is True
     assert lifetime.should_skip_llm
+    resolve_mock.assert_not_called()
     err = capsys.readouterr().err
     assert "INVALID OR REVOKED" in err
     assert "LLM calls will be SKIPPED" in err
@@ -155,11 +212,53 @@ def test_prepare_fabric_llm_does_not_skip_when_unknown(capsys):
         "agent.fabric_key.get_fabric_api_key_lifetime",
         return_value=FabricKeyLifetime(expires_at=None, source="unknown"),
     ):
-        lifetime, force_skip = prepare_fabric_llm(_settings())
+        with patch(
+            "agent.fabric_key.resolve_fabric_model",
+            return_value=FabricModelResolve(
+                requested="gpt-oss-20b",
+                resolved="gpt-oss-20b",
+                detail="chat/completions",
+            ),
+        ):
+            lifetime, force_skip = prepare_fabric_llm(_settings())
     assert force_skip is False
     assert not lifetime.should_skip_llm
     err = capsys.readouterr().err
     assert "LLM calls will be SKIPPED" not in err
+    assert "FABRIC AI LLM model: requested=gpt-oss-20b resolved=gpt-oss-20b" in err
+
+
+def test_format_fabric_model_line_unknown():
+    line = format_fabric_model_line(
+        FabricModelResolve(
+            requested="gpt-oss-20b",
+            resolved=None,
+            detail="HTTP 404",
+        )
+    )
+    assert "requested=gpt-oss-20b" in line
+    assert "resolved=unknown" in line
+    assert "HTTP 404" in line
+
+
+def test_resolve_fabric_model_reads_response_model():
+    payload = json.dumps({"id": "chatcmpl-1", "model": "exact-model-id"}).encode()
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return payload
+
+    with patch("urllib.request.urlopen", return_value=FakeResp()):
+        info = resolve_fabric_model(_settings(fabric_model="alias-name"))
+    assert info.requested == "alias-name"
+    assert info.resolved == "exact-model-id"
+    assert info.detail == "chat/completions"
 
 
 def test_api_401_marks_auth_invalid():

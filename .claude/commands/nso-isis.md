@@ -1,28 +1,41 @@
 ---
-description: Run bidirectional IS-IS check via multi-agent and summarize issues
-argument-hint: "[device-substring]"
+description: Run IS-IS-focused diagnostic (nso-diagnostic-run) and summarize issues
+argument-hint: "[llm] [device|device1,device2]"
 ---
 
-Run the multi-agent IS-IS spine and report on it. Do **not** publish.
+Run the diagnostic MAS **IS-IS** spine and report on it. Do **not** publish.
 
-1. Confirm you are in the NSO_summary_agent repo root and `.env` exists. If not,
-   tell the user to copy `.env.example` → `.env` and fill NSO/MCP settings, then stop.
-2. Activate `.venv` if present: `source .venv/bin/activate`.
-3. Load env: `set -a && source .env && set +a`.
-4. Run (dry-run / no Slack / no state write):
+1. Parse `$ARGUMENTS` (whitespace-separated):
+   - Token `llm` (case-insensitive) → enable LLM (omit `--skip-llm`). Default: `--skip-llm`.
+   - Any other token → device filter. Prefer one comma-list token
+     (`renc-data-sw,lbnl-data-sw`) or a substring (`renc`).
+     Pass to CLI as `--devices …`. If none, omit `--devices` (all devices).
+2. Confirm repo root + `.env`; activate `.venv` if present; then
+   `set -a && source .env && set +a`.
+3. Run (dry-run / no Slack / no state write):
 
 ```bash
-nso-multi-agent-run --isis-only --spine-only --skip-devices --skip-fleet-spine --skip-metrics
+# default — all devices, spines only
+nso-diagnostic-run --isis-only --skip-service --skip-llm --dry-run
+
+# one device / substring
+nso-diagnostic-run --isis-only --skip-service --skip-llm --dry-run --devices renc
+
+# with llm (drop --skip-llm)
+nso-diagnostic-run --isis-only --skip-service --dry-run [--devices DEVICES]
 ```
 
-5. From the command stdout, summarize the **IS-IS** section. If `$ARGUMENTS` is non-empty,
-   highlight issues/adjacencies whose device or message matches that substring.
-6. Produce a short Markdown summary:
-   - Bidirectional totals (total / up / down / unidirectional / unknown) if present
-   - Bulleted issues: severity, edge/devices, message (quote from output)
-   - If no issues: say so explicitly
-   - End with: dry-run (no `state/multi_agent/` write); suggest `/nso-multi-agent`
-     for a full report or `/nso-bgp` for BGP-only focus
+   Notes:
+   - `--isis-only` skips BGP (physical inventory still runs for the device set).
+   - `--skip-service` skips service/fleet/HW.
+   - `--devices` focuses on seed device(s); the CLI expands to **one-hop IS-IS
+     neighbors only** (not the whole inventory), then reports on the seed.
+   - Default `--skip-llm` = spines + report only; `llm` enables diagnosis if
+     `FABRIC_AI_*` is set.
 
-Ground every claim in the CLI output. Do not invent adjacencies or statuses.
-Do not pass `--publish`.
+4. Summarize **IS-IS / underlay** from stdout (focus on the filtered device if any).
+5. Short Markdown: bidirectional totals; bulleted issues (quote); remedies if `llm`;
+   say explicitly if no issues. End: dry-run; LLM on/off; suggest `/nso-bgp`,
+   `/nso-report`, `/nso-device`.
+
+Ground every claim in CLI output. No inventing. No `--publish` / `DRY_RUN=0`.

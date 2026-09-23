@@ -157,7 +157,9 @@ def device_notes_label(
         parts.append("Mapping unknown")
     if not parts:
         return ""
-    return ", ".join(parts) + " — see Detailed Analysis"
+    # Self-contained note — do not cross-reference "Detailed Analysis"
+    # (that section is multi-agent / diagnostic --full only).
+    return ", ".join(parts)
 
 
 def device_sync_label(device: str, sync_map: dict[str, str]) -> str:

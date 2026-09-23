@@ -84,6 +84,8 @@ async def test_collect_marks_l2ptp_degraded_from_xconnect(monkeypatch):
         {"lbnl-data-sw": "in-sync", "renc-data-sw": "in-sync"},
     )
     rec = out["l2ptp/l2-PTP-broken"]
-    assert rec["status"] == "degraded"
+    assert rec["system_status"] == "up"
+    assert rec["dataplane_status"] == "not_checked"
+    assert rec["status"] == "up"
     assert rec["live_l2"]["summary"] == "degraded"
     assert "exec_show" in calls

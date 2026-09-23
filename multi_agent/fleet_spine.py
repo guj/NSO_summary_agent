@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Sequence
 
 from agent.config import Settings
 from multi_agent.base import AgentResult
@@ -21,17 +21,29 @@ async def collect_fleet_spine(
     device_names: list[str],
     *,
     physical_edges: list[dict[str, Any]],
+    only_service_types: Sequence[str] | None = None,
+    only_service_ids: Sequence[str] | None = None,
+    lean: bool = False,
 ) -> dict[str, Any]:
-    """Services, fleet sync, CPU/mem, hardware, physical operational."""
+    """Services, fleet sync, CPU/mem, hardware, physical operational.
+
+    ``lean=True`` (service-focus): skip fleet sync, HW, system health, and
+    physical operational probes — only fetch the requested service type(s).
+    """
     return await build_fact_pack(
         client,
         settings,
         device_names=device_names,
         include_capabilities=False,
-        include_system_health=True,
-        include_hardware_health=True,
+        include_system_health=not lean,
+        include_hardware_health=not lean,
+        # Fleet sync is cheap (one call) and required for service up/unknown
+        # classification when check_service_sync shape is ambiguous.
+        include_fleet_sync=True,
         physical_edges=physical_edges,
-        include_physical_operational=True,
+        include_physical_operational=bool(physical_edges) and not lean,
+        only_service_types=only_service_types,
+        only_service_ids=only_service_ids,
     )
 
 
@@ -82,15 +94,13 @@ def assemble_topology(
                 },
                 "underlay": {
                     "edges": isis.static_edges,
-                    "summary": isis.static_summary
-                    or summarize_static_underlay(isis.static_edges),
+                    "summary": summarize_static_underlay(isis.static_edges),
                 },
                 "routing": {
                     "edges": bgp.static_edges,
-                    "summary": bgp.static_summary
-                    or summarize_static_routing(bgp.static_edges),
+                    "summary": summarize_static_routing(bgp.static_edges),
                 },
-                "services": {"edges": [], "summary": {"total": 0, "by_type": {}}},
+                "services": {"edges": [], "summary": {}},
             },
         },
         "operational": {
@@ -98,24 +108,13 @@ def assemble_topology(
                 "physical": build_operational_physical_layer(physical_op_edges),
                 "underlay": {
                     "edges": isis.operational_edges,
-                    "summary": isis.operational_summary
-                    or {"total": len(isis.operational_edges)},
+                    "summary": isis.operational_summary or {},
                 },
                 "routing": {
                     "edges": bgp.operational_edges,
-                    "summary": bgp.operational_summary
-                    or {"total": len(bgp.operational_edges)},
+                    "summary": bgp.operational_summary or {},
                 },
-                "services": {
-                    "edges": [],
-                    "summary": {
-                        "total": 0,
-                        "up": 0,
-                        "down": 0,
-                        "degraded": 0,
-                        "unknown": 0,
-                    },
-                },
+                "services": {"edges": [], "summary": {}},
             },
             "issues": issues,
         },

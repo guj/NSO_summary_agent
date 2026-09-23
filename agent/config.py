@@ -64,6 +64,10 @@ class Settings:
     interface_equivalences_file: Path | None
     iface_troubleshoot_max_tool_rounds: int
     iface_troubleshoot_disable: bool
+    slack_bot_token: str | None = None
+    slack_channel_id: str | None = None
+    diagnostic_report_base_url: str | None = None
+    service_sync_mode: str = "check"
 
 
 def _mcp_env(nso_address: str, nso_password: str) -> dict[str, str]:
@@ -97,6 +101,7 @@ def _mcp_args() -> list[str]:
         f"--nso-address={os.environ['NSO_ADDRESS']}",
         f"--nso-port={os.environ.get('NSO_PORT', '443')}",
         f"--nso-username={os.environ.get('NSO_USERNAME', 'admin')}",
+        f"--nso-timeout={os.environ.get('NSO_TIMEOUT', '10')}",
     ]
     # MCP default is verify=True; pass an explicit flag either way.
     if _parse_bool_env(os.environ.get("NSO_VERIFY"), default=True):
@@ -151,6 +156,9 @@ def load_settings() -> Settings:
         ),
         report_sections=_parse_report_sections(os.environ.get("REPORT_SECTIONS")),
         slack_webhook_url=os.environ.get("SLACK_WEBHOOK_URL"),
+        slack_bot_token=os.environ.get("SLACK_BOT_TOKEN") or None,
+        slack_channel_id=os.environ.get("SLACK_CHANNEL_ID") or None,
+        diagnostic_report_base_url=os.environ.get("DIAGNOSTIC_REPORT_BASE_URL") or None,
         smtp_host=os.environ.get("SMTP_HOST"),
         smtp_port=int(os.environ.get("SMTP_PORT", "587")),
         smtp_user=os.environ.get("SMTP_USER"),
@@ -175,7 +183,16 @@ def load_settings() -> Settings:
             "IFACE_TROUBLESHOOT_DISABLE", "0"
         )
         in ("1", "true", "yes"),
+        service_sync_mode=_parse_service_sync_mode(
+            os.environ.get("NSO_SERVICE_SYNC_MODE")
+        ),
     )
+
+
+def _parse_service_sync_mode(value: str | None) -> str:
+    from nso_facts.service_collect import normalize_service_sync_mode
+
+    return normalize_service_sync_mode(value)
 
 
 def _parse_optional_path(value: str | None) -> Path | None:

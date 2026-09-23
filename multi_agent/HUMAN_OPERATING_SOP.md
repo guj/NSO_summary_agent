@@ -56,6 +56,8 @@ Work top-down:
 2. **Fleet Summary** — sync, services, peer/adjacency counts, infra alerts.  
 3. **Action Items** — ordered work queue (start here for triage).  
 4. **Operational Assessment** — narrative context; verify against issue codes below.  
+   When LLM ran (not `--spine-only`), also read **Suggested remedies (hypotheses)** —
+   treat as unproven triage hints grounded in issues/evidence, not approved changes.  
 5. **Detailed Analysis** — IS-IS / BGP sections + per-device evidence.  
 6. **Artifacts** (if needed) — `state/multi_agent/runs/<run_id>/{isis,bgp,merged,report}.*` after `--publish` for edge ids and raw facts.
 

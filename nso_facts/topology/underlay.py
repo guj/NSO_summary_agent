@@ -445,6 +445,16 @@ async def _static_isis_interfaces_for_device(
     client: Any,
     device: str,
 ) -> list[str]:
+    """Discover IS-IS interfaces from NSO intent for one device.
+
+    Prefer ``get_device_config``; fall back to the explore_nso_path NED
+    ladder only when full config yields no IS-IS interfaces.
+    """
+    result = await call_mcp(client, "get_device_config", {"device_name": device})
+    names = parse_configured_isis_interfaces(result)
+    if names:
+        return names
+
     suffixes = await _isis_config_suffixes(client, device)
     config_path = f"tailf-ncs:devices/device={device}/config"
 
@@ -466,8 +476,7 @@ async def _static_isis_interfaces_for_device(
         if names:
             return names
 
-    result = await call_mcp(client, "get_device_config", {"device_name": device})
-    return parse_configured_isis_interfaces(result)
+    return []
 
 
 async def _isis_config_suffixes(client: Any, device: str) -> list[str]:

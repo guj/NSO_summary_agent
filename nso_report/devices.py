@@ -35,6 +35,8 @@ def format_devices_section(
     services: dict[str, Any] | None = None,
     fleet_sync: Any = None,
     hardware_health: dict[str, Any] | None = None,
+    extra_devices: list[str] | None = None,
+    only_devices: list[str] | None = None,
 ) -> str:
     """Build Detailed Device Analysis body from topology (+ optional services)."""
     op_layers = _operational_layers(topology)
@@ -52,6 +54,11 @@ def format_devices_section(
     sync_map = build_device_sync_map(fleet_sync)
     services_by_device = _index_services_by_device(services)
     hw = hardware_health if isinstance(hardware_health, dict) else {}
+    named = {
+        n.strip()
+        for n in (extra_devices or [])
+        if isinstance(n, str) and n.strip()
+    }
 
     devices = sorted(
         _devices_in_edges(phys, under, route)
@@ -60,7 +67,17 @@ def format_devices_section(
         | set(unexpected_live)
         | set(route_summaries)
         | set(services_by_device)
+        | set(hw)
+        | named
     )
+    if only_devices:
+        allow = {n.strip() for n in only_devices if isinstance(n, str) and n.strip()}
+        devices = [d for d in devices if d in allow]
+        # Ensure requested focus devices still appear even with no edges yet
+        for name in sorted(allow):
+            if name not in devices:
+                devices.append(name)
+        devices = sorted(devices)
     if not devices:
         return "No device topology in snapshot."
 

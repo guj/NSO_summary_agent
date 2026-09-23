@@ -236,8 +236,6 @@ async def run_orchestrator(
     publish_stdout(report)
     out_dir: str | None = None
     if not dry_run:
-        from agent.report_format import ReportOutputs
-
         ma_state = multi_agent_state_dir(settings)
         counts = (fleet_pack or {}).get("counts") or {}
         services = (fleet_pack or {}).get("services") or {}
@@ -253,7 +251,7 @@ async def run_orchestrator(
         )
         out_dir = str(run_path)
         publish_all(
-            ReportOutputs(markdown=report, plain=report, html=""),
+            report,
             run_id,
             settings,
         )
@@ -303,25 +301,13 @@ def _summarize(settings: Settings, merged: dict[str, Any]) -> str:
     system = (
         prompt_path.read_text(encoding="utf-8")
         if prompt_path.is_file()
-        else "Summarize IS-IS, BGP, and device issues. Do not invent data."
+        else (
+            "Summarize IS-IS/BGP issues and suggest read-only remedy hypotheses. "
+            "Do not invent data."
+        )
     )
     client = fabric_openai_client(settings)
-    user = json.dumps(
-        {
-            "issues_total": merged.get("issues_total"),
-            "issues": (merged.get("issues") or [])[:80],
-            "fleet": merged.get("fleet"),
-            "agents": {
-                name: {
-                    "layer": pack.get("layer"),
-                    "operational_summary": pack.get("operational_summary"),
-                    "issue_count": len(pack.get("issues") or []),
-                }
-                for name, pack in (merged.get("agents") or {}).items()
-            },
-        },
-        default=str,
-    )
+    user = json.dumps(summary_user_payload(merged), default=str)
     resp = client.chat.completions.create(
         model=settings.fabric_model,
         messages=[
@@ -331,3 +317,51 @@ def _summarize(settings: Settings, merged: dict[str, Any]) -> str:
         temperature=0.2,
     )
     return (resp.choices[0].message.content or "").strip() if resp.choices else ""
+
+
+def summary_user_payload(merged: dict[str, Any]) -> dict[str, Any]:
+    """Compact fact pack for the multi-agent FABRIC summary + remedies call."""
+    agents_out: dict[str, Any] = {}
+    for name, pack in (merged.get("agents") or {}).items():
+        if not isinstance(pack, dict):
+            continue
+        agents_out[name] = {
+            "layer": pack.get("layer"),
+            "operational_summary": pack.get("operational_summary"),
+            "issue_count": len(pack.get("issues") or []),
+            "evidence": _compact_evidence(pack.get("evidence") or []),
+        }
+    return {
+        "issues_total": merged.get("issues_total"),
+        "issues": (merged.get("issues") or [])[:80],
+        "fleet": merged.get("fleet"),
+        "agents": agents_out,
+    }
+
+
+def _compact_evidence(evidence: list[Any], *, limit: int = 12) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for item in evidence[:limit]:
+        if not isinstance(item, dict):
+            continue
+        row: dict[str, Any] = {
+            "check": item.get("check"),
+            "reason": item.get("reason"),
+            "issue_id": item.get("issue_id"),
+        }
+        args = item.get("args") if isinstance(item.get("args"), dict) else {}
+        device = args.get("device_name") or args.get("device")
+        if device:
+            row["device"] = device
+        cmd = args.get("input_command") or args.get("command")
+        if cmd:
+            row["command"] = cmd
+        if item.get("error"):
+            row["error"] = str(item.get("error"))[:240]
+        elif item.get("result") is not None:
+            # Keep a short string preview, not full MCP dumps
+            preview = item.get("result")
+            text = preview if isinstance(preview, str) else json.dumps(preview, default=str)
+            row["result_preview"] = text[:400]
+        out.append(row)
+    return out

@@ -143,6 +143,8 @@ def _handler_key(tool: str, params: dict[str, Any]) -> str:
         return params.get("device_name", "")
     if tool == "check_isis_adjacencies":
         return params.get("device_name", "")
+    if tool == "get_device_config":
+        return params.get("device_name", "")
     return repr(sorted(params.items()))
 
 
@@ -157,18 +159,61 @@ def _wrap(data: Any):
 
 
 @pytest.mark.asyncio
+async def test_static_interfaces_prefer_get_device_config(monkeypatch):
+    """Config-first: one get_device_config; no explore ladder when config parses."""
+    from nso_facts.topology import physical as physical_mod
+
+    calls: list[tuple[str, dict[str, Any] | None]] = []
+
+    async def fake_call_mcp(client, tool, params=None):
+        calls.append((tool, params))
+        assert tool == "get_device_config"
+        return IOS_XR_INTERFACE_CONFIG
+
+    monkeypatch.setattr(physical_mod, "call_mcp", fake_call_mcp)
+    edges = await physical_mod._static_interfaces_for_device(object(), "sw1")
+    assert [e["local"]["interface"] for e in edges] == [
+        "HundredGigE0/0/0/0",
+        "Loopback0",
+    ]
+    assert calls == [("get_device_config", {"device_name": "sw1"})]
+    assert not any(t == "explore_nso_path" for t, _ in calls)
+
+
+@pytest.mark.asyncio
+async def test_static_interfaces_explore_fallback_when_config_empty(monkeypatch):
+    from nso_facts.topology import physical as physical_mod
+
+    calls: list[str] = []
+
+    async def fake_call_mcp(client, tool, params=None):
+        calls.append(tool)
+        if tool == "get_device_config":
+            return {"status": "success", "data": {"config": {}}}
+        if tool == "explore_nso_path":
+            path = (params or {}).get("path", "")
+            if path.endswith("/config") and (params or {}).get("depth") == 1:
+                return {
+                    "status": "success",
+                    "data": {"tailf-ned-cisco-ios-xr:interface": {}},
+                }
+            if "tailf-ned-cisco-ios-xr:interface" in path:
+                return IOS_XR_INTERFACE_CONFIG
+            return {"status": "success", "data": {}}
+        raise AssertionError(f"unexpected {tool} {params}")
+
+    monkeypatch.setattr(physical_mod, "call_mcp", fake_call_mcp)
+    edges = await physical_mod._static_interfaces_for_device(object(), "sw1")
+    assert len(edges) == 2
+    assert calls[0] == "get_device_config"
+    assert "explore_nso_path" in calls
+
+
+@pytest.mark.asyncio
 async def test_collect_static_physical_builds_edges():
-    config_root = {
-        "status": "success",
-        "data": {"tailf-ned-cisco-ios-xr:interface": {}},
-    }
     client = FakeClient(
         {
-            ("explore_nso_path", "tailf-ncs:devices/device=sw1/config"): config_root,
-            (
-                "explore_nso_path",
-                "tailf-ncs:devices/device=sw1/config/tailf-ned-cisco-ios-xr:interface",
-            ): IOS_XR_INTERFACE_CONFIG,
+            ("get_device_config", "sw1"): IOS_XR_INTERFACE_CONFIG,
         }
     )
 
@@ -178,7 +223,7 @@ async def test_collect_static_physical_builds_edges():
         result = await client_arg.call_tool(tool, {"params": params or {}})
         return _tool_data(result)
 
-    import agent.topology.physical as physical_mod
+    import nso_facts.topology.physical as physical_mod
 
     original = physical_mod.call_mcp
     physical_mod.call_mcp = call_mcp

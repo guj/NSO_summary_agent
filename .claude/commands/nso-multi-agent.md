@@ -26,7 +26,7 @@ nso-multi-agent-run --publish --skip-metrics
 # (and --devices DEVICES if provided)
 ```
 
-Prefer `--spine-only` so Fabric LLM plan/summary is skipped unless the user
+Prefer `--spine-only` so LLM plan/summary is skipped unless the user
 explicitly asks for an LLM summary in chat after the run.
 
 4. Summarize from stdout (and, if published, `state/multi_agent/runs/<run_id>/report.md`

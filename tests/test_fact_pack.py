@@ -60,7 +60,7 @@ async def test_collect_services_fact_slice(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_build_fact_pack_composes_health_and_physical(monkeypatch):
-    async def fake_services(client, settings):
+    async def fake_services(client, settings, **_kwargs):
         return {
             "service_types": {"status": "success"},
             "ignored_service_types": [],
@@ -118,13 +118,86 @@ async def test_build_fact_pack_composes_health_and_physical(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_collect_services_fact_slice_focused_skips_type_listing(monkeypatch):
+    calls: list[tuple[str, dict | None]] = []
+
+    async def fake_call(client, tool, params=None):
+        calls.append((tool, params))
+        if tool == "get_fleet_sync_summary":
+            raise AssertionError("fleet sync should be skipped in lean focus")
+        if tool == "get_service_types":
+            raise AssertionError("get_service_types should be skipped when focused")
+        if tool == "get_services":
+            assert params == {"service_type": "l3rt"}
+            return {
+                "status": "success",
+                "data": {"services": [{"name": "rt1"}, {"name": "rt2"}]},
+            }
+        if tool == "check_service_sync":
+            return {"status": "success", "data": {"sync_state": "in-sync"}}
+        raise AssertionError(f"unexpected tool {tool}")
+
+    monkeypatch.setattr("nso_facts.fact_pack.call_mcp", fake_call)
+    monkeypatch.setattr("nso_facts.service_collect.call_mcp", fake_call)
+    settings = SimpleNamespace(
+        ignore_service_types=frozenset(),
+        max_service_types=10,
+    )
+    slice_ = await collect_services_fact_slice(
+        _FakeClient(),
+        settings,
+        only_service_types=["l3rt"],
+        include_fleet_sync=False,
+    )
+    assert "l3rt" in slice_["services_by_type"]
+    assert not any(t == "get_service_types" for t, _ in calls)
+    assert all(
+        t != "get_services" or (p or {}).get("service_type") == "l3rt"
+        for t, p in calls
+        if t == "get_services"
+    )
+    get_services_calls = [c for c in calls if c[0] == "get_services"]
+    assert len(get_services_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_collect_services_skip_all_when_empty_type_list(monkeypatch):
+    calls: list[tuple[str, dict | None]] = []
+
+    async def fake_call(client, tool, params=None):
+        calls.append((tool, params))
+        if tool == "get_fleet_sync_summary":
+            return {
+                "status": "success",
+                "data": {"devices": [{"device": "a", "result": "in-sync"}]},
+            }
+        raise AssertionError(f"unexpected tool {tool}")
+
+    monkeypatch.setattr("nso_facts.fact_pack.call_mcp", fake_call)
+    settings = SimpleNamespace(
+        ignore_service_types=frozenset(),
+        max_service_types=10,
+    )
+    slice_ = await collect_services_fact_slice(
+        _FakeClient(),
+        settings,
+        only_service_types=[],
+        include_fleet_sync=True,
+    )
+    assert slice_["services"] == {}
+    assert not any(t == "get_services" for t, _ in calls)
+    assert not any(t == "get_service_types" for t, _ in calls)
+    assert any(t == "get_fleet_sync_summary" for t, _ in calls)
+
+
+@pytest.mark.asyncio
 async def test_build_fact_pack_requires_physical_edges_when_requested():
     settings = SimpleNamespace(
         ignore_service_types=frozenset(),
         max_service_types=10,
     )
 
-    async def fake_services(client, settings):
+    async def fake_services(client, settings, **_kwargs):
         return {
             "service_types": {},
             "ignored_service_types": [],
@@ -136,7 +209,6 @@ async def test_build_fact_pack_requires_physical_edges_when_requested():
 
     import nso_facts.fact_pack as fp
 
-    # Avoid real MCP for the services slice
     original = fp.collect_services_fact_slice
     fp.collect_services_fact_slice = fake_services  # type: ignore[assignment]
     try:

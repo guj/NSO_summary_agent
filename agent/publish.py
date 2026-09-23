@@ -57,10 +57,18 @@ def publish_stdout(report_text: str) -> None:
 
 
 def publish_slack(report_text: str, settings: Settings | None = None) -> None:
+    """Post to Slack Incoming Webhook.
+
+    ``report_text`` may be markdown or already-converted mrkdwn; markdown is
+    converted to Slack blocks so headings/bold/lists render.
+    """
     s = settings or load_settings()
     if not s.slack_webhook_url:
         return
-    body = json.dumps({"text": report_text}).encode("utf-8")
+    from agent.markdown_channels import slack_payload_from_markdown
+
+    payload = slack_payload_from_markdown(report_text)
+    body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         s.slack_webhook_url,
         data=body,
@@ -79,6 +87,7 @@ def publish_email(
     run_id: str,
     settings: Settings | None = None,
     report_html: str | None = None,
+    attachment_path: Path | None = None,
 ) -> None:
     s = settings or load_settings()
     if not email_configured(s):
@@ -90,8 +99,17 @@ def publish_email(
     msg["From"] = s.email_from
     msg["To"] = ", ".join(s.email_to)
     msg.set_content(report_plain)
-    if report_html:
-        msg.add_alternative(report_html, subtype="html")
+    html_body = (report_html or "").strip()
+    if not html_body:
+        from agent.markdown_channels import markdown_to_html
+
+        # Plain may already be stripped; prefer regenerating from itself as MD-ish
+        html_body = markdown_to_html(report_plain)
+    if html_body:
+        msg.add_alternative(html_body, subtype="html")
+    if attachment_path is not None:
+        msg.add_attachment(attachment_path.read_bytes(), maintype="text", subtype="html",
+                           filename=attachment_path.name)
     _send_via_smtp(s, msg)
 
 
@@ -131,21 +149,79 @@ def publish_all(
     report: ReportOutputs | str,
     run_id: str,
     settings: Settings | None = None,
+    *,
+    attachment_path: Path | None = None,
+    report_url: str | None = None,
 ) -> list[str]:
     """Deliver to configured channels. Returns list of channels used."""
+    from agent.markdown_channels import (
+        markdown_to_html,
+        markdown_to_plain,
+        outputs_from_markdown,
+    )
+
     s = settings or load_settings()
     sent: list[str] = []
     if isinstance(report, str):
-        plain = report
-        html_body = None
+        outs = outputs_from_markdown(report)
+        md = outs.markdown
+        plain = outs.plain
+        html_body = outs.html
     else:
-        plain = report.plain
-        html_body = report.html
+        md = report.markdown or report.plain or ""
+        plain = report.plain or markdown_to_plain(md)
+        html_body = (report.html or "").strip() or markdown_to_html(md)
 
-    if s.slack_webhook_url:
-        publish_slack(plain, s)
+    if attachment_path is not None:
+        if s.slack_bot_token and s.slack_channel_id:
+            publish_slack_file(attachment_path, md, s)
+            sent.append("slack")
+        elif s.slack_webhook_url:
+            location = (f"Full HTML report: {report_url}" if report_url else
+                        "Full HTML report is saved with the run artifacts; this Slack webhook cannot attach files.")
+            publish_slack(md + "\n\n" + location, s)
+            sent.append("slack")
+    elif s.slack_webhook_url:
+        publish_slack(md or plain, s)
         sent.append("slack")
     if s.email_to:
-        publish_email(plain, run_id, s, report_html=html_body)
+        if attachment_path is not None:
+            publish_email(plain + "\n\nFull HTML report attached; download and open in a browser.",
+                          run_id, s, attachment_path=attachment_path)
+        else:
+            publish_email(plain, run_id, s, report_html=html_body)
         sent.append("email")
     return sent
+
+
+def publish_slack_file(path: Path, summary: str, settings: Settings) -> None:
+    """Upload HTML through Slack's external-upload flow (files:write)."""
+    import urllib.parse
+
+    def api(method: str, fields: dict) -> dict:
+        request = urllib.request.Request(
+            "https://slack.com/api/" + method,
+            data=urllib.parse.urlencode(fields).encode(),
+            headers={"Authorization": f"Bearer {settings.slack_bot_token}",
+                     "Content-Type": "application/x-www-form-urlencoded"})
+        with urllib.request.urlopen(request, timeout=60) as response:
+            result = json.loads(response.read())
+        if not result.get("ok"):
+            raise RuntimeError(f"Slack {method} failed: {result.get('error', 'unknown error')}")
+        return result
+
+    content = path.read_bytes()
+    upload = api("files.getUploadURLExternal", {"filename": path.name, "length": len(content)})
+    url = upload["upload_url"]
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or not (parsed.hostname or "").endswith(".slack.com"):
+        raise RuntimeError("Slack returned an unexpected upload URL")
+    request = urllib.request.Request(url, data=content, method="POST",
+                                     headers={"Content-Type": "application/octet-stream"})
+    with urllib.request.urlopen(request, timeout=60) as response:
+        response.read()
+    api("files.completeUploadExternal", {
+        "files": json.dumps([{"id": upload["file_id"], "title": "NSO diagnostic report"}]),
+        "channel_id": settings.slack_channel_id,
+        "initial_comment": summary,
+    })

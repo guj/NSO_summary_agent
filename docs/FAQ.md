@@ -77,6 +77,38 @@ Operational `up` / `down` / … on the services layer count **edges**, so a 3-de
 
 Health tables and Devices service lines still use `snapshot.services` — unchanged.
 
+### Why is a service `unknown` when it looks fine / in-sync?
+
+Instance overall status (`up` / `down` / `degraded` / `unknown`) comes from
+`nso_facts.health.classify_instance` (sync layer) combined with optional
+dataplane conclusions (`apply_dataplane_status`).
+
+**Rule:** a query failure describes the investigation; **Down** describes the
+service.
+
+| Status | When |
+|--------|------|
+| **Down** | Positive evidence a required path failed (required AC/XC/segment DN, missing required route in context, scoped traffic failure). May come from dataplane/live evidence even if root cause is unresolved. |
+| **Unknown** | Not enough evidence: NSO/device query timeout, tool error/unsupported/truncated, `in_sync=None`, LLM timeout before conclusion. Sync/device “unreachable” from NSO is also unknown for the *service*. |
+| **Degraded** | Config out-of-sync (drift), or one redundant path failed while another still carries the service. In-sync does **not** prove forwarding works. |
+
+`parse_in_sync` must accept several MCP shapes. In particular, some responses
+put the answer in **`data.sync_state`** (e.g. `"in-sync"`), not only
+`data.in_sync`. If the parser ignores `sync_state` and fleet sync was skipped,
+every instance can land on **unknown** even though NSO reports in-sync.
+
+Some pockets (including this lab) return `in_sync=null` / `outcome=unknown` for
+every `check_service_sync`. Set **`NSO_SERVICE_SYNC_MODE=skip`** to skip those
+MCP calls and classify system status from endpoint fleet sync instead (one note
+directly under the Services table). **SystemUp** starts from that fleet sync:
+no dig or an incomplete dig keeps SystemUp; dig-confirmed down or degraded
+demotes. Dataplane verification stays separate.
+Default remains **`check`** for deployments where service sync works.
+
+Lean `/nso-service type=…` still calls fleet sync for this reason, and the
+parser checks `in_sync` / `in-sync` / `sync_state` / `result` under `data` and
+`data.details`.
+
 ### Why was an interface `unknown` (e.g. `FourHundredGigE0/0/0/34`)?
 
 `unknown` means: in static config, but **not matched** to a live `interfaces brief` row (detail often `not in interfaces brief`).

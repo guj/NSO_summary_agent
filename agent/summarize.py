@@ -15,13 +15,45 @@ from agent.report_format import (
     format_fleet_sync_summary,
 )
 
+# Bound Fabric/NRP chat calls. OpenAI SDK default is 600s and routinely
+# sits 2–3+ minutes per plan turn with no progress logs.
+FABRIC_CHAT_TIMEOUT_SEC = 60.0
+# One retry after the first attempt (SDK default is 2 → up to 3 tries).
+FABRIC_CHAT_MAX_RETRIES = 1
 
-def fabric_openai_client(settings: Settings | None = None) -> OpenAI:
+
+def fabric_openai_client(
+    settings: Settings | None = None,
+    *,
+    timeout: float | None = None,
+    max_retries: int | None = None,
+) -> OpenAI:
+    """OpenAI-compatible client for FABRIC AI / substitute providers.
+
+    ``FABRIC_AI_API_URL`` must be an OpenAI chat base (host root or ``…/v1``).
+    Anthropic-only bases (e.g. ``…/anthropic``) are not supported.
+
+    ``timeout`` is per-attempt request seconds (connect stays short). Defaults to
+    ``FABRIC_CHAT_TIMEOUT_SEC`` (not the SDK's 600s). ``max_retries`` defaults to
+    ``FABRIC_CHAT_MAX_RETRIES`` (one retry → two attempts max).
+    """
     s = settings or load_settings()
     base = s.fabric_api_url.rstrip("/")
     if not base.endswith("/v1"):
         base += "/v1"
-    return OpenAI(api_key=s.fabric_api_key, base_url=base)
+    import httpx
+
+    bound = FABRIC_CHAT_TIMEOUT_SEC if timeout is None else float(timeout)
+    retries = (
+        FABRIC_CHAT_MAX_RETRIES if max_retries is None else int(max_retries)
+    )
+    kwargs: dict[str, Any] = {
+        "api_key": s.fabric_api_key,
+        "base_url": base,
+        "timeout": httpx.Timeout(bound, connect=5.0),
+        "max_retries": retries,
+    }
+    return OpenAI(**kwargs)
 
 
 def load_system_prompt(settings: Settings | None = None) -> str:

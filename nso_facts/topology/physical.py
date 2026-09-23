@@ -156,6 +156,17 @@ async def _static_interfaces_for_device(
     client: Any,
     device: str,
 ) -> list[dict[str, Any]]:
+    """Discover configured interfaces for one device.
+
+    Prefer a single ``get_device_config`` (full tree) so we avoid the
+    multi-NED ``explore_nso_path`` ladder. Explore remains fallback when
+    full config is empty, truncated, or unparsable.
+    """
+    result = await call_mcp(client, "get_device_config", {"device_name": device})
+    names = parse_configured_interface_names(result)
+    if names:
+        return [_static_interface_edge(device, name) for name in names]
+
     suffixes = await _interface_config_suffixes(client, device)
     config_path = f"tailf-ncs:devices/device={device}/config"
 
@@ -177,9 +188,7 @@ async def _static_interfaces_for_device(
         if names:
             return [_static_interface_edge(device, name) for name in names]
 
-    result = await call_mcp(client, "get_device_config", {"device_name": device})
-    names = parse_configured_interface_names(result)
-    return [_static_interface_edge(device, name) for name in names]
+    return []
 
 
 async def probe_static_interface_discovery(

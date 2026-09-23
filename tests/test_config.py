@@ -55,9 +55,15 @@ def test_mcp_args_verify_default_and_lab_override(monkeypatch):
     monkeypatch.setenv("NSO_ADDRESS", "192.0.2.1")
     monkeypatch.delenv("NSO_VERIFY", raising=False)
     monkeypatch.delenv("NSO_CA_BUNDLE", raising=False)
+    monkeypatch.delenv("NSO_TIMEOUT", raising=False)
     args = _mcp_args()
     assert "--nso-verify" in args
     assert "--no-nso-verify" not in args
+    assert "--nso-timeout=10" in args
+
+    monkeypatch.setenv("NSO_TIMEOUT", "20")
+    args = _mcp_args()
+    assert "--nso-timeout=20" in args
 
     monkeypatch.setenv("NSO_VERIFY", "0")
     args = _mcp_args()

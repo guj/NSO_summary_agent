@@ -28,6 +28,9 @@ class FabricKeyLifetime:
     source: str
     detail: str | None = None
     auth_invalid: bool = False
+    spend: float | None = None
+    max_budget: float | None = None
+    budget_reset_at: datetime | None = None
 
     @property
     def days_remaining(self) -> int | None:
@@ -42,9 +45,20 @@ class FabricKeyLifetime:
         return datetime.now(UTC) >= self.expires_at
 
     @property
+    def budget_remaining(self) -> float | None:
+        if self.spend is None or self.max_budget is None:
+            return None
+        return float(self.max_budget) - float(self.spend)
+
+    @property
+    def budget_exhausted(self) -> bool:
+        rem = self.budget_remaining
+        return rem is not None and rem <= 0
+
+    @property
     def should_skip_llm(self) -> bool:
-        """True only for known-expired or auth-invalid keys (not unknown)."""
-        return self.auth_invalid or self.is_expired
+        """True for known-expired, auth-invalid, or exhausted spend budget."""
+        return self.auth_invalid or self.is_expired or self.budget_exhausted
 
     def format_line(self) -> str:
         if self.auth_invalid:
@@ -76,6 +90,28 @@ class FabricKeyLifetime:
             line = f"{line} ({self.detail})"
         return line
 
+    def format_allowance_line(self) -> str | None:
+        """Spend/budget from ``/key/info``, or None when unavailable."""
+        if self.spend is None and self.max_budget is None:
+            return None
+        bits: list[str] = []
+        if self.spend is not None:
+            bits.append(f"spend={self.spend:.4g}")
+        if self.max_budget is not None:
+            bits.append(f"max_budget={self.max_budget:.4g}")
+        rem = self.budget_remaining
+        if rem is not None:
+            bits.append(f"{rem:.4g} remaining")
+        if self.budget_reset_at is not None:
+            reset = self.budget_reset_at.astimezone(UTC).strftime(
+                "%Y-%m-%d %H:%M UTC"
+            )
+            bits.append(f"resets {reset}")
+        line = "FABRIC AI API allowance: " + "; ".join(bits)
+        if self.detail:
+            line = f"{line} ({self.detail})"
+        return line
+
 
 def print_fabric_api_key_lifetime(settings: Settings) -> FabricKeyLifetime:
     """Print key expiry to stderr; return parsed lifetime info."""
@@ -84,15 +120,19 @@ def print_fabric_api_key_lifetime(settings: Settings) -> FabricKeyLifetime:
 
 
 def prepare_fabric_llm(settings: Settings) -> tuple[FabricKeyLifetime, bool]:
-    """Print lifetime / warnings.
+    """Print lifetime / resolved model / warnings.
 
     Returns ``(lifetime, force_skip_llm)``.
 
-    ``force_skip_llm`` is True only when the key is known-expired or
-    ``/key/info`` returns 401/403. Unknown expiry does not force skip.
+    ``force_skip_llm`` is True when the key is known-expired,
+    ``/key/info`` returns 401/403, or spend already exceeds max_budget.
+    Unknown expiry does not force skip.
     """
     lifetime = get_fabric_api_key_lifetime(settings)
     print(lifetime.format_line(), file=sys.stderr)
+    allowance = lifetime.format_allowance_line()
+    if allowance:
+        print(allowance, file=sys.stderr)
 
     if lifetime.auth_invalid:
         print(
@@ -110,24 +150,153 @@ def prepare_fabric_llm(settings: Settings) -> tuple[FabricKeyLifetime, bool]:
         )
         return lifetime, True
 
+    if lifetime.budget_exhausted:
+        rem = lifetime.budget_remaining
+        spend = lifetime.spend
+        budget = lifetime.max_budget
+        print(
+            _SKIP_LLM_BANNER.format(
+                reason=(
+                    f"SPEND BUDGET EXCEEDED "
+                    f"(spend={spend}, max_budget={budget}, remaining={rem})"
+                )
+            ),
+            file=sys.stderr,
+        )
+        return lifetime, True
+
+    print(format_fabric_model_line(resolve_fabric_model(settings)), file=sys.stderr)
+
     days = lifetime.days_remaining
     if days is not None and days <= 7:
         print(
             f"warning: FABRIC AI API key expires in {days} day(s) — renew soon",
             file=sys.stderr,
         )
+    rem = lifetime.budget_remaining
+    if rem is not None and rem <= 5:
+        print(
+            f"warning: FABRIC AI API allowance low "
+            f"({rem:.4g} remaining of max_budget={lifetime.max_budget})",
+            file=sys.stderr,
+        )
     return lifetime, False
+
+
+@dataclass(frozen=True)
+class FabricModelResolve:
+    requested: str
+    resolved: str | None
+    detail: str | None = None
+
+    def format_line(self) -> str:
+        return format_fabric_model_line(self)
+
+
+def format_fabric_model_line(info: FabricModelResolve) -> str:
+    if info.resolved:
+        line = (
+            f"FABRIC AI LLM model: requested={info.requested} "
+            f"resolved={info.resolved}"
+        )
+        if info.detail:
+            line = f"{line} ({info.detail})"
+        return line
+    hint = info.detail or "probe failed"
+    return (
+        f"FABRIC AI LLM model: requested={info.requested} "
+        f"resolved=unknown ({hint})"
+    )
+
+
+def resolve_fabric_model(settings: Settings) -> FabricModelResolve:
+    """Probe chat completions; return gateway ``model`` after nearest-match."""
+    requested = str(settings.fabric_model or "").strip() or "gpt-oss-20b"
+    base = _chat_api_base(settings.fabric_api_url)
+    url = f"{base}/chat/completions"
+    body = json.dumps(
+        {
+            "model": requested,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={
+            "Authorization": f"Bearer {settings.fabric_api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = f"HTTP {exc.code}"
+        try:
+            err_body = exc.read().decode("utf-8", errors="replace")[:200]
+            if err_body:
+                detail = f"{detail}: {err_body}"
+        except Exception:  # noqa: BLE001
+            pass
+        return FabricModelResolve(requested=requested, resolved=None, detail=detail)
+    except urllib.error.URLError as exc:
+        return FabricModelResolve(
+            requested=requested,
+            resolved=None,
+            detail=f"unreachable ({exc.reason})",
+        )
+    except (json.JSONDecodeError, TimeoutError, OSError) as exc:
+        return FabricModelResolve(
+            requested=requested,
+            resolved=None,
+            detail=f"error ({exc})",
+        )
+
+    resolved = payload.get("model") if isinstance(payload, dict) else None
+    if isinstance(resolved, str) and resolved.strip():
+        return FabricModelResolve(
+            requested=requested,
+            resolved=resolved.strip(),
+            detail="chat/completions",
+        )
+    return FabricModelResolve(
+        requested=requested,
+        resolved=None,
+        detail="no model field in chat/completions response",
+    )
+
+
+def _chat_api_base(fabric_api_url: str) -> str:
+    base = fabric_api_url.rstrip("/")
+    if not base.endswith("/v1"):
+        base += "/v1"
+    return base
 
 
 def get_fabric_api_key_lifetime(settings: Settings) -> FabricKeyLifetime:
     remote = _fetch_key_lifetime_from_api(settings)
     if remote.auth_invalid:
         return remote
+    has_allowance = remote.spend is not None or remote.max_budget is not None
     if remote.expires_at is not None:
         return remote
     env_lifetime = _key_lifetime_from_env()
     if env_lifetime.expires_at is not None:
+        if has_allowance:
+            return FabricKeyLifetime(
+                expires_at=env_lifetime.expires_at,
+                source=env_lifetime.source,
+                detail=env_lifetime.detail,
+                spend=remote.spend,
+                max_budget=remote.max_budget,
+                budget_reset_at=remote.budget_reset_at,
+            )
         return env_lifetime
+    if has_allowance:
+        return remote
     if remote.detail and remote.detail != "unavailable":
         return FabricKeyLifetime(
             expires_at=None,
@@ -175,12 +344,16 @@ def _fetch_key_lifetime_from_api(settings: Settings) -> FabricKeyLifetime:
             )
 
         expires = _extract_expires(payload)
-        if expires is None:
+        spend, max_budget, reset_at = _extract_allowance(payload)
+        if expires is None and spend is None and max_budget is None:
             continue
         return FabricKeyLifetime(
             expires_at=expires,
             source="api",
             detail=path,
+            spend=spend,
+            max_budget=max_budget,
+            budget_reset_at=reset_at,
         )
 
     if auth_seen:
@@ -247,6 +420,44 @@ def _extract_expires(payload: dict[str, Any]) -> datetime | None:
         if parsed is not None:
             return parsed
     return None
+
+
+def _extract_allowance(
+    payload: dict[str, Any],
+) -> tuple[float | None, float | None, datetime | None]:
+    """Return ``(spend, max_budget, budget_reset_at)`` from ``/key/info``."""
+    roots: list[dict[str, Any]] = []
+    if isinstance(payload, dict):
+        roots.append(payload)
+        for key in ("info", "data", "key_info"):
+            node = payload.get(key)
+            if isinstance(node, dict):
+                roots.append(node)
+
+    spend: float | None = None
+    max_budget: float | None = None
+    reset_at: datetime | None = None
+    for root in roots:
+        if spend is None:
+            spend = _as_float(root.get("spend"))
+        if max_budget is None:
+            max_budget = _as_float(root.get("max_budget"))
+            if max_budget is None:
+                max_budget = _as_float(root.get("soft_budget"))
+        if reset_at is None:
+            raw = root.get("budget_reset_at")
+            if raw is not None:
+                reset_at = _parse_datetime(str(raw))
+    return spend, max_budget, reset_at
+
+
+def _as_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_datetime(value: str) -> datetime | None:

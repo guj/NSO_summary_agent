@@ -13,6 +13,8 @@ dependencies = [
 [project.scripts]
 nso-summary-run = "agent.run:main"
 nso-multi-agent-run = "multi_agent.run:main"
+nso-diagnostic-run = "diagnostic_mas.run:main"
+nso-diagnostic-delta = "diagnostic_mas.delta_cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
@@ -22,7 +24,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["agent", "nso_facts", "nso_report", "multi_agent"]
+packages = ["agent", "nso_facts", "nso_report", "multi_agent", "diagnostic_mas"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

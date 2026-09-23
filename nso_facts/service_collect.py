@@ -18,14 +18,38 @@ from nso_facts.l2vpn_xconnect import (
 )
 from nso_facts.mcp_client import call_mcp, mcp_data, mcp_is_error, unwrap_mcp_data
 
+SERVICE_SYNC_MODE_CHECK = "check"
+SERVICE_SYNC_MODE_SKIP = "skip"
+SERVICE_SYNC_SKIP_NOTE = (
+    "SystemUp is a baseline from endpoint fleet sync (service sync "
+    "skipped) — not fleet-wide dataplane verification. No dig or an "
+    "incomplete dig keeps SystemUp; dig-confirmed down or degraded demotes."
+)
+
+
+def normalize_service_sync_mode(value: str | None) -> str:
+    """Return ``check`` (default) or ``skip``."""
+    text = (value or "").strip().lower()
+    if text == SERVICE_SYNC_MODE_SKIP:
+        return SERVICE_SYNC_MODE_SKIP
+    return SERVICE_SYNC_MODE_CHECK
+
 
 async def collect_service_health(
     client: Any,
     services_by_type: dict[str, Any],
     sync_modules: dict[str, str],
     device_sync_map: dict[str, str],
+    *,
+    service_sync_mode: str | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Run check_service_sync (+ live L2 xconnect for l2ptp/l2sts) per instance."""
+    """Run check_service_sync (+ live L2 xconnect for l2ptp/l2sts) per instance.
+
+    ``service_sync_mode=skip``: do not call ``check_service_sync``; classify
+    system status from endpoint fleet sync only (for pockets where service
+    sync always returns null). Dataplane is unchanged (still not_checked here).
+    """
+    mode = normalize_service_sync_mode(service_sync_mode)
     planned: list[tuple[str, dict[str, Any], str, str]] = []
     l2_devices: set[str] = set()
 
@@ -50,27 +74,36 @@ async def collect_service_health(
     services: dict[str, dict[str, Any]] = {}
     for service_type, instance, sync_module, name in planned:
         key = f"{service_type}/{name}"
-        try:
-            sync_result = await call_mcp(
-                client,
-                "check_service_sync",
-                {"service_type": sync_module, "service_name": name},
-            )
-        except Exception as exc:  # noqa: BLE001 — keep collecting others
-            sync_result = {"status": "error", "error_message": str(exc)}
+        if mode == SERVICE_SYNC_MODE_SKIP:
+            sync_result = None
+        else:
+            try:
+                sync_result = await call_mcp(
+                    client,
+                    "check_service_sync",
+                    {"service_type": sync_module, "service_name": name},
+                )
+            except Exception as exc:  # noqa: BLE001 — keep collecting others
+                sync_result = {"status": "error", "error_message": str(exc)}
 
         live_l2 = None
         if is_l2_service_type(service_type):
             endpoints = extract_l2_access_endpoints(instance)
             live_l2 = summarize_live_l2(endpoints, rows_by_device)
 
-        services[key] = build_instance_record(
+        record = build_instance_record(
             service_type,
             instance,
             sync_result,
             device_sync_map,
             live_l2=live_l2,
         )
+        if mode == SERVICE_SYNC_MODE_SKIP:
+            record["service_sync_mode"] = SERVICE_SYNC_MODE_SKIP
+            record["system_status_basis"] = "endpoint_fleet_sync"
+        else:
+            record["service_sync_mode"] = SERVICE_SYNC_MODE_CHECK
+        services[key] = record
 
     return services
 

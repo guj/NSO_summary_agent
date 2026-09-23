@@ -269,3 +269,18 @@ def test_strip_section_heading_removes_llm_echo():
         _strip_section_heading("Already body only.", ("Infrastructure Health",))
         == "Already body only."
     )
+
+
+def test_fabric_openai_client_uses_60s_and_one_retry():
+    from agent.summarize import (
+        FABRIC_CHAT_MAX_RETRIES,
+        FABRIC_CHAT_TIMEOUT_SEC,
+        fabric_openai_client,
+    )
+
+    assert FABRIC_CHAT_TIMEOUT_SEC == 60.0
+    assert FABRIC_CHAT_MAX_RETRIES == 1
+    client = fabric_openai_client(_settings())
+    assert client.max_retries == 1
+    # httpx.Timeout: read bound is the per-attempt limit
+    assert float(client.timeout.read) == 60.0
