@@ -1,0 +1,506 @@
+{
+  "record": {
+    "name": "client_losa-data-75fceaed-aab0-49a9-a869-b1b75ccf1ef9",
+    "service_type": "l2sts",
+    "devices": [
+      "losa-data-sw",
+      "gatech-data-sw"
+    ],
+    "basic_checks": {
+      "schema_version": 1,
+      "service_type": "l2sts",
+      "service_id": "client_losa-data-75fceaed-aab0-49a9-a869-b1b75ccf1ef9",
+      "devices": [
+        "losa-data-sw",
+        "gatech-data-sw"
+      ],
+      "checked_at": "2026-09-28T17:38:48.383783+00:00",
+      "sync_ready": true,
+      "status": "unknown",
+      "reason": "losa-data-sw -> gatech-data-sw: resolved labeled transport",
+      "needs_investigation": true,
+      "checks": [
+        {
+          "check": "attachment",
+          "status": "pass",
+          "device": "losa-data-sw",
+          "observation": "Hu0/0/0/7.2034"
+        },
+        {
+          "check": "bridge_state",
+          "status": "pass",
+          "device": "losa-data-sw",
+          "observation": "bg-client_losa-data-75fceaed-aa:bd-client_losa-data-75fceae"
+        },
+        {
+          "check": "membership",
+          "status": "pass",
+          "device": "losa-data-sw",
+          "observation": "Hu0/0/0/7.2034 in bg-client_losa-data-75fceaed-aa:bd-client_losa-data-75fceae"
+        },
+        {
+          "check": "encapsulation",
+          "status": "pass",
+          "device": "losa-data-sw",
+          "observation": "Hu0/0/0/7.2034 intended VLAN 2034"
+        },
+        {
+          "check": "local_forwarding",
+          "status": "pass",
+          "device": "losa-data-sw",
+          "observation": "Programmed bridge member Hu0/0/0/7.2034"
+        },
+        {
+          "check": "local_flooding",
+          "status": "pass",
+          "device": "losa-data-sw",
+          "observation": "Flooding in bg-client_losa-data-75fceaed-aa:bd-client_losa-data-75fceae"
+        },
+        {
+          "check": "evpn_binding",
+          "status": "pass",
+          "device": "losa-data-sw",
+          "observation": "bg-client_losa-data-75fceaed-aa:bd-client_losa-data-75fceae"
+        },
+        {
+          "check": "attachment",
+          "status": "pass",
+          "device": "gatech-data-sw",
+          "observation": "Hu0/0/0/9.2033"
+        },
+        {
+          "check": "bridge_state",
+          "status": "pass",
+          "device": "gatech-data-sw",
+          "observation": "bg-client_losa-data-75fceaed-aa:bd-client_losa-data-75fceae"
+        },
+        {
+          "check": "membership",
+          "status": "pass",
+          "device": "gatech-data-sw",
+          "observation": "Hu0/0/0/9.2033 in bg-client_losa-data-75fceaed-aa:bd-client_losa-data-75fceae"
+        },
+        {
+          "check": "encapsulation",
+          "status": "pass",
+          "device": "gatech-data-sw",
+          "observation": "Hu0/0/0/9.2033 intended VLAN 2033"
+        },
+        {
+          "check": "local_forwarding",
+          "status": "pass",
+          "device": "gatech-data-sw",
+          "observation": "Programmed bridge member Hu0/0/0/9.2033"
+        },
+        {
+          "check": "local_flooding",
+          "status": "pass",
+          "device": "gatech-data-sw",
+          "observation": "Flooding in bg-client_losa-data-75fceaed-aa:bd-client_losa-data-75fceae"
+        },
+        {
+          "check": "evpn_binding",
+          "status": "pass",
+          "device": "gatech-data-sw",
+          "observation": "bg-client_losa-data-75fceaed-aa:bd-client_losa-data-75fceae"
+        },
+        {
+          "check": "effective_evpn",
+          "status": "pass",
+          "device": "losa-data-sw",
+          "observation": {
+            "imports": [
+              "398900:9049"
+            ],
+            "exports": [
+              "398900:9049"
+            ],
+            "peer": "10.137.0.1",
+            "label": 31687,
+            "evi": "9049"
+          }
+        },
+        {
+          "check": "effective_evpn",
+          "status": "pass",
+          "device": "gatech-data-sw",
+          "observation": {
+            "imports": [
+              "398900:9049"
+            ],
+            "exports": [
+              "398900:9049"
+            ],
+            "peer": "10.136.128.1",
+            "label": 24122,
+            "evi": "9049"
+          }
+        },
+        {
+          "check": "rt_compatibility",
+          "status": "pass",
+          "device": "losa-data-sw",
+          "observation": "losa-data-sw -> gatech-data-sw: destination export vs source import"
+        },
+        {
+          "check": "replication",
+          "status": "pass",
+          "device": "losa-data-sw",
+          "observation": "losa-data-sw -> gatech-data-sw: matching remote label and nexthop"
+        },
+        {
+          "check": "transport",
+          "status": "unknown",
+          "device": "losa-data-sw",
+          "observation": "losa-data-sw -> gatech-data-sw: resolved labeled transport"
+        },
+        {
+          "check": "rt_compatibility",
+          "status": "pass",
+          "device": "gatech-data-sw",
+          "observation": "gatech-data-sw -> losa-data-sw: destination export vs source import"
+        },
+        {
+          "check": "replication",
+          "status": "pass",
+          "device": "gatech-data-sw",
+          "observation": "gatech-data-sw -> losa-data-sw: matching remote label and nexthop"
+        },
+        {
+          "check": "transport",
+          "status": "pass",
+          "device": "gatech-data-sw",
+          "observation": "gatech-data-sw -> losa-data-sw: resolved labeled transport"
+        }
+      ],
+      "customer_delivery_tested": false,
+      "intent": {
+        "site-a": {
+          "device": "losa-data-sw",
+          "interface": [
+            {
+              "type": "HundredGigE",
+              "id": "0/0/0/7",
+              "outervlan": 2034
+            }
+          ]
+        },
+        "site-z": {
+          "device": "gatech-data-sw",
+          "interface": [
+            {
+              "type": "HundredGigE",
+              "id": "0/0/0/9",
+              "outervlan": 2033
+            }
+          ]
+        }
+      },
+      "sources": [
+        {
+          "device": "losa-data-sw",
+          "tool": "exec_show",
+          "command": "interfaces brief",
+          "collected_at": "2026-09-28T16:30:02.141462+00:00",
+          "available": true
+        },
+        {
+          "device": "losa-data-sw",
+          "tool": "exec_show",
+          "command": "l2vpn bridge-domain detail",
+          "collected_at": "2026-09-28T16:30:03.422710+00:00",
+          "available": true
+        },
+        {
+          "device": "losa-data-sw",
+          "tool": "exec_show",
+          "command": "l2vpn forwarding bridge-domain bg-client_losa-data-75fceaed-aa:bd-client_losa-data-75fceae detail location 0/RP0/CPU0",
+          "collected_at": "2026-09-28T17:38:44.474150+00:00",
+          "available": true
+        },
+        {
+          "device": "gatech-data-sw",
+          "tool": "exec_show",
+          "command": "interfaces brief",
+          "collected_at": "2026-09-28T16:24:33.427998+00:00",
+          "available": true
+        },
+        {
+          "device": "gatech-data-sw",
+          "tool": "exec_show",
+          "command": "l2vpn bridge-domain detail",
+          "collected_at": "2026-09-28T16:24:34.628116+00:00",
+          "available": true
+        },
+        {
+          "device": "gatech-data-sw",
+          "tool": "exec_show",
+          "command": "l2vpn forwarding bridge-domain bg-client_losa-data-75fceaed-aa:bd-client_losa-data-75fceae detail location 0/RP0/CPU0",
+          "collected_at": "2026-09-28T17:38:44.933581+00:00",
+          "available": true
+        },
+        {
+          "device": "losa-data-sw",
+          "tool": "exec_show",
+          "command": "evpn evi vpn-id 9049 detail",
+          "collected_at": "2026-09-28T17:38:45.441513+00:00",
+          "available": true
+        },
+        {
+          "device": "losa-data-sw",
+          "tool": "exec_show",
+          "command": "evpn evi vpn-id 9049 inclusive-multicast detail",
+          "collected_at": "2026-09-28T17:38:46.059035+00:00",
+          "available": true
+        },
+        {
+          "device": "gatech-data-sw",
+          "tool": "exec_show",
+          "command": "evpn evi vpn-id 9049 detail",
+          "collected_at": "2026-09-28T17:38:46.681566+00:00",
+          "available": true
+        },
+        {
+          "device": "gatech-data-sw",
+          "tool": "exec_show",
+          "command": "evpn evi vpn-id 9049 inclusive-multicast detail",
+          "collected_at": "2026-09-28T17:38:47.256648+00:00",
+          "available": true
+        },
+        {
+          "device": "losa-data-sw",
+          "tool": "exec_show",
+          "command": "cef 10.136.128.1/32",
+          "collected_at": "2026-09-28T17:38:47.912359+00:00",
+          "available": true
+        },
+        {
+          "device": "gatech-data-sw",
+          "tool": "exec_show",
+          "command": "cef 10.137.0.1/32",
+          "collected_at": "2026-09-28T17:38:48.383478+00:00",
+          "available": true
+        }
+      ],
+      "tool_calls": 8
+    }
+  },
+  "finding": {
+    "dataplane_status": "up",
+    "observed": "\u2022 Identity: losa-data-sw AC Hu0/0/0/7.2034 (VLAN 2034) up in bg-client_losa-data-75fceaed-aa:bd-client_losa-data-75fceae (id 48, up), EVPN state up, EVI 9049 MPLS; gatech-data-sw AC Hu0/0/0/9.2033 (VLAN 2033) up in the same BG:BD (id 26, up), EVI 9049, RT import/export 398900:9049 both PEs (auto-derived, identical).\n\u2022 Forwarding losa\u2192gatech (BUM/unknown-unicast): losa has remote ingress-replication entry (PMSI Type 6) Originating IP/Nexthop 10.136.128.1, Label 24122, Source Remote, TEPid 0x02000007 \u2014 label matches gatech's advertised Multicast Label 24122; losa CEF 10.136.128.1/32 = labeled SR, imposed {402028} via Bundle-Ether101.3000 (nh 10.133.128.141); receiving AC Hu0/0/0/9.2033 up.\n\u2022 Forwarding gatech\u2192losa (BUM/unknown-unicast): gatech has remote entry (PMSI Type 6) Nexthop 10.137.0.1, Label 31687, Source Remote, TEPid 0x02000002 \u2014 matches losa's local multicast label 31687; gatech CEF 10.137.0.1/32 = labeled SR, imposed {402030} via Te0/0/0/20/0.3401 (nh 10.133.0.189); receiving AC Hu0/0/0/7.2034 up.\n\u2022 Unknown-unicast flooding and BD MAC learning enabled on both BDs and ACs; 1 AC up, 0 PWs (normal for EVPN-native BD, not a fault).\n\u2022 Unverified: no type-2/learned-unicast MAC installed in this BD on either PE (BD EVPN counters 0/0 both sides), so learned-unicast MAC distribution is not demonstrated; customer end-to-end L2 delivery was not tested.\n\u2022 Note: the basic run's transport \"unknown\" for losa\u2192gatech matched a CEF lookup of the PE's own loopback (receive adjacency); re-queried against the correct remote next hop it resolves labeled SR.",
+    "cause": "No fault found: PE-side forwarding readiness is established in both directions for the BUM/unknown-unicast class \u2014 matching ingress-replication entries (PMSI Type 6) with labels equal to each peer's advertised multicast label, resolved labeled-SR transport to each remote next hop, and both receiving ACs up in the correct BG:BD with EVI 9049 and compatible RTs. The basic check's single \"unknown\" (losa\u2192gatech transport) was a misdirected lookup, not a transport failure. Learned-unicast MAC distribution is not proven (no type-2 entries in this BD on either PE); this is consistent with either no recent customer activity or aging, but neither was verified, and customer traffic delivery was not tested."
+  },
+  "evidence": [
+    {
+      "kind": "drill",
+      "role": "drill",
+      "layer": "services",
+      "payload": {
+        "check": "exec_show",
+        "args": {
+          "device_name": "losa-data-sw",
+          "input_command": "cef 10.137.0.1/32"
+        },
+        "reason": "Does losa-data-sw have resolved labeled transport toward the remote PE next hop 10.137.0.1 (the gap flagged as unknown)?",
+        "issue_id": null,
+        "issue_edge_id": "client_losa-data-75fceaed-aab0-49a9-a869-b1b75ccf1ef9",
+        "result": {
+          "status": "success",
+          "data": {
+            "device": "losa-data-sw",
+            "command": "show cef 10.137.0.1/32",
+            "result": "\r\n\rMon Sep 28 18:32:44.725 UTC\r\n10.137.0.1/32, version 4, attached, receive\r\n  Updated Mar 17 12:27:43.976\r\n  Prefix Len 32\r\n  internal 0x3006041 (ptr 0x97ae05f8) [3], 0x400 (0x95b4f198), 0x0 (0x0)\r\n, receive adjacency, internal 0x3006041 0x0 (ptr 0x97ae05f8) [3], 0x400 (0x95b4f198), 0x0 (0x0)\r\n Updated Mar 17 12:27:43.976\r\n Prefix Len 32, traffic index 0, precedence n/a, priority 0\r\n  gateway array (0x959e7718) reference count 1, flags 0x0, source rib (7), 0 backups\r\n                [2 type 3 flags 0x8401 (0x95a94fa8) ext 0x0 (0x0)]\r\n  LW-LDI[type=3, refc=1, ptr=0x95b4f198, sh-ldi=0x95a94fa8]\r\n  gateway array update type-time 1 Mar 17 12:27:43.976\r\n LDI Update time Mar 17 12:27:43.976\r\n LW-LDI-TS Mar 17 12:27:43.976\r\n   via Loopback0, 45 dependencies, weight 0, class 0 [flags 0x8]\r\n    path-idx 0 NHID 0x0 [0x95858d90 0x0]\r\n     receive adjacency\r\n\r\n    Load distribution: 0 (refcount 2)\r\n\r\n    Hash  OK  Interface                 Address\r\n    0     Y   recursive                 receive        \r\nRP/0/RP0/CPU0:losa-data-sw#"
+          }
+        },
+        "error": null
+      },
+      "id": "ev_281"
+    },
+    {
+      "kind": "drill",
+      "role": "drill",
+      "layer": "services",
+      "payload": {
+        "check": "exec_show",
+        "args": {
+          "device_name": "gatech-data-sw",
+          "input_command": "cef 10.136.128.1/32"
+        },
+        "reason": "Confirm gatech-data-sw resolves labeled transport toward its EVPN peer next hop 10.136.128.1 (losa).",
+        "issue_id": null,
+        "issue_edge_id": "client_losa-data-75fceaed-aab0-49a9-a869-b1b75ccf1ef9",
+        "result": {
+          "status": "success",
+          "data": {
+            "device": "gatech-data-sw",
+            "command": "show cef 10.136.128.1/32",
+            "result": "\r\n\rMon Sep 28 18:32:45.970 UTC\r\n10.136.128.1/32, version 4, attached, receive\r\n  Updated Jan  7 06:21:41.981\r\n  Prefix Len 32\r\n  internal 0x3006041 (ptr 0x96630708) [3], 0x400 (0x94906c18), 0x0 (0x0)\r\n, receive adjacency, internal 0x3006041 0x0 (ptr 0x96630708) [3], 0x400 (0x94906c18), 0x0 (0x0)\r\n Updated Jan  7 06:21:41.981\r\n Prefix Len 32, traffic index 0, precedence n/a, priority 0\r\n  gateway array (0x9479f358) reference count 1, flags 0x0, source rib (7), 0 backups\r\n                [2 type 3 flags 0x8401 (0x9484b468) ext 0x0 (0x0)]\r\n  LW-LDI[type=3, refc=1, ptr=0x94906c18, sh-ldi=0x9484b468]\r\n  gateway array update type-time 1 Jan  7 06:21:41.981\r\n LDI Update time Jan  7 06:21:41.981\r\n LW-LDI-TS Jan  7 06:21:41.981\r\n   via Loopback0, 41 dependencies, weight 0, class 0 [flags 0x8]\r\n    path-idx 0 NHID 0x0 [0x94610d90 0x0]\r\n     receive adjacency\r\n\r\n    Load distribution: 0 (refcount 2)\r\n\r\n    Hash  OK  Interface                 Address\r\n    0     Y   recursive                 receive        \r\nRP/0/RP0/CPU0:gatech-data-sw#"
+          }
+        },
+        "error": null
+      },
+      "id": "ev_282"
+    },
+    {
+      "kind": "drill",
+      "role": "drill",
+      "layer": "services",
+      "payload": {
+        "check": "exec_show",
+        "args": {
+          "device_name": "losa-data-sw",
+          "input_command": "l2vpn bridge-domain bd-name bd-client_losa-data-75fceae detail"
+        },
+        "reason": "Confirm this run's exact BG:BD identity, AC Hu0/0/0/7.2034 state and EVPN/EVI 9049 binding on losa-data-sw.",
+        "issue_id": null,
+        "issue_edge_id": "client_losa-data-75fceaed-aab0-49a9-a869-b1b75ccf1ef9",
+        "result": "\n\nMon Sep 28 18:32:46.438 UTC\nLegend: pp = Partially Programmed.\nBridge group: bg-client_losa-data-75fceaed-aa, bridge-domain: bd-client_losa-data-75fceae, id: 48, state: up, ShgId: 0, MSTi: 0\n  Coupled state: disabled\n  VINE state: EVPN Native\n  MAC learning: enabled\n  MAC withdraw: enabled\n    MAC withdraw for Access PW: enabled\n    MAC withdraw sent on: bridge port up\n    MAC withdraw relaying (access to access): disabled\n  Flooding:\n    Broadcast & Multicast: enabled\n    Unknown unicast: enabled\n  MAC aging time: 300 s, Type: inactivity\n  MAC limit: 64000, Action: none, Notification: syslog\n  MAC limit reached: no, threshold: 75%\n  MAC port down flush: enabled\n  MAC Secure: disabled, Logging: disabled\n  Split Horizon Group: none\n  E-Tree: Root\n  Dynamic ARP Inspection: disabled, Logging: disabled\n  IP Source Guard: disabled, Logging: disabled\n  DHCPv4 Snooping: disabled\n  DHCPv4 Snooping profile: none\n  IGMP Snooping: disabled\n  IGMP Snooping profile: none\n  MLD Snooping profile: none\n  Storm Control: disabled\n  Bridge MTU: 1500\n  MIB cvplsConfigIndex: 49\n  Filter MAC addresses:\n  P2MP PW: disabled\n  Multicast Source: Not Set\n  Create time: 24/09/2026 17:46:20 (4d00h ago)\n  No status change since creation\n  ACs: 1 (1 up), VFIs: 0, PWs: 0 (0 up), PBBs: 0 (0 up), VNIs: 0 (0 up)\n  List of EVPNs:\n    EVPN, state: up\n      evi: 9049 (MPLS)\n      XC ID 0x8000000a\n     Statistics:\n       packets: received 0 (unicast 0), sent 0\n       bytes: received 0 (unicast 0), sent 0\n       MAC move: 0\n  List of ACs:\n    AC: HundredGigE0/0/0/7.2034, state is up\n      Type VLAN; Num Ranges: 1\n      Rewrite Tags: []\n      VLAN ranges: [2034, 2034]\n      MTU 9202; XC ID 0x1810; interworking none; MSTi 2\n      MAC learning: enabled\n      Flooding:\n        Broadcast & Multicast: enabled\n        Unknown unicast: enabled\n      MAC aging time: 300 s, Type: inactivity\n      MAC limit: 64000, Action: none, Notification: syslog\n      MAC limit reached: no, threshold: 75%\n      MAC port down flush: enabled\n      MAC Secure: disabled, Logging: disabled\n      Split Horizon Group: none\n      E-Tree: Root\n      Dynamic ARP Inspection: disabled, Logging: disabled\n      IP Source Guard: disabled, Logging: disabled\n      DHCPv4 Snooping: disabled\n      DHCPv4 Snooping profile: none\n      IGMP Snooping: disabled\n      IGMP Snooping profile: none\n      MLD Snooping profile: none\n      Storm Control: bridge-domain policer\n      Static MAC addresses:\n      Statistics:\n        packets: received 896934 (multicast 0, broadcast 0, unknown unicast 0, unicast 0), sent 1958354\n        bytes: received 202289981 (multicast 0, broadcast 0, unknown unicast 0, unicast 0), sent 2351304109\n        MAC move: 0\n      Storm control drop counters: \n        packets: broadcast 0, multicast 0, unknown unicast 0 \n        bytes: broadcast 0, multicast 0, unknown unicast 0 \n      Dynamic ARP inspection drop counters: \n        packets: 0, bytes: 0\n      IP source guard drop counters: \n        packets: 0, bytes: 0\n      PD System Data: AF-LIF-IPv4: 0x00000000  AF-LIF-IPv6: 0x00000000 FRR-LIF: 0x00000000\n\n  List of Access PWs:\n  List of VFIs:\n  List of Access VFIs:\nRP/0/RP0/CPU0:losa-data-sw#",
+        "error": null
+      },
+      "id": "ev_283"
+    },
+    {
+      "kind": "drill",
+      "role": "drill",
+      "layer": "services",
+      "payload": {
+        "check": "exec_show",
+        "args": {
+          "device_name": "losa-data-sw",
+          "input_command": "cef 10.136.128.1/32"
+        },
+        "reason": "Does losa-data-sw resolve labeled transport toward the actual remote PE loopback 10.136.128.1 (gatech)? This is the one check flagged unknown.",
+        "issue_id": null,
+        "issue_edge_id": "client_losa-data-75fceaed-aab0-49a9-a869-b1b75ccf1ef9",
+        "result": {
+          "status": "success",
+          "data": {
+            "device": "losa-data-sw",
+            "command": "show cef 10.136.128.1/32",
+            "result": "\r\n\rMon Sep 28 17:38:47.568 UTC\r\n10.136.128.1/32, version 1003641992, labeled SR, internal 0x1000001 0x8310 (ptr 0xb688e4c8) [1], 0x600 (0x95b6e8d8), 0xa28 (0x98b27b00)\r\n Updated Sep 28 14:19:42.984 \r\n local adjacency to Bundle-Ether101.3000\r\n\r\n Prefix Len 32, traffic index 0, precedence n/a, priority 1\r\n  gateway array (0x959ecf38) reference count 21, flags 0x68, source rib (7), 0 backups\r\n                [8 type 5 flags 0x8401 (0x98b64ff8) ext 0x0 (0x0)]\r\n  LW-LDI[type=5, refc=3, ptr=0x95b6e8d8, sh-ldi=0x98b64ff8]\r\n  gateway array update type-time 1 Sep 28 14:19:42.984\r\n LDI Update time Sep 28 14:19:42.984\r\n LW-LDI-TS Sep 28 14:19:42.984\r\n   via 10.133.128.141/32, Bundle-Ether101.3000, 9 dependencies, weight 0, class 0 [flags 0x0]\r\n    path-idx 0 NHID 0x0 [0x9968de20 0x0]\r\n    next hop 10.133.128.141/32\r\n    local adjacency\r\n     local label 402028      labels imposed {402028}\r\n\r\n    Load distribution: 0 (refcount 8)\r\n\r\n    Hash  OK  Interface                 Address\r\n    0     Y   Bundle-Ether101.3000      10.133.128.141 \r\nRP/0/RP0/CPU0:losa-data-sw#"
+          }
+        },
+        "error": null
+      },
+      "id": "ev_284"
+    },
+    {
+      "kind": "drill",
+      "role": "drill",
+      "layer": "services",
+      "payload": {
+        "check": "exec_show",
+        "args": {
+          "device_name": "gatech-data-sw",
+          "input_command": "l2vpn bridge-domain bd-name bd-client_losa-data-75fceae detail"
+        },
+        "reason": "Confirm this run's exact BG:BD identity, AC Hu0/0/0/9.2033 state and EVI 9049 binding on gatech-data-sw.",
+        "issue_id": null,
+        "issue_edge_id": "client_losa-data-75fceaed-aab0-49a9-a869-b1b75ccf1ef9",
+        "result": "\n\nMon Sep 28 18:33:02.799 UTC\nLegend: pp = Partially Programmed.\nBridge group: bg-client_losa-data-75fceaed-aa, bridge-domain: bd-client_losa-data-75fceae, id: 26, state: up, ShgId: 0, MSTi: 0\n  Coupled state: disabled\n  VINE state: EVPN Native\n  MAC learning: enabled\n  MAC withdraw: enabled\n    MAC withdraw for Access PW: enabled\n    MAC withdraw sent on: bridge port up\n    MAC withdraw relaying (access to access): disabled\n  Flooding:\n    Broadcast & Multicast: enabled\n    Unknown unicast: enabled\n  MAC aging time: 300 s, Type: inactivity\n  MAC limit: 64000, Action: none, Notification: syslog\n  MAC limit reached: no, threshold: 75%\n  MAC port down flush: enabled\n  MAC Secure: disabled, Logging: disabled\n  Split Horizon Group: none\n  E-Tree: Root\n  Dynamic ARP Inspection: disabled, Logging: disabled\n  IP Source Guard: disabled, Logging: disabled\n  DHCPv4 Snooping: disabled\n  DHCPv4 Snooping profile: none\n  IGMP Snooping: disabled\n  IGMP Snooping profile: none\n  MLD Snooping profile: none\n  Storm Control: disabled\n  Bridge MTU: 1500\n  MIB cvplsConfigIndex: 27\n  Filter MAC addresses:\n  P2MP PW: disabled\n  Multicast Source: Not Set\n  Create time: 24/09/2026 17:46:20 (4d00h ago)\n  No status change since creation\n  ACs: 1 (1 up), VFIs: 0, PWs: 0 (0 up), PBBs: 0 (0 up), VNIs: 0 (0 up)\n  List of EVPNs:\n    EVPN, state: up\n      evi: 9049 (MPLS)\n      XC ID 0x80000008\n     Statistics:\n       packets: received 0 (unicast 0), sent 0\n       bytes: received 0 (unicast 0), sent 0\n       MAC move: 0\n  List of ACs:\n    AC: HundredGigE0/0/0/9.2033, state is up\n      Type VLAN; Num Ranges: 1\n      Rewrite Tags: []\n      VLAN ranges: [2033, 2033]\n      MTU 9202; XC ID 0x13e6; interworking none; MSTi 2\n      MAC learning: enabled\n      Flooding:\n        Broadcast & Multicast: enabled\n        Unknown unicast: enabled\n      MAC aging time: 300 s, Type: inactivity\n      MAC limit: 64000, Action: none, Notification: syslog\n      MAC limit reached: no, threshold: 75%\n      MAC port down flush: enabled\n      MAC Secure: disabled, Logging: disabled\n      Split Horizon Group: none\n      E-Tree: Root\n      Dynamic ARP Inspection: disabled, Logging: disabled\n      IP Source Guard: disabled, Logging: disabled\n      DHCPv4 Snooping: disabled\n      DHCPv4 Snooping profile: none\n      IGMP Snooping: disabled\n      IGMP Snooping profile: none\n      MLD Snooping profile: none\n      Storm Control: bridge-domain policer\n      Static MAC addresses:\n      Statistics:\n        packets: received 1952019 (multicast 0, broadcast 0, unknown unicast 0, unicast 0), sent 127853235\n        bytes: received 2350717622 (multicast 0, broadcast 0, unknown unicast 0, unicast 0), sent 162895703988\n        MAC move: 0\n      Storm control drop counters: \n        packets: broadcast 0, multicast 0, unknown unicast 0 \n        bytes: broadcast 0, multicast 0, unknown unicast 0 \n      Dynamic ARP inspection drop counters: \n        packets: 0, bytes: 0\n      IP source guard drop counters: \n        packets: 0, bytes: 0\n      PD System Data: AF-LIF-IPv4: 0x00000000  AF-LIF-IPv6: 0x00000000 FRR-LIF: 0x00000000\n\n  List of Access PWs:\n  List of VFIs:\n  List of Access VFIs:\nRP/0/RP0/CPU0:gatech-data-sw#",
+        "error": null
+      },
+      "id": "ev_285"
+    },
+    {
+      "kind": "drill",
+      "role": "drill",
+      "layer": "services",
+      "payload": {
+        "check": "exec_show",
+        "args": {
+          "device_name": "losa-data-sw",
+          "input_command": "evpn evi vpn-id 9049 inclusive-multicast detail"
+        },
+        "reason": "Confirm losa's programmed replication entry for EVI 9049 names remote PE 10.136.128.1 with its nexthop/label and PMSI type.",
+        "issue_id": null,
+        "issue_edge_id": "client_losa-data-75fceaed-aab0-49a9-a869-b1b75ccf1ef9",
+        "result": {
+          "status": "success",
+          "data": {
+            "device": "losa-data-sw",
+            "command": "show evpn evi vpn-id 9049 inclusive-multicast detail",
+            "result": "\r\n\rMon Sep 28 17:38:45.711 UTC\r\n\r\nVPN-ID     Encap  EtherTag   Originating IP                          \r\n---------- ------ ---------- ----------------------------------------\r\n9049       MPLS   0          10.136.128.1                            \r\n    TEPid  : 0x02000007\r\n    PMSI Type: 6\r\n    Nexthop: 10.136.128.1\r\n    Label  : 24122\r\n    SR-TE Info: N/A\r\n    Source : Remote\r\n    E-Tree : Root\r\n    Layer 2 Attributes:\r\n     DF Role : NDF\r\n     CW      : Enabled\r\n     FL      : Disabled\r\n     MTU     : 0\r\n     Sig DF  : NDF\r\n9049       MPLS   0          10.137.0.1                              \r\n    TEPid  : 0xffffffff\r\n    PMSI Type: 6\r\n    Nexthop: ::\r\n    Label  : 31687\r\n    SR-TE Info: N/A\r\n    Source : Local\r\n    E-Tree : Root\r\n    Layer 2 Attributes:\r\n     DF Role : Not Specified\r\n     CW      : Enabled\r\n     FL      : Disabled\r\n     MTU     : 0\r\n     Sig DF  : Not Specified\r\nRP/0/RP0/CPU0:losa-data-sw#"
+          }
+        },
+        "error": null
+      },
+      "id": "ev_286"
+    },
+    {
+      "kind": "drill",
+      "role": "drill",
+      "layer": "services",
+      "payload": {
+        "check": "exec_show",
+        "args": {
+          "device_name": "gatech-data-sw",
+          "input_command": "evpn evi vpn-id 9049 detail"
+        },
+        "reason": "Compare gatech's advertised multicast label for EVI 9049 with the outgoing replication label losa imposes.",
+        "issue_id": null,
+        "issue_edge_id": "client_losa-data-75fceaed-aab0-49a9-a869-b1b75ccf1ef9",
+        "result": {
+          "status": "success",
+          "data": {
+            "device": "gatech-data-sw",
+            "command": "show evpn evi vpn-id 9049 detail",
+            "result": "\r\n\rMon Sep 28 17:38:46.324 UTC\r\n\r\nVPN-ID     Encap      Bridge Domain                Type               \r\n---------- ---------- ---------------------------- -------------------\r\n9049       MPLS       bd-client_losa-data-75fceae  EVPN               \r\n   Stitching: Regular\r\n   Unicast Label  : 24010\r\n   Multicast Label: 24122\r\n   Reroute Label: 0\r\n   Flow Label: N\r\n   Dynamic Flow Label: No\r\n   Control-Word: Enabled\r\n   E-Tree: Root\r\n   Route-policy Export: color9049-policy\r\n   Forward-class: 0\r\n   Advertise MACs: Yes\r\n   Advertise BVI MACs: No\r\n   Aliasing: Enabled\r\n   UUF: Enabled\r\n   Re-origination: Enabled\r\n   Multicast:\r\n     Source connected   : No\r\n     IGMP-Snooping Proxy: No\r\n     MLD-Snooping Proxy : No\r\n   BGP Implicit Import: Enabled\r\n   VRF Name: \r\n   Preferred Nexthop Mode: Off\r\n   BVI Coupled Mode: No\r\n   BVI Subnet Withheld: ipv4 No, ipv6 No\r\n   RD Config: none\r\n   RD Auto  : (auto) 10.136.128.1:9049\r\n   RT Auto  : 398900:9049\r\n   Route Targets in Use           Type                 \r\n   ------------------------------ ---------------------\r\n   398900:9049                    Import               \r\n   398900:9049                    Export               \r\n\r\nRP/0/RP0/CPU0:gatech-data-sw#"
+          }
+        },
+        "error": null
+      },
+      "id": "ev_287"
+    },
+    {
+      "kind": "drill",
+      "role": "drill",
+      "layer": "services",
+      "payload": {
+        "check": "exec_show",
+        "args": {
+          "device_name": "gatech-data-sw",
+          "input_command": "evpn evi vpn-id 9049 inclusive-multicast detail"
+        },
+        "reason": "Confirm gatech's programmed replication entry toward remote PE 10.137.0.1 carries label 31687 matching losa's advertised multicast label.",
+        "issue_id": null,
+        "issue_edge_id": "client_losa-data-75fceaed-aab0-49a9-a869-b1b75ccf1ef9",
+        "result": {
+          "status": "success",
+          "data": {
+            "device": "gatech-data-sw",
+            "command": "show evpn evi vpn-id 9049 inclusive-multicast detail",
+            "result": "\r\n\rMon Sep 28 17:38:46.927 UTC\r\n\r\nVPN-ID     Encap  EtherTag   Originating IP                          \r\n---------- ------ ---------- ----------------------------------------\r\n9049       MPLS   0          10.136.128.1                            \r\n    TEPid  : 0xffffffff\r\n    PMSI Type: 6\r\n    Nexthop: ::\r\n    Label  : 24122\r\n    SR-TE Info: N/A\r\n    Source : Local\r\n    E-Tree : Root\r\n    Layer 2 Attributes:\r\n     DF Role : Not Specified\r\n     CW      : Enabled\r\n     FL      : Disabled\r\n     MTU     : 0\r\n     Sig DF  : Not Specified\r\n9049       MPLS   0          10.137.0.1                              \r\n    TEPid  : 0x02000002\r\n    PMSI Type: 6\r\n    Nexthop: 10.137.0.1\r\n    Label  : 31687\r\n    SR-TE Info: N/A\r\n    Source : Remote\r\n    E-Tree : Root\r\n    Layer 2 Attributes:\r\n     DF Role : NDF\r\n     CW      : Enabled\r\n     FL      : Disabled\r\n     MTU     : 0\r\n     Sig DF  : NDF\r\nRP/0/RP0/CPU0:gatech-data-sw#"
+          }
+        },
+        "error": null
+      },
+      "id": "ev_288"
+    },
+    {
+      "kind": "drill",
+      "role": "drill",
+      "layer": "services",
+      "payload": {
+        "check": "exec_show",
+        "args": {
+          "device_name": "gatech-data-sw",
+          "input_command": "cef 10.137.0.1/32"
+        },
+        "reason": "Directly confirm gatech's labeled transport egress toward remote PE 10.137.0.1 resolves, completing both replication directions with my own evidence.",
+        "issue_id": null,
+        "issue_edge_id": "client_losa-data-75fceaed-aab0-49a9-a869-b1b75ccf1ef9",
+        "result": {
+          "status": "success",
+          "data": {
+            "device": "gatech-data-sw",
+            "command": "show cef 10.137.0.1/32",
+            "result": "\r\n\rMon Sep 28 17:38:48.175 UTC\r\n10.137.0.1/32, version 713007162, labeled SR, internal 0x1000001 0x8310 (ptr 0xb5408828) [1], 0x600 (0x949088f8), 0xa28 (0x97fc8620)\r\n Updated Sep 28 16:58:21.167 \r\n local adjacency to TenGigE0/0/0/20/0.3401\r\n\r\n Prefix Len 32, traffic index 0, precedence n/a, priority 1\r\n  gateway array (0x947a7d28) reference count 99, flags 0x68, source rib (7), 0 backups\r\n                [34 type 5 flags 0x8401 (0x9800bf58) ext 0x0 (0x0)]\r\n  LW-LDI[type=5, refc=3, ptr=0x949088f8, sh-ldi=0x9800bf58]\r\n  gateway array update type-time 1 Sep 20 04:53:46.925\r\n LDI Update time Sep 20 04:53:46.925\r\n LW-LDI-TS Sep 20 04:53:46.929\r\n   via 10.133.0.189/32, TenGigE0/0/0/20/0.3401, 7 dependencies, weight 0, class 0 [flags 0x0]\r\n    path-idx 0 NHID 0x0 [0x98d3eb20 0x0]\r\n    next hop 10.133.0.189/32\r\n    local adjacency\r\n     local label 402030      labels imposed {402030}\r\n\r\n    Load distribution: 0 (refcount 34)\r\n\r\n    Hash  OK  Interface                 Address\r\n    0     Y   TenGigE0/0/0/20/0.3401    10.133.0.189   \r\nRP/0/RP0/CPU0:gatech-data-sw#"
+          }
+        },
+        "error": null
+      },
+      "id": "ev_289"
+    }
+  ]
+}

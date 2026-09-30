@@ -1,0 +1,205 @@
+{
+  "record": {
+    "service_type": "l2sts",
+    "name": "bottleneck-test--847217ab-c4df-4976-b95f-54d756ae0a20",
+    "devices": [
+      "kans-data-sw",
+      "mass-data-sw"
+    ]
+  },
+  "finding": {
+    "dataplane_status": "up",
+    "observed": "- Identity: kans-data-sw AC Hu0/0/0/4.0 up/up in bg-bottleneck-test--847217ab-c4:bd-bottleneck-test--847217a (id 202, state up, VINE state \"EVPN Native\", 1/1 AC up); mass-data-sw AC Hu0/0/0/6.0 up/up in the same BG:BD name (id 0, state up, 1/1 AC up). Numeric EVI/RT text not returned by the filtered config dump.\n- Route exchange mass\u2192kans: kans BD 202 forwarding table holds b8ce.f637.74b3 as type EVPN, i.e. the peer's locally-learned AC MAC imported into THIS bridge-domain.\n- Route exchange kans\u2192mass: mass BD 0 forwarding table holds 1070.fde5.a810 as type EVPN, matching kans's locally-learned Hu0/0/0/4.0 MAC \u2014 two-way BD-scoped EVPN install.\n- Control plane: BGP L2VPN EVPN sessions Established on both PEs (kans 2 peers, prefixes received; mass 2 peers, prefixes received); MAC learning and unknown-unicast/broadcast flooding enabled in the BD on both sides.\n- Initial live_l2 probe reporting ac_not_found on both endpoints is contradicted by direct device output; both ACs exist and are up with active traffic counters.\n- Unverified: numeric import/export RT values (compatibility instead established by bidirectional BD/EVPN install), peer flood/replication list contents, service-level in_sync (null), and any end-to-end customer traffic delivery test.",
+    "cause": "No fault: the service is implemented as an EVPN-native bridge-domain (not VPWS), and both PEs show the AC up in the correct BG:BD plus each other's MAC installed via EVPN in that BD, which establishes bidirectional control-plane/forwarding readiness and effective RT compatibility. The collector's ac_not_found result was a probe-side artifact, not a dataplane condition. Service-level in_sync is null, but both devices report in-sync and PE-side readiness is positive, so this is a reporting gap rather than a forwarding fault.",
+    "confidence": "low"
+  },
+  "session_evidence": [
+    {
+      "kind": "drill",
+      "role": "drill",
+      "layer": "services",
+      "payload": {
+        "check": "exec_show",
+        "args": {
+          "device_name": "kans-data-sw",
+          "input_command": "interfaces Hu0/0/0/4.0"
+        },
+        "reason": "Is the kans AC present and oper up (live_l2 reported ac_not_found)?",
+        "issue_id": null,
+        "issue_edge_id": "bottleneck-test--847217ab-c4df-4976-b95f-54d756ae0a20",
+        "result": {
+          "status": "success",
+          "data": {
+            "device": "kans-data-sw",
+            "command": "show interfaces Hu0/0/0/4.0",
+            "result": "\r\n\rFri Sep 25 21:21:25.697 UTC\r\nHundredGigE0/0/0/4.0 is up, line protocol is up \r\n  Interface state transitions: 1\r\n  Hardware is VLAN sub-interface(s), address is bc2c.e6b2.f614\r\n  Layer 2 Transport Mode\r\n  MTU 9216 bytes, BW 100000000 Kbit (Max: 100000000 Kbit)\r\n     reliability Unknown, txload Unknown, rxload Unknown\r\n  Encapsulation Untagged,\r\n    Match untagged\r\n    Ethertype Any, MAC Match src any, dest any\r\n  loopback not set,\r\n  Last link flapped 3d16h\r\n  Last input 00:00:05, output 00:00:35\r\n  Last clearing of \"show interface\" counters never\r\n     7686247 packets input, 9283459374 bytes\r\n     0 input drops, 0 queue drops, 0 input errors\r\n     4135969213 packets output, 12229207363819 bytes\r\n     0 output drops, 0 queue drops, 0 output errors\r\n\r\n\r\nRP/0/RP0/CPU0:kans-data-sw#"
+          }
+        },
+        "error": null
+      },
+      "id": "ev_162"
+    },
+    {
+      "kind": "drill",
+      "role": "drill",
+      "layer": "services",
+      "payload": {
+        "check": "exec_show",
+        "args": {
+          "device_name": "mass-data-sw",
+          "input_command": "interfaces Hu0/0/0/6.0"
+        },
+        "reason": "Is the mass AC present and oper up?",
+        "issue_id": null,
+        "issue_edge_id": "bottleneck-test--847217ab-c4df-4976-b95f-54d756ae0a20",
+        "result": {
+          "status": "success",
+          "data": {
+            "device": "mass-data-sw",
+            "command": "show interfaces Hu0/0/0/6.0",
+            "result": "\r\n\rFri Sep 25 21:21:27.013 UTC\r\nHundredGigE0/0/0/6.0 is up, line protocol is up \r\n  Interface state transitions: 1\r\n  Hardware is VLAN sub-interface(s), address is 7cf8.8078.3d1c\r\n  Layer 2 Transport Mode\r\n  MTU 9216 bytes, BW 100000000 Kbit (Max: 100000000 Kbit)\r\n     reliability Unknown, txload Unknown, rxload Unknown\r\n  Encapsulation Untagged,\r\n    Match untagged\r\n    Ethertype Any, MAC Match src any, dest any\r\n  loopback not set,\r\n  Last link flapped 3d16h\r\n  Last input 00:00:32, output 00:00:02\r\n  Last clearing of \"show interface\" counters never\r\n     769284 packets input, 62177154 bytes\r\n     0 input drops, 0 queue drops, 0 input errors\r\n     5271419859 packets output, 46011128381775 bytes\r\n     0 output drops, 0 queue drops, 0 output errors\r\n\r\n\r\nRP/0/RP0/CPU0:mass-data-sw#"
+          }
+        },
+        "error": null
+      },
+      "id": "ev_163"
+    },
+    {
+      "kind": "drill",
+      "role": "drill",
+      "layer": "services",
+      "payload": {
+        "check": "exec_show",
+        "args": {
+          "device_name": "kans-data-sw",
+          "input_command": "l2vpn bridge-domain interface HundredGigE0/0/0/4.0 detail"
+        },
+        "reason": "Get kans unabridged BG:BD, EVI and MAC/EVPN state bound to this AC.",
+        "issue_id": null,
+        "issue_edge_id": "bottleneck-test--847217ab-c4df-4976-b95f-54d756ae0a20",
+        "result": "\n\nFri Sep 25 21:21:49.660 UTC\nLegend: pp = Partially Programmed.\nBridge group: bg-bottleneck-test--847217ab-c4, bridge-domain: bd-bottleneck-test--847217a, id: 202, state: up, ShgId: 0, MSTi: 0\n  Coupled state: disabled\n  VINE state: EVPN Native\n  MAC learning: enabled\n  MAC withdraw: enabled\n    MAC withdraw for Access PW: enabled\n    MAC withdraw sent on: bridge port up\n    MAC withdraw relaying (access to access): disabled\n  Flooding:\n    Broadcast & Multicast: enabled\n    Unknown unicast: enabled\n  MAC aging time: 300 s, Type: inactivity\n  MAC limit: 64000, Action: none, Notification: syslog\n  MAC limit reached: no, threshold: 75%\n  MAC port down flush: enabled\n  MAC Secure: disabled, Logging: disabled\n  Split Horizon Group: none\n  E-Tree: Root\n  Dynamic ARP Inspection: disabled, Logging: disabled\n  IP Source Guard: disabled, Logging: disabled\n  DHCPv4 Snooping: disabled\n  DHCPv4 Snooping profile: none\n  IGMP Snooping: disabled\n  IGMP Snooping profile: none\n  MLD Snooping profile: none\n  Storm Control: disabled\n  Bridge MTU: 1500\n  MIB cvplsConfigIndex: 203\n  Filter MAC addresses:\n  P2MP PW: disabled\n  Multicast Source: Not Set\n  Create time: 22/09/2026 05:08:42 (3d16h ago)\n  No status change since creation\n  ACs: 1 (1 up), VFIs: 0, PWs: 0 (0 up), PBBs: 0 (0 up), VNIs: 0 (0 up)\n  List of ACs:\n    AC: HundredGigE0/0/0/4.0, state is up\n      Type VLAN; Num Ranges: 0\n      Rewrite Tags: []\n      MTU 9202; XC ID 0x44f; interworking none; MSTi 7\n      MAC learning: enabled\n      Flooding:\n        Broadcast & Multicast: enabled\n        Unknown unicast: enabled\n      MAC aging time: 300 s, Type: inactivity\n      MAC limit: 64000, Action: none, Notification: syslog\n      MAC limit reached: no, threshold: 75%\n      MAC port down flush: enabled\n      MAC Secure: disabled, Logging: disabled\n      Split Horizon Group: none\n      E-Tree: Root\n      Dynamic ARP Inspection: disabled, Logging: disabled\n      IP Source Guard: disabled, Logging: disabled\n      DHCPv4 Snooping: disabled\n      DHCPv4 Snooping profile: none\n      IGMP Snooping: disabled\n      IGMP Snooping profile: none\n      MLD Snooping profile: none\n      Storm Control: bridge-domain policer\n      Static MAC addresses:\n      Statistics:\n        packets: received 7686247 (multicast 0, broadcast 0, unknown unicast 0, unicast 0), sent 4135969214\n        bytes: received 9283459374 (multicast 0, broadcast 0, unknown unicast 0, unicast 0), sent 12229207364144\n        MAC move: 0\n      Storm control drop counters: \n        packets: broadcast 0, multicast 0, unknown unicast 0 \n        bytes: broadcast 0, multicast 0, unknown unicast 0 \n      Dynamic ARP inspection drop counters: \n        packets: 0, bytes: 0\n      IP source guard drop counters: \n        packets: 0, bytes: 0\n      PD System Data: AF-LIF-IPv4: 0x00000000  AF-LIF-IPv6: 0x00000000 FRR-LIF: 0x00000000\n\nRP/0/RP0/CPU0:kans-data-sw#",
+        "error": null
+      },
+      "id": "ev_168"
+    },
+    {
+      "kind": "drill",
+      "role": "drill",
+      "layer": "services",
+      "payload": {
+        "check": "exec_show",
+        "args": {
+          "device_name": "mass-data-sw",
+          "input_command": "l2vpn bridge-domain interface HundredGigE0/0/0/6.0 detail"
+        },
+        "reason": "Get mass unabridged BG:BD, EVI and MAC/EVPN state bound to this AC.",
+        "issue_id": null,
+        "issue_edge_id": "bottleneck-test--847217ab-c4df-4976-b95f-54d756ae0a20",
+        "result": "\n\nFri Sep 25 21:21:50.120 UTC\nLegend: pp = Partially Programmed.\nBridge group: bg-bottleneck-test--847217ab-c4, bridge-domain: bd-bottleneck-test--847217a, id: 0, state: up, ShgId: 0, MSTi: 0\n  Coupled state: disabled\n  VINE state: EVPN Native\n  MAC learning: enabled\n  MAC withdraw: enabled\n    MAC withdraw for Access PW: enabled\n    MAC withdraw sent on: bridge port up\n    MAC withdraw relaying (access to access): disabled\n  Flooding:\n    Broadcast & Multicast: enabled\n    Unknown unicast: enabled\n  MAC aging time: 300 s, Type: inactivity\n  MAC limit: 64000, Action: none, Notification: syslog\n  MAC limit reached: no, threshold: 75%\n  MAC port down flush: enabled\n  MAC Secure: disabled, Logging: disabled\n  Split Horizon Group: none\n  E-Tree: Root\n  Dynamic ARP Inspection: disabled, Logging: disabled\n  IP Source Guard: disabled, Logging: disabled\n  DHCPv4 Snooping: disabled\n  DHCPv4 Snooping profile: none\n  IGMP Snooping: disabled\n  IGMP Snooping profile: none\n  MLD Snooping profile: none\n  Storm Control: disabled\n  Bridge MTU: 1500\n  MIB cvplsConfigIndex: 1\n  Filter MAC addresses:\n  P2MP PW: disabled\n  Multicast Source: Not Set\n  Create time: 22/09/2026 05:08:42 (3d16h ago)\n  No status change since creation\n  ACs: 1 (1 up), VFIs: 0, PWs: 0 (0 up), PBBs: 0 (0 up), VNIs: 0 (0 up)\n  List of ACs:\n    AC: HundredGigE0/0/0/6.0, state is up\n      Type VLAN; Num Ranges: 0\n      Rewrite Tags: []\n      MTU 9202; XC ID 0x1f2; interworking none; MSTi 7\n      MAC learning: enabled\n      Flooding:\n        Broadcast & Multicast: enabled\n        Unknown unicast: enabled\n      MAC aging time: 300 s, Type: inactivity\n      MAC limit: 64000, Action: none, Notification: syslog\n      MAC limit reached: no, threshold: 75%\n      MAC port down flush: enabled\n      MAC Secure: disabled, Logging: disabled\n      Split Horizon Group: none\n      E-Tree: Root\n      Dynamic ARP Inspection: disabled, Logging: disabled\n      IP Source Guard: disabled, Logging: disabled\n      DHCPv4 Snooping: disabled\n      DHCPv4 Snooping profile: none\n      IGMP Snooping: disabled\n      IGMP Snooping profile: none\n      MLD Snooping profile: none\n      Storm Control: bridge-domain policer\n      Static MAC addresses:\n      Statistics:\n        packets: received 769284 (multicast 0, broadcast 0, unknown unicast 0, unicast 0), sent 5271419859\n        bytes: received 62177154 (multicast 0, broadcast 0, unknown unicast 0, unicast 0), sent 46011128381775\n        MAC move: 0\n      Storm control drop counters: \n        packets: broadcast 0, multicast 0, unknown unicast 0 \n        bytes: broadcast 0, multicast 0, unknown unicast 0 \n      Dynamic ARP inspection drop counters: \n        packets: 0, bytes: 0\n      IP source guard drop counters: \n        packets: 0, bytes: 0\n      PD System Data: AF-LIF-IPv4: 0x00000000  AF-LIF-IPv6: 0x00000000 FRR-LIF: 0x00000000\n\nRP/0/RP0/CPU0:mass-data-sw#",
+        "error": null
+      },
+      "id": "ev_169"
+    },
+    {
+      "kind": "drill",
+      "role": "drill",
+      "layer": "services",
+      "payload": {
+        "check": "exec_show",
+        "args": {
+          "device_name": "kans-data-sw",
+          "input_command": "l2vpn forwarding bridge-domain bg-bottleneck-test--847217ab-c4:bd-bottleneck-test--847217a mac-address location 0/RP0/CPU0"
+        },
+        "reason": "Are local and remote MACs installed in this BD on kans?",
+        "issue_id": null,
+        "issue_edge_id": "bottleneck-test--847217ab-c4df-4976-b95f-54d756ae0a20",
+        "result": {
+          "status": "success",
+          "data": {
+            "device": "kans-data-sw",
+            "command": "show l2vpn forwarding bridge-domain bg-bottleneck-test--847217ab-c4:bd-bottleneck-test--847217a mac-address location 0/RP0/CPU0",
+            "result": "\r\n\rFri Sep 25 21:22:05.760 UTC\r\n To Resynchronize MAC table from the Network Processors, use the command...\r\n    l2vpn resynchronize forwarding mac-address-table location <r/s/i>\r\n\r\nMac Address    Type    Learned from/Filtered on    LC learned Resync Age/Last Change Mapped to       \r\n-------------- ------- --------------------------- ---------- ---------------------- --------------  \r\n1070.fde5.a810 dynamic Hu0/0/0/4.0                 N/A        25 Sep 21:22:05        N/A             \r\nb8ce.f637.74b3 EVPN    BD id: 202                  N/A        N/A                    N/A             \r\nRP/0/RP0/CPU0:kans-data-sw#"
+          }
+        },
+        "error": null
+      },
+      "id": "ev_170"
+    },
+    {
+      "kind": "drill",
+      "role": "drill",
+      "layer": "services",
+      "payload": {
+        "check": "exec_show",
+        "args": {
+          "device_name": "mass-data-sw",
+          "input_command": "l2vpn forwarding bridge-domain bg-bottleneck-test--847217ab-c4:bd-bottleneck-test--847217a mac-address location 0/RP0/CPU0"
+        },
+        "reason": "Are local and remote MACs installed in this BD on mass?",
+        "issue_id": null,
+        "issue_edge_id": "bottleneck-test--847217ab-c4df-4976-b95f-54d756ae0a20",
+        "result": {
+          "status": "success",
+          "data": {
+            "device": "mass-data-sw",
+            "command": "show l2vpn forwarding bridge-domain bg-bottleneck-test--847217ab-c4:bd-bottleneck-test--847217a mac-address location 0/RP0/CPU0",
+            "result": "\r\n\rFri Sep 25 21:22:06.346 UTC\r\n To Resynchronize MAC table from the Network Processors, use the command...\r\n    l2vpn resynchronize forwarding mac-address-table location <r/s/i>\r\n\r\nMac Address    Type    Learned from/Filtered on    LC learned Resync Age/Last Change Mapped to       \r\n-------------- ------- --------------------------- ---------- ---------------------- --------------  \r\nb8ce.f637.74b3 dynamic Hu0/0/0/6.0                 N/A        25 Sep 21:22:06        N/A             \r\n1070.fde5.a810 EVPN    BD id: 0                    N/A        N/A                    N/A             \r\nRP/0/RP0/CPU0:mass-data-sw#"
+          }
+        },
+        "error": null
+      },
+      "id": "ev_171"
+    },
+    {
+      "kind": "drill",
+      "role": "drill",
+      "layer": "services",
+      "payload": {
+        "check": "exec_show",
+        "args": {
+          "device_name": "kans-data-sw",
+          "input_command": "bgp l2vpn evpn summary"
+        },
+        "reason": "Is the EVPN control plane session healthy on kans?",
+        "issue_id": null,
+        "issue_edge_id": "bottleneck-test--847217ab-c4df-4976-b95f-54d756ae0a20",
+        "result": {
+          "status": "success",
+          "data": {
+            "device": "kans-data-sw",
+            "command": "show bgp l2vpn evpn summary",
+            "result": "\r\n\rFri Sep 25 21:14:02.427 UTC\r\nBGP router identifier 10.138.0.1, local AS number 398900\r\nBGP generic scan interval 60 secs\r\nNon-stop routing is enabled\r\nBGP table state: Active\r\nTable ID: 0x0\r\nBGP table nexthop route policy: \r\nBGP main routing table version 66889\r\nBGP NSR Initial initsync version 1 (Reached)\r\nBGP NSR/ISSU Sync-Group versions 0/0\r\nBGP scan interval 60 secs\r\n\r\nBGP is operating in STANDALONE mode.\r\n\r\n\r\nProcess       RcvTblVer   bRIB/RIB   LabelVer  ImportVer  SendTblVer  StandbyVer\r\nSpeaker           66889      66889      66889      66889       66889           0\r\n\r\nNeighbor        Spk    AS MsgRcvd MsgSent   TblVer  InQ OutQ  Up/Down  St/PfxRcd\r\n10.133.128.1      0 398900 121829130  362033    66889    0    0    35w1d         17\r\n10.134.0.1        0 398900 109307461  361455    66889    0    0    1d04h         17\r\n\r\nRP/0/RP0/CPU0:kans-data-sw#"
+          }
+        },
+        "error": null
+      },
+      "id": "ev_172"
+    },
+    {
+      "kind": "drill",
+      "role": "drill",
+      "layer": "services",
+      "payload": {
+        "check": "exec_show",
+        "args": {
+          "device_name": "mass-data-sw",
+          "input_command": "bgp l2vpn evpn summary"
+        },
+        "reason": "Is the EVPN control plane session healthy on mass?",
+        "issue_id": null,
+        "issue_edge_id": "bottleneck-test--847217ab-c4df-4976-b95f-54d756ae0a20",
+        "result": {
+          "status": "success",
+          "data": {
+            "device": "mass-data-sw",
+            "command": "show bgp l2vpn evpn summary",
+            "result": "\r\n\rFri Sep 25 21:22:06.847 UTC\r\nBGP router identifier 10.131.128.1, local AS number 398900\r\nBGP generic scan interval 60 secs\r\nNon-stop routing is enabled\r\nBGP table state: Active\r\nTable ID: 0x0\r\nBGP table nexthop route policy: \r\nBGP main routing table version 10585\r\nBGP NSR Initial initsync version 1 (Reached)\r\nBGP NSR/ISSU Sync-Group versions 0/0\r\nBGP scan interval 60 secs\r\n\r\nBGP is operating in STANDALONE mode.\r\n\r\n\r\nProcess       RcvTblVer   bRIB/RIB   LabelVer  ImportVer  SendTblVer  StandbyVer\r\nSpeaker           10585      10585      10585      10585       10585           0\r\n\r\nNeighbor        Spk    AS MsgRcvd MsgSent   TblVer  InQ OutQ  Up/Down  St/PfxRcd\r\n10.129.128.1      0 398900 26830325  103790    10585    0    0     4w4d          8\r\n10.133.0.1        0 398900 33701318  100415    10585    0    0     4w4d          8\r\n\r\nRP/0/RP0/CPU0:mass-data-sw#"
+          }
+        },
+        "error": null
+      },
+      "id": "ev_173"
+    }
+  ],
+  "fixture_note": "Original conclusion with scoped interface, bridge-domain, MAC and BGP observations. Full device configs and fleet-wide BD listings omitted."
+}
