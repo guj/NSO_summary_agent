@@ -288,7 +288,7 @@ async def test_collect_operational_physical_marks_down_and_unexpected():
         result = await client_arg.call_tool(tool, {"params": params or {}})
         return _tool_data(result)
 
-    import agent.topology.physical as physical_mod
+    import nso_facts.topology.physical as physical_mod
 
     original = physical_mod.call_mcp
     physical_mod.call_mcp = call_mcp
@@ -347,7 +347,7 @@ Hu0/0/0/32                     up         up                 ARPA   1514       1
         result = await client_arg.call_tool(tool, {"params": params or {}})
         return _tool_data(result)
 
-    import agent.topology.physical as physical_mod
+    import nso_facts.topology.physical as physical_mod
 
     original = physical_mod.call_mcp
     physical_mod.call_mcp = call_mcp
@@ -400,7 +400,7 @@ Hu0/0/0/32                     down       down               ARPA   1514       1
         result = await client_arg.call_tool(tool, {"params": params or {}})
         return _tool_data(result)
 
-    import agent.topology.physical as physical_mod
+    import nso_facts.topology.physical as physical_mod
 
     original = physical_mod.call_mcp
     physical_mod.call_mcp = call_mcp

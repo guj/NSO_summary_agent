@@ -566,6 +566,7 @@ async def call_mcp(
     client: Client,
     tool: str,
     params: dict[str, Any] | None = None,
+    *, bypass_cache: bool = False,
 ) -> Any:
     """Call an MCP tool once, with retries on transient transport failures.
 
@@ -584,10 +585,16 @@ async def call_mcp(
     """
     cache = _mcp_cache.get()
     key = _cache_key(tool, params)
-    if cache is not None and key in cache:
+    if not bypass_cache and cache is not None and key in cache:
         record_mcp_call(tool, params, cached=True)
         record_mcp_result(tool, params, source="cache", response=cache[key])
         return cache[key]
+
+    # Cached evidence needs no device reservation. Guard only uncached calls,
+    # before recording wire activity; the proxy also guards direct tool calls.
+    from diagnostic_mas.dataplane_scheduler import ReservedClient
+    if isinstance(client, ReservedClient):
+        client.reserve_call(tool, params or {})
 
     device = _device_name_from_params(params)
     quarantine = _mcp_quarantine.get()
@@ -616,7 +623,7 @@ async def call_mcp(
                     str(mcp_error_message(data) or ""),
                     tool=tool,
                 )
-            elif cache is not None:
+            elif cache is not None and not bypass_cache:
                 cache[key] = data
             return data
         except _RETRYABLE_EXC as exc:

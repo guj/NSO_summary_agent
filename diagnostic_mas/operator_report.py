@@ -232,6 +232,8 @@ def _sync_prose(sync: str) -> str:
     s = (sync or "—").strip()
     if s.lower() in {"in-sync", "in sync", "synced", "true"}:
         return "In sync"
+    if s.lower().startswith(("error", "unknown")):
+        return f"Unknown — sync verification failed ({s})"
     if s in {"—", "-", ""}:
         return "Not collected"
     return s
@@ -501,7 +503,10 @@ def _failing_verification_endpoints(rec: dict[str, Any]) -> tuple[str, ...]:
 def _iter_service_records(case: CaseFile) -> list[tuple[str, dict[str, Any]]]:
     """(name, record) for flat service map entries."""
     out: list[tuple[str, dict[str, Any]]] = []
+    from diagnostic_mas.service_presence import disappeared
     for key, rec in services_from_case(case).items():
+        if disappeared(rec):
+            continue
         if not isinstance(rec, dict):
             continue
         name = str(rec.get("name") or key.split("/", 1)[-1]).strip()
@@ -664,7 +669,12 @@ def format_incomplete_checks_grouped(case: CaseFile) -> list[str]:
     rows = _incomplete_checks_by_endpoint_reason(case)
     if not rows:
         return []
-    lines = ["### Incomplete collection checks", ""]
+    from diagnostic_mas.sync_failure_report import format_sync_failure_group, sync_failure_group
+    failed, _ = sync_failure_group(case)
+    lines = format_sync_failure_group(case)
+    rows = [(eps, reason, count) for eps, reason, count in rows if not eps or not set(eps) <= set(failed)]
+    if rows:
+        lines.extend(["### Incomplete collection checks", ""])
     for endpoints, reason, count in rows:
         label = _format_endpoint_group_label(endpoints)
         lines.append(
@@ -834,6 +844,7 @@ def _dataplane_by_name(case: CaseFile) -> dict[str, dict[str, Any]]:
             "complete": dx.get("complete", True),
             "source": dx.get("source") or "llm",
             "verification_gap": dx.get("verification_gap"),
+            "gate_review": dx.get("gate_review"),
             "investigation": dx.get("investigation"),
         }
     if out:
@@ -955,13 +966,16 @@ def _format_uncertainty_block(items: list[str]) -> list[str]:
 def _services_to_render(
     case: CaseFile, *, services_detail: bool
 ) -> list[tuple[str, dict[str, Any]]]:
-    services = services_from_case(case)
+    from diagnostic_mas.service_presence import disappeared
+    services = {k:r for k,r in services_from_case(case).items() if not disappeared(r)}
     dp = _dataplane_by_name(case)
     keys: list[str] = []
     seen: set[str] = set()
 
+    absent_names = {r.get("name") for r in services_from_case(case).values() if disappeared(r)}
+
     def _add(name: str) -> None:
-        if name and name not in seen:
+        if name and name not in seen and name not in absent_names:
             seen.add(name)
             keys.append(name)
 
@@ -1126,6 +1140,9 @@ def _incomplete_result_line(dx: dict[str, Any]) -> str:
 
 
 def _incomplete_dig_next_action(dx: dict[str, Any]) -> str:
+    from diagnostic_mas.unknown_breakdown import next_step, pending_gate_review, category_for
+    if pending_gate_review(dx) or category_for(dx) == "gate_contradiction":
+        return next_step(dx)
     structured = dx.get("verification_gap")
     if isinstance(structured, dict) and structured.get("next_check"):
         return scrub_internal_ids(str(structured["next_check"]))
@@ -1156,6 +1173,9 @@ def _incomplete_dig_next_action(dx: dict[str, Any]) -> str:
 
 
 def _incomplete_dig_followup(name: str, dx: dict[str, Any]) -> str:
+    from diagnostic_mas.unknown_breakdown import next_step, pending_gate_review, category_for
+    if pending_gate_review(dx) or category_for(dx) == "gate_contradiction":
+        return next_step(dx)
     structured = dx.get("verification_gap")
     if isinstance(structured, dict) and structured.get("next_check"):
         return scrub_internal_ids(str(structured["next_check"]))
@@ -1208,7 +1228,7 @@ def format_services_operator(
     shown = len(rows)
     omitted = max(0, total_services - shown) if not services_detail else 0
 
-    if not rows and not lines:
+    if not rows and not lines and not omitted:
         return ["(none)"]
 
     if not services_detail and omitted:
@@ -1217,27 +1237,28 @@ def format_services_operator(
             1
             for name, rec in _iter_service_records(case)
             if name not in shown_names
-            and str(rec.get("status") or "").lower() in {"up", "ok"}
+            and (rec.get("basic_checks") or {}).get("status") == "up"
+            and (rec.get("basic_checks") or {}).get("sync_ready") is True
         )
         grouped_unknown = sum(
             c for _e, _r, c in _incomplete_checks_by_endpoint_reason(case)
         )
         omit_bits: list[str] = []
         if up_omitted:
-            omit_bits.append(f"{up_omitted} SystemUp")
+            omit_bits.append(
+                f"{up_omitted} services skipped LLM investigation because their "
+                "endpoint devices were in sync with NSO and they passed basic operational checks"
+            )
         if grouped_unknown:
-            omit_bits.append(f"{grouped_unknown} unknown (grouped above)")
+            omit_bits.append(f"{grouped_unknown} Unknown services have details grouped above")
         # Residual omitted not explained by SystemUp or grouped unknowns.
         other = omitted - up_omitted - grouped_unknown
         if other > 0:
-            omit_bits.append(f"{other} other")
-        detail = ", ".join(omit_bits) if omit_bits else f"{omitted} instances"
+            omit_bits.append(f"{other} other services have individual details omitted")
+        detail = ". ".join(omit_bits) if omit_bits else f"{omitted} services have individual details omitted"
         lines.append(
-            f"*Only these {shown} investigated/impaired instance"
-            f"{'s' if shown != 1 else ''} received additional dig coverage; "
-            f"{detail} omitted (baseline sync only — not fleet-wide "
-            "dataplane verification). "
-            "Use `--services-detail` for per-instance sections.*"
+            f"*{detail}. "
+            "Customer traffic delivery was not tested.*"
         )
         lines.append("")
 
@@ -1291,11 +1312,15 @@ def format_services_operator(
                 if not obs:
                     lines.append("")
                 lines.append(f"**Cause:** {cause}")
+            from diagnostic_mas.unknown_breakdown import category_for, CATEGORIES
+            if complete is False or status == "unknown":
+                lines.append("")
+                lines.append(f"**Unknown category:** {CATEGORIES[category_for(dx)]}")
             structured_gap = dx.get("verification_gap")
             if isinstance(structured_gap, dict):
                 lines.append("")
                 lines.append("**Verification gap:**")
-                for key, label in (("missing_check", "Missing check"),
+                for key, label in (("verified_checks", "Verified checks"), ("missing_check", "Missing check"),
                                    ("blocker", "Blocker"), ("direction", "Direction"),
                                    ("required_access", "Required access")):
                     value = structured_gap.get(key)
@@ -1332,6 +1357,10 @@ def format_services_operator(
                 lines.append("")
                 lines.extend(_format_uncertainty_block(uncertainty))
             body = _live_l2_body(rec)
+            basic = rec.get("basic_checks")
+            if isinstance(basic, dict):
+                body += ["Basic check " + str(c.get("check")) + " (" + str(c.get("status")) + "): " + str(c.get("observation"))
+                         for c in basic.get("checks", [])]
             if body:
                 lines.append("")
                 lines.append("**Collector detail:**")
@@ -1339,11 +1368,8 @@ def format_services_operator(
                     lines.append(line)
             fix = scrub_internal_ids(str(dx.get("fix_suggestion") or "").strip())
             lines.append("")
-            if complete is False and isinstance(structured_gap, dict):
-                next_check = structured_gap.get("next_check") or "Review the missing evidence."
-                lines.append(f"**Next check:** {scrub_internal_ids(str(next_check))}")
-                if structured_gap.get("blocker") == "endpoint_access_unavailable":
-                    lines.append("Operator follow-up: customer-host access and traffic testing are outside this agent.")
+            if complete is False or status == "unknown":
+                lines.append(f"**Next check:** {_incomplete_dig_next_action(dx)}")
             elif complete is not False and fix:
                 next_line = f"**Next action:** {fix}"
                 if status in {"down", "degraded"}:
@@ -1360,7 +1386,13 @@ def format_services_operator(
                     "**Next action:** Human review required before any remediation."
                 )
         else:
-            if sys_s == "up" or dp_s == "up" or str(rec.get("status") or "").lower() == "up":
+            basic = rec.get("basic_checks")
+            if isinstance(basic, dict):
+                label = {"up": "Operational Up", "down": "Operational Down",
+                         "unknown": "Operational Unknown", "not_checked": "Operational Not checked"}.get(basic.get("status"), "Operational Unknown")
+                lines.append(f"**Result:** {label} — {basic.get('reason', '')}")
+                lines.append("Customer traffic delivery was not tested; LLM verification is separate.")
+            elif sys_s == "up" or dp_s == "up" or str(rec.get("status") or "").lower() == "up":
                 lines.append("**Result:** Reported up by collection")
             else:
                 status = rec.get("status") or sys_s or dp_s or "unknown"
@@ -1381,6 +1413,10 @@ def format_services_operator(
             lines.append(f"**Coverage:** {_coverage_label(cov)}")
             lines.append("")
             body = _live_l2_body(rec)
+            basic = rec.get("basic_checks")
+            if isinstance(basic, dict):
+                body += ["Basic check " + str(c.get("check")) + " (" + str(c.get("status")) + "): " + str(c.get("observation"))
+                         for c in basic.get("checks", [])]
             for line in body:
                 lines.append(line)
             if body:
@@ -1464,8 +1500,12 @@ def format_followup_operator(case: CaseFile) -> list[str]:
             fault_names.add(name)
             items.append(f"Investigate collection-reported fault on `{name}` "
                          "before remediation (see Services for evidence).")
+    from diagnostic_mas.service_presence import disappeared
+    absent_names = {r.get("name") for r in services_from_case(case).values() if disappeared(r)}
     for row in case.last_known_service_faults:
         name = row["service"]
+        if name in absent_names:
+            continue
         if name not in fault_names and not row.get("rechecked"):
             fault_names.add(name)
             items.append(
@@ -1540,7 +1580,14 @@ def format_followup_operator(case: CaseFile) -> list[str]:
             "— not device down)."
         )
 
+    from diagnostic_mas.sync_failure_report import sync_failure_group
+    sync_failed, affected_count = sync_failure_group(case)
+    if affected_count:
+        commands = "; ".join(f"`devices device {d} check-sync`" for d in sync_failed)
+        items.append(f"Resolve failed sync verification for {affected_count} distinct services (Unknown; operational checks skipped). Run {commands} in the NSO CLI, retain complete responses and compare with MCP; reassess affected services after sync succeeds. These are not confirmed outages.")
     for device in attributed_devices:
+        if device in sync_failed and affected_count:
+            continue
         n = involvement[device]
         kind = quarantined_by_device.get(device) or live_mcp_failure_kind(
             quarantine_messages.get(device, "")
@@ -1849,42 +1896,54 @@ def format_result_line(case: CaseFile) -> str:
                 f"{'s' if quarantined_n != 1 else ''} live-query-failed "
                 "(further live MCP skipped)."
             )
-    unknown_groups = _verification_unknown_by_endpoints(case)
-    unknown_summary = _format_verification_unknown_summary(unknown_groups)
-    if unknown_summary:
-        parts.append(unknown_summary + ".")
+    from diagnostic_mas.service_final_status import final_service_counts, STATUSES
+
+    final_rows = final_service_counts(case)
+    if final_rows or services_from_case(case):
+        totals = {status: sum(row[status] for row in final_rows.values())
+                  for status in STATUSES}
+        parts.append(
+            "Final service status: "
+            f"{totals['up']} OpUp, {totals['down']} Down, "
+            f"{totals['degraded']} Degraded, {totals['unknown']} Unknown."
+        )
     else:
-        status_counts = _service_status_counts(case)
-        unknown_n = status_counts.get("unknown", 0)
-        if unknown_n:
-            parts.append(
-                f"{unknown_n} service{'s' if unknown_n != 1 else ''} unknown "
-                "(insufficient evidence; not confirmed down)."
-            )
-    if faults:
-        parts.append(
-            f"{len(faults)} investigated service"
-            f"{'s' if len(faults) != 1 else ''} with dataplane faults."
-        )
-    elif ups and not incomplete and not unknown_groups:
-        parts.append(
-            f"No fault identified in the {len(ups)} investigated service"
-            f"{'s' if len(ups) != 1 else ''}."
-        )
-    elif incomplete:
-        parts.append(
-            f"{len(incomplete)} service verification"
-            f"{'s' if len(incomplete) != 1 else ''} incomplete."
-        )
-    elif not dp and not quarantined_n and not unknown_groups:
-        open_n = sum(1 for i in case.issues if i.get("status") == "open")
-        if open_n:
-            parts.append(
-                f"{open_n} open issue{'s' if open_n != 1 else ''} "
-                f"{'remain' if open_n != 1 else 'remains'}."
-            )
+        unknown_groups = _verification_unknown_by_endpoints(case)
+        unknown_summary = _format_verification_unknown_summary(unknown_groups)
+        if unknown_summary:
+            parts.append(unknown_summary + ".")
         else:
-            parts.append("No dataplane investigations recorded.")
+            status_counts = _service_status_counts(case)
+            unknown_n = status_counts.get("unknown", 0)
+            if unknown_n:
+                parts.append(
+                    f"{unknown_n} service{'s' if unknown_n != 1 else ''} unknown "
+                    "(insufficient evidence; not confirmed down)."
+                )
+        if faults:
+            parts.append(
+                f"{len(faults)} investigated service"
+                f"{'s' if len(faults) != 1 else ''} with dataplane faults."
+            )
+        elif ups and not incomplete and not unknown_groups:
+            parts.append(
+                f"No fault identified in the {len(ups)} investigated service"
+                f"{'s' if len(ups) != 1 else ''}."
+            )
+        elif incomplete:
+            parts.append(
+                f"{len(incomplete)} service verification"
+                f"{'s' if len(incomplete) != 1 else ''} incomplete."
+            )
+        elif not dp and not quarantined_n and not unknown_groups:
+            open_n = sum(1 for i in case.issues if i.get("status") == "open")
+            if open_n:
+                parts.append(
+                    f"{open_n} open issue{'s' if open_n != 1 else ''} "
+                    f"{'remain' if open_n != 1 else 'remains'}."
+                )
+            else:
+                parts.append("No dataplane investigations recorded.")
     if mapping_n:
         parts.append(
             f"{mapping_n} inventory mapping observation"
@@ -1907,6 +1966,8 @@ def service_sync_note_from_case(case: CaseFile) -> str | None:
         extra = payload.get("extra") if isinstance(payload.get("extra"), dict) else {}
         note = extra.get("service_sync_note") if isinstance(extra, dict) else None
         if isinstance(note, str) and note.strip():
+            if note.startswith("SystemUp is a baseline"):
+                return "Service sync was skipped; configuration sync uses endpoint fleet sync. Dataplane results do not change the sync counts."
             return note.strip()
     return None
 
@@ -1948,10 +2009,13 @@ def format_run_details(
         f"**Drill investigations:** {getattr(b, 'drill_issues_used', 0)} / "
         f"{getattr(b, 'max_drill_issues', 0)} "
         f"(tools used {getattr(b, 'drills_used', 0)})",
-        f"**Deep checks / handoffs:** "
-        f"{b.deep_checks_used}/{b.max_deep_checks} · "
-        f"{b.handoffs_used}/{b.max_handoffs}",
     ]
+    if any((b.max_deep_checks, b.max_handoffs, b.deep_checks_used, b.handoffs_used)):
+        lines.append(
+            f"**Deep checks / handoffs:** "
+            f"{b.deep_checks_used}/{b.max_deep_checks} · "
+            f"{b.handoffs_used}/{b.max_handoffs}"
+        )
     timed = [(name, dx.get("investigation")) for name, dx in _dataplane_by_name(case).items()
              if isinstance(dx.get("investigation"), dict)]
     if timed:
@@ -2006,8 +2070,9 @@ def scope_counts(case: CaseFile) -> tuple[int, int]:
     if not devices:
         devices = {str(r.get("device")) for r in _device_rows(case) if r.get("device")}
     services = services_from_case(case)
-    svc_n = len(services) if services else len(_dataplane_by_name(case))
-    if not svc_n:
+    from diagnostic_mas.service_presence import disappeared
+    svc_n = sum(not disappeared(r) for r in services.values()) if services else len(_dataplane_by_name(case))
+    if not svc_n and not services:
         svc_n = sum(1 for i in case.issues if i.get("layer") == "services")
     return len(devices), svc_n
 

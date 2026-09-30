@@ -582,3 +582,22 @@ async def test_archive_records_failure_without_changing_retries(tmp_path):
         assert rows[-1]['attempt'] == 2
     finally:
         stop_mcp_cache()
+
+
+@pytest.mark.asyncio
+async def test_fresh_inventory_bypasses_but_preserves_initial_cache():
+    from nso_facts.mcp_client import start_mcp_cache, stop_mcp_cache
+    start_mcp_cache()
+    try:
+        initial = SimpleNamespace(data={"status":"success","data":{"services":[{"name":"svc"}]}},structured_content=None,content=[])
+        fresh = SimpleNamespace(data={"status":"success","data":{"services":[]}},structured_content=None,content=[])
+        client = _client_with_tools(_flat_tool("get_services", {"service_type":{"type":"string"}}),call_return=initial)
+        params={"service_type":"l2bridge"}
+        first=await call_mcp(client,"get_services",params)
+        client.call_tool.return_value=fresh
+        latest=await call_mcp(client,"get_services",params,bypass_cache=True)
+        assert latest["data"]["services"]==[]
+        assert (await call_mcp(client,"get_services",params))==first
+        assert client.call_tool.await_count==2
+    finally:
+        stop_mcp_cache()

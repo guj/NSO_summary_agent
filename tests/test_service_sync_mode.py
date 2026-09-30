@@ -160,10 +160,11 @@ def test_skip_note_appears_under_services_table():
     )
     text = render_report(case)
     assert "| l3rt" in text
-    assert SERVICE_SYNC_SKIP_NOTE in text
-    assert text.index("| l3rt") < text.index(SERVICE_SYNC_SKIP_NOTE)
-    assert text.index(SERVICE_SYNC_SKIP_NOTE) < text.index(
+    note = "Service sync was skipped; configuration sync uses endpoint fleet sync."
+    assert note in text
+    assert text.index("| l3rt") < text.index(note)
+    assert text.index(note) < text.index(
         "received additional dataplane investigation"
     )
     assert "**Service sync:**" not in text
-    assert text.index("## Run details") > text.index(SERVICE_SYNC_SKIP_NOTE)
+    assert text.index("## Run details") > text.index(note)

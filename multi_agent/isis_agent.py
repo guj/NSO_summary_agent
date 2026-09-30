@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from agent.config import llm_temperature_kwargs
+
 import json
 from pathlib import Path
 from typing import Any
@@ -111,7 +113,7 @@ async def _llm_plan(settings: Settings, result: AgentResult) -> list[dict[str, A
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        temperature=0.1,
+        **llm_temperature_kwargs(settings),
     )
     text = (resp.choices[0].message.content or "") if resp.choices else ""
     return parse_plan_json(text)

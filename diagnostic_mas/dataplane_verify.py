@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from agent.config import llm_temperature_kwargs
+
 from diagnostic_mas.investigation import GAP_SCHEMA, Investigation, normalize_gap, fallback_gap
 
 import json
@@ -13,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.config import Settings
-from agent.summarize import FABRIC_CHAT_TIMEOUT_SEC
+from agent.summarize import FABRIC_CHAT_TIMEOUT_SEC, llm_timeout_seconds, llm_error_category
 from diagnostic_mas.case import Budget, CaseFile, DrillSession, add_evidence
 from diagnostic_mas.deep_checks import DATAPLANE_ALLOWLIST
 from diagnostic_mas.drill import (
@@ -247,6 +249,7 @@ def _dump_failed_dataplane_llm_request(
     tools: list[dict[str, Any]],
     error: BaseException,
     elapsed_s: float,
+    timeout_sec: float = FABRIC_CHAT_TIMEOUT_SEC,
 ) -> Path | None:
     """Write the failed chat payload for offline inspection; return path or None.
 
@@ -274,9 +277,10 @@ def _dump_failed_dataplane_llm_request(
                     "service": service_name,
                     "round": round_i,
                     "model": model,
-                    "timeout_sec": FABRIC_CHAT_TIMEOUT_SEC,
+                    "timeout_sec": timeout_sec,
                     "elapsed_s": round(elapsed_s, 2),
                     "error": f"{type(error).__name__}: {error}",
+                    "error_category": llm_error_category(error),
                     "messages_chars": msg_chars,
                     "tools_chars": tools_chars,
                     "total_chars_approx": msg_chars + tools_chars,
@@ -336,6 +340,8 @@ def _live_l2_clearly_up(record: dict[str, Any]) -> bool:
 
 def service_needs_investigation(record: dict[str, Any]) -> bool:
     """True when basic checks look suspicious or inconclusive (prefer LLM)."""
+    if isinstance(record.get("basic_checks"), dict):
+        return bool(record["basic_checks"].get("needs_investigation"))
     if _live_l2_all_soft_errors(record):
         return True
     status = str(record.get("status") or "").lower()
@@ -362,7 +368,9 @@ def init_service_coverage(case: CaseFile) -> None:
         name = str(rec.get("name") or "").strip()
         if not name:
             continue
-        if service_needs_investigation(rec):
+        if (rec.get("basic_checks") or {}).get("status") == "not_checked":
+            case.service_coverage[name] = "collection_concluded"
+        elif service_needs_investigation(rec):
             case.service_coverage[name] = "needs_investigation"
         else:
             case.service_coverage[name] = "basic_passed"
@@ -466,6 +474,11 @@ def select_dataplane_candidates(
     """
     eligible: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for ev, rec in iter_service_records(case):
+        basic = rec.get("basic_checks")
+        if isinstance(basic, dict):
+            if explicit_service or basic.get("needs_investigation"):
+                eligible.append((ev, rec))
+            continue
         sys = str(rec.get("system_status") or "").lower()
         dp = str(rec.get("dataplane_status") or "not_checked").lower()
         status = str(rec.get("status") or "").lower()
@@ -905,6 +918,8 @@ def _commit_dataplane_conclusion(
     Covers gate-rejected ``up`` claims and LLM ``conclude_dataplane`` with
     ``dataplane_status=unknown`` — neither explains the issue or blocks follow-up.
     """
+    if finding.get("service_disappeared"):
+        return
     status = str(finding.get("dataplane_status") or "").lower()
     if finding.get("complete") is False or status in {"unknown", "not_checked"}:
         _record_incomplete_dataplane_verify(
@@ -922,6 +937,51 @@ def _commit_dataplane_conclusion(
         source=source,
         evidence_ids=evidence_ids,
     )
+
+
+def _basic_gate_coverage(record: dict[str, Any]) -> tuple[set[str], set[str]]:
+    """Reuse collector-owned evidence attached to this run's service record.
+
+    Identity, timestamp and successful tool provenance are required; an aggregate
+    status or LLM assertion alone is not endpoint/configuration evidence.
+    This does not accept an Up conclusion or bypass forwarding validation.
+    """
+    from datetime import datetime
+
+    basic = record.get("basic_checks")
+    if not isinstance(basic, dict) or basic.get("schema_version") != 1:
+        return set(), set()
+    devices = set(_service_devices(record))
+    if (basic.get("service_id") != record.get("name")
+            or basic.get("service_type") != record.get("service_type")
+            or set(basic.get("devices") or []) != devices
+            or basic.get("sync_ready") is not True):
+        return set(), set()
+    try:
+        checked = datetime.fromisoformat(basic["checked_at"])
+        if checked.tzinfo is None:
+            return set(), set()
+    except (KeyError, TypeError, ValueError):
+        return set(), set()
+    observed = set()
+    for source in basic.get("sources") or []:
+        if source.get("available") is not True or source.get("tool") != "exec_show":
+            continue
+        try:
+            stamp = datetime.fromisoformat(source["collected_at"])
+            if stamp.tzinfo is None or stamp > checked:
+                continue
+        except (KeyError, TypeError, ValueError):
+            continue
+        if source.get("device") in devices:
+            observed.add(source["device"])
+    checks = basic.get("checks") or []
+    covered = {c.get("device") for c in checks
+               if c.get("status") == "pass" and c.get("device") in observed}
+    config = {c.get("device") for c in checks
+              if c.get("check") == "effective_evpn" and c.get("status") == "pass"
+              and c.get("device") in covered}
+    return covered, config
 
 
 def accept_dataplane_conclusion(
@@ -974,14 +1034,15 @@ def accept_dataplane_conclusion(
 
     devices = _service_devices(record)
     by_dev = _session_by_device(session_evidence)
+    basic_devices, basic_config = _basic_gate_coverage(record)
     if len(devices) >= 2:
-        missing = [d for d in devices if d not in by_dev]
+        missing = [d for d in devices if d not in by_dev and d not in basic_devices]
         if missing:
             return _demote_up_finding(
                 out,
                 status="unknown",
                 gate_reason=(
-                    "required endpoints not checked in this session: "
+                    "required endpoints not checked in basic checks or this dig: "
                     + ", ".join(missing)
                 ),
             )
@@ -996,13 +1057,13 @@ def accept_dataplane_conclusion(
 
     if stype == "l2sts" and len(devices) >= 2:
         texts = {d: _configish_text_for_device(session_evidence, d) for d in devices}
-        if any(not texts[d].strip() for d in devices):
+        if any(not texts[d].strip() and d not in basic_config for d in devices):
             return _demote_up_finding(
                 out,
                 status="unknown",
                 gate_reason=(
                     "l2sts up requires config-like evidence on both PEs "
-                    "in this session (RT compatibility is dig-reasoned, "
+                    "in basic checks or this dig (RT compatibility is dig-reasoned, "
                     "not auto-diagnosed)"
                 ),
             )
@@ -1015,11 +1076,24 @@ def accept_dataplane_conclusion(
         admit = _l2sts_up_admits_incomplete_bidirectional_proof(
             f"{out.get('observed') or ''}\n{out.get('cause') or ''}"
         )
-        if admit:
+        # Missing learned-unicast MACs do not invalidate an independently
+        # verified replication path. Never infer that path from LLM wording.
+        replication_proven = False
+        if admit and ("proof of MAC installation" in admit or "PE MAC/forwarding table" in admit):
+            from diagnostic_mas.operational_checks.evidence import replication_ready
+            if set(devices) <= basic_devices and set(devices) <= basic_config:
+                replication_proven = replication_ready(record["basic_checks"], devices, session_evidence)
+        if admit and not replication_proven:
             return _demote_up_finding(
                 out,
                 status="unknown",
                 gate_reason=admit,
+            )
+
+        if replication_proven:
+            out["observed"] = str(out.get("observed") or "").rstrip() + (
+                "\nVerification scope: bidirectional PE-side replication readiness; "
+                "learned-unicast MAC forwarding and customer traffic delivery were not verified."
             )
 
     return out
@@ -1185,9 +1259,11 @@ def _l2sts_up_admits_incomplete_bidirectional_proof(text: str) -> str | None:
     # l2_ctrl_ue_upf-1697 passed on IMET-only while MAX_WASH stayed unknown).
     if _l2sts_admits_no_type2_either_direction(lower):
         return (
-            "l2sts up refused: conclusion admits no type-2/BD MAC install "
-            "in either direction (IMET or pseudo-port up is supporting "
-            "evidence only — conclude unknown)"
+            "l2sts up refused: required bidirectional forwarding evidence "
+            "is incomplete. Preserve the verified checks and named remaining "
+            "gap in the observations; this gate does not establish which "
+            "direction lacks evidence. IMET or pseudo-port up alone is "
+            "supporting evidence, not proof of MAC installation."
         )
 
     # Numeric RT text gaps are OK when BD-scoped EVPN install is the proof
@@ -1351,8 +1427,10 @@ def _l2sts_admits_no_type2_either_direction(lower: str) -> bool:
     empty_or_no_type2 = bool(
         re.search(
             r"("
-            r"0 mac addresses|"
-            r"0 macs?\b|"
+            # A numeric count must not be the suffix of an interface,
+            # address, identifier, or nonzero count (e.g. Hu0/0/0/4.0 MAC).
+            r"(?<![\w./:-])0 mac addresses\b|"
+            r"(?<![\w./:-])0 macs?\b|"
             r"zero macs?\b|"
             r"no mac entries|"
             r"mac tables? (for this bd )?(are )?empty|"
@@ -1466,6 +1544,10 @@ def disallowed_dataplane_show_command(command: str) -> str | None:
     if not raw:
         return None
     cmd = re.sub(r"(?i)^show\s+", "", raw).strip()
+    # Verified read-only XR forms; keep the broad guard for guessed variants.
+    if re.fullmatch(r"evpn\s+evi\s+vpn-id\s+[1-9][0-9]*\s+(?:inclusive-multicast\s+)?detail",
+                    cmd, flags=re.IGNORECASE):
+        return None
     # ``run evpn`` is almost always rejected on this exec path; treating it as
     # a soft-block saves multi-minute dig rounds (nso21: late run evpn → 96s
     # LLM turn). Prefer get_device_config + bgp l2vpn evpn rd.
@@ -2017,6 +2099,7 @@ async def _llm_dataplane_verify_one(
 ) -> bool:
     """Returns True if a dataplane_status was recorded (LLM or fallback)."""
     from agent.summarize import fabric_openai_client
+    from diagnostic_mas.dataplane_scheduler import llm_request, parent_halted
     from diagnostic_mas.case import evidence_ids_after
 
     before = session.tools_used
@@ -2037,6 +2120,8 @@ async def _llm_dataplane_verify_one(
         "in_sync": record.get("in_sync"),
         "device_sync": record.get("device_sync"),
     }
+    if isinstance(record.get("basic_checks"), dict):
+        brief["basic_checks"] = record["basic_checks"]
     if isinstance(record.get("live_l2"), dict):
         brief["live_l2"] = record["live_l2"]
     try:
@@ -2087,7 +2172,7 @@ async def _llm_dataplane_verify_one(
     stop_reason = "investigation ended without a conclusion"
     partial_results: list[dict[str, Any]] = []
     oai = openai_client or fabric_openai_client(
-        settings, timeout=FABRIC_CHAT_TIMEOUT_SEC
+        settings, timeout=llm_timeout_seconds(settings)
     )
     concluded = False
     max_rounds = max_rounds_hint
@@ -2098,6 +2183,9 @@ async def _llm_dataplane_verify_one(
     await_conclusion = False
 
     for round_i in range(max_rounds):
+        if parent_halted():
+            stop_reason = "provider budget halted this run"
+            break
         remaining = session.max_tools - session.tools_used
         if remaining <= 0 and not await_conclusion:
             break
@@ -2139,12 +2227,12 @@ async def _llm_dataplane_verify_one(
             f"total≈{msg_chars + tools_chars} chars"
         )
         try:
-            response = investigation.llm(oai.chat.completions.create,
+            response = await llm_request(investigation, oai.chat.completions.create,
                 model=settings.fabric_model,
                 messages=messages,
                 tools=tools_payload,
                 tool_choice=tool_choice,
-                temperature=0.1,
+                **llm_temperature_kwargs(settings),
             )
         except Exception as exc:  # noqa: BLE001
             from agent.llm_budget import (
@@ -2173,6 +2261,7 @@ async def _llm_dataplane_verify_one(
                     tools=tools_payload,
                     error=exc,
                     elapsed_s=elapsed,
+                    timeout_sec=llm_timeout_seconds(settings),
                 )
                 if dump_path is not None:
                     _log(f"dumped failed LLM request to {dump_path}")
@@ -2200,12 +2289,12 @@ async def _llm_dataplane_verify_one(
                     "retrying with tool_choice=auto"
                 )
                 try:
-                    response = investigation.llm(oai.chat.completions.create,
+                    response = await llm_request(investigation, oai.chat.completions.create,
                         model=settings.fabric_model,
                         messages=messages,
                         tools=tools_payload,
                         tool_choice="auto",
-                        temperature=0.1,
+                        **llm_temperature_kwargs(settings),
                     )
                 except Exception as exc2:  # noqa: BLE001
                     elapsed = time.monotonic() - llm_started
@@ -2237,7 +2326,7 @@ async def _llm_dataplane_verify_one(
                             case.llm_halt_reason or msg
                         ) from exc2
                     stop_reason = f"LLM request failed: {type(exc2).__name__}"
-                    _log(f"LLM error after {elapsed:.2f}s: {exc2}")
+                    _log(f"LLM error after {elapsed:.2f}s [{llm_error_category(exc2)}]: {exc2}")
                     dump_path = _dump_failed_dataplane_llm_request(
                         service_name=service_name,
                         round_i=round_i + 1,
@@ -2246,13 +2335,14 @@ async def _llm_dataplane_verify_one(
                         tools=tools_payload,
                         error=exc2,
                         elapsed_s=elapsed,
+                    timeout_sec=llm_timeout_seconds(settings),
                     )
                     if dump_path is not None:
                         _log(f"dumped failed LLM request to {dump_path}")
                     break
             else:
                 stop_reason = f"LLM request failed: {type(exc).__name__}"
-                _log(f"LLM error after {elapsed:.2f}s: {exc}")
+                _log(f"LLM error after {elapsed:.2f}s [{llm_error_category(exc)}]: {exc}")
                 dump_path = _dump_failed_dataplane_llm_request(
                     service_name=service_name,
                     round_i=round_i + 1,
@@ -2261,6 +2351,7 @@ async def _llm_dataplane_verify_one(
                     tools=tools_payload,
                     error=exc,
                     elapsed_s=elapsed,
+                    timeout_sec=llm_timeout_seconds(settings),
                 )
                 if dump_path is not None:
                     _log(f"dumped failed LLM request to {dump_path}")
@@ -2280,6 +2371,8 @@ async def _llm_dataplane_verify_one(
                 session_ev = [
                     e for e in case.evidence if e.get("id") in set(ev_ids)
                 ]
+                from diagnostic_mas.service_presence import reconcile_presence
+                finding = await reconcile_presence(client, case, record, finding)
                 finding = accept_dataplane_conclusion(
                     record, finding, session_evidence=session_ev
                 )
@@ -2342,6 +2435,8 @@ async def _llm_dataplane_verify_one(
                     session_ev = [
                         e for e in case.evidence if e.get("id") in set(ev_ids)
                     ]
+                    from diagnostic_mas.service_presence import reconcile_presence
+                    finding = await reconcile_presence(client, case, record, finding)
                     finding = accept_dataplane_conclusion(
                         record, finding, session_evidence=session_ev
                     )
@@ -2648,6 +2743,7 @@ async def run_dataplane_verify_phase(
     openai_client: Any | None = None,
     suspicious_only: bool = False,
     explicit_service: bool = False,
+    concurrent_works: int = 1,
     category_rotate_seed: str | None = None,
 ) -> None:
     """LLM dataplane verify for selected service instances.
@@ -2730,8 +2826,16 @@ async def run_dataplane_verify_phase(
         return
     _log(f"tools_cap={tools_cap} rounds_cap={_DATAPLANE_MAX_ROUNDS_CAP}")
     touched_ev: set[int] = set()
+    if concurrent_works > 1:
+        from diagnostic_mas.dataplane_scheduler import run_concurrent
+        _log(f"concurrent_works={concurrent_works}")
+        touched_ev = await run_concurrent(
+            candidates, workers=concurrent_works, client=client, settings=settings,
+            case=case, device_names=device_names, tools_cap=tools_cap,
+            openai_client=openai_client, verify_one=llm_dataplane_verify_one, log=_log,
+        )
     halted_at: int | None = None
-    for idx, (ev, rec) in enumerate(candidates):
+    for idx, (ev, rec) in enumerate(candidates if concurrent_works <= 1 else []):
         if case_llm_halted(case):
             halted_at = idx
             break

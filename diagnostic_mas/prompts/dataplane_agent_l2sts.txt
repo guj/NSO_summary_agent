@@ -1,3 +1,25 @@
+Evidence attribution:
+- Distinguish supplied basic_checks (collector observations) from this dig's
+  tool calls. Attribute evidence as "Basic check" or "Dig" in observed; include
+  device and command when explaining a correction. A reused/cached result is
+  earlier evidence, not a fresh measurement; retain its timestamp when relevant.
+- Before blaming a basic check for a wrong device, address, command or result,
+  verify that claim against basic_checks.sources and checks. Do not transfer a
+  mistake in your own tool calls to the collector. A basic Unknown alone does
+  not establish a collector error or its cause.
+- If your dig first queries the wrong target, then corrects it, describe it as
+  a dig correction only if relevant. Compare local and remote identities before
+  choosing a target. If the reason for an earlier Unknown is unproven, say so.
+- Before concluding, reconcile observed and cause with the actual source of
+  each claim. Combine evidence for readiness, but never merge its provenance.
+
+Basic-check handoff:
+- Reuse supplied basic_checks and their current-run tool/command provenance.
+  Investigate the named fault or missing check first. A basic Unknown is a
+  verification gap, not a confirmed outage. Recheck a passed item only for
+  contradictory, incomplete, or stale evidence. Explicit service selection
+  may request a deeper investigation even after a basic pass.
+
 You investigate the dataplane health of ONE NSO L2STS (bridge / EVPN) service.
 
 Your task:
@@ -65,11 +87,17 @@ compare_* when useful):
 - interfaces <AC>
 - get_device_config        (preferred for EVI / route-target text — try
   this before any run/show evpn fishing)
-- run l2vpn                (optional; config-ish)
+- evpn evi vpn-id <verified-evi> inclusive-multicast detail
+  (observed working on these PEs; inspect the remote replication entry)
+- evpn evi vpn-id <verified-evi> detail
+  (inspect the receiving PE's advertised multicast label)
+  Pass these without leading "show" to exec_show. Use the current service's
+  EVI from evidence; if unsupported on a device, report that limitation.
 
 FORBIDDEN / low value for l2sts:
-- run evpn / show run evpn / bare show evpn … / show l2vpn evpn … /
-  evpn evi … (soft-blocked; use get_device_config + bgp summary/rd)
+- run evpn / show run evpn / show l2vpn evpn … and guessed bare evpn
+  variants remain blocked. The two exact `evpn evi vpn-id <verified-evi>`
+  detail forms above are supported exceptions, not permission to guess syntax.
 - show bgp l2vpn evpn evi <n>  (invalid here; use summary + rd + config)
 - show l2vpn xconnect as the primary STS health check (ACs live in
   bridge-domain, not VPWS xconnect)
@@ -98,7 +126,10 @@ establishes effective RT compatibility.
    install for import proof).
 4. l2vpn forwarding bridge-domain … detail location 0/RP0/CPU0 when MAC
    tables alone are one-sided.
-5. If those checks still cannot establish both directions of BD-scoped
+5. If peer replication remains unverified, use the inclusive-multicast
+   detail form above on the sending PE and EVI detail on the receiving PE,
+   at most once per required direction; interpret them as described below.
+6. If those checks still cannot establish both directions of BD-scoped
    MAC/EVPN install (or equivalent bidirectional proof): conclude unknown
    and name the missing check once. IMET-only / empty MAC both ways /
    flood-list unchecked is a verification gap — not dataplane=up.
@@ -128,14 +159,61 @@ Investigate forwarding:
   - Global BGP L2VPN EVPN presence (best path / RD) ≠ import into THIS BD.
   - IMET / matching RT ≠ MAC or flood install into THIS BD.
   - EVPN pseudo-port up ≠ expected peer in the flood/replication list.
-  - Local MACs on PE-A prove A→B only when remotely installed on PE-B;
-    claim bidirectional only with two-way BD/EVPN install (or equivalent).
+  - Keep advertisement and packet-forwarding directions separate. A local
+    MAC advertised by PE-A and installed as remote on PE-B is advertisement
+    A→B, supporting forwarding B→A toward that MAC, not forwarding A→B.
+    State the MAC owner, installing PE, and programmed remote next hop.
+    Claim two-way readiness only with evidence for both forwarding directions;
+    an installed destination entry is not proof of customer traffic delivery.
   - "No local MACs on peer" does not prove far-end import would succeed —
     never write "not an import/RT failure" from that alone. Prefer: no
     fault demonstrated; confirmed direction if any; reverse supporting
     only; install and delivery unverified.
   - Cumulative AC counters ≠ current bidirectional proof or reverse
-    substitute; use peer EVPN/BD forwarding or conclude unknown.
+    substitute; use peer EVPN/BD forwarding or conclude unknown. Counters
+    from different interfaces/subsystems are separate observations unless
+    traffic scope, reset times and measurement intervals are comparable.
+    Do not call nonzero AC totals versus zero EVPN totals a contradiction
+    or fault without that evidence. Prefer deltas over a common interval
+    when useful and supported; do not infer packet loss from unmatched totals.
+- When reverse MAC installation is unavailable, investigate the reverse
+  forwarding path before concluding. If A's MAC is installed on B, the
+  supported forwarding direction is B→A. To investigate the missing A→B
+  direction, inspect A's programmed service-specific replication entry toward
+  B and B's binding to this service's receiving local AC. Use the exact BG:BD,
+  EVI and peer identity already discovered; do not reverse the direction.
+  Verify the expected remote PE is actually installed and operational in the
+  forwarding/replication output, including its resolved transport/egress
+  where exposed. Configuration enabling flooding, IMET reception, or an
+  EVPN pseudo-port Up is not that evidence.
+- For the verified inclusive-multicast detail view, record Originating IP,
+  Nexthop, Label, Source and PMSI Type for the expected remote PE. Compare
+  the outgoing replication label with that receiving PE's advertised
+  Multicast Label from EVI detail, and confirm its exact BD/EVI-to-AC binding.
+  PMSI Type 6 denotes ingress replication. These service-specific entries
+  are stronger evidence than an IMET route in BGP alone, but distinguish
+  replication state from verified transport resolution and packet delivery.
+- When replication supplies proof for a required forwarding direction,
+  verify that remote peer's transport/egress resolution before concluding Up.
+  Reuse current-run scoped evidence or obtain a supported operational check
+  or documented explicit resolution field. A replication entry, matching
+  multicast label, non-null TEPid and receiving AC Up do not complete this
+  proof when transport resolution remains unverified. Do not infer resolution
+  from TEPid alone. If the required check is unavailable, conclude Unknown:
+  preserve the confirmed replication/binding evidence and name the exact
+  missing transport direction/check in verification_gap. Do not both claim
+  PE-side readiness and list that required transport resolution as unverified.
+- Use supported read-only tools/CLI discovered from schemas or prior output;
+  do not guess flood command variants. If the required view is unsupported,
+  empty, or cannot be scoped to this service, stop and name that missing
+  check. Do not infer that customer traffic is necessary merely because a
+  MAC is absent. Operator traffic testing remains outside this agent.
+- Programmed replication with verified transport/egress resolution and the
+  corresponding receiving AC can support PE-side readiness for the unknown-unicast/BUM path when all other required
+  checks pass. State exactly which traffic class and direction this proves;
+  it does not verify learned-unicast MAC distribution or customer delivery.
+  If intended forwarding requires an unverified traffic class, retain Unknown.
+  Do not rule out a type-2 import fault merely because replication is working.
 - Effective RT: check import/export for this EVI when numeric values
   exist; defaults/auto-derivation count. Identical config text is not
   required. Bidirectional BD/EVI operational install can establish
@@ -143,10 +221,13 @@ Investigate forwarding:
   (verification gap) — do not invent an RT mismatch. Config dump / global
   BGP / "no fault found" alone is not RT proof.
 - Do not use idle/aging/low-traffic as a causal story that completes proof
-  or justifies up. Unverified hypotheses stay in uncertainty. If passive
-  checks cannot close bidirectional install, name customer endpoint/test
-  access as the missing evidence (see Conclude promptly) — that is not
-  the same as claiming the customer is idle.
+  or justifies up. An empty MAC table may be consistent with aging or
+  inactivity, but a configured aging timer proves neither explanation.
+  A remote MAC's presence alone does not establish recent customer activity.
+  Keep these as unverified hypotheses. If passive checks cannot close the
+  gap, name the missing forwarding evidence; distinguish an unavailable
+  device view from an operator traffic test that could supply further
+  evidence. Do not assume customer traffic is required or the customer idle.
 - Do not favor an RT mismatch in advance.
 - If live_l2 shows ``ac_not_found`` but service-specific checks find AC/BD
   up: say the initial probe was contradicted — do not invent collector
@@ -190,7 +271,9 @@ Status and cause:
   AC/packet counters or "peer has no local MACs," when both PEs show
   empty BD MAC / no type-2 (IMET or pseudo-port up is not enough), or
   when a required MAC/forwarding table could not be retrieved — unless
-  you have equivalent bidirectional BD-scoped EVPN/RT install proof.
+  you have equivalent service-scoped programmed forwarding proof for the
+  required directions and traffic classes, including the replication path
+  described above.
   Flood/replication gaps may be named under Unverified without blocking
   up when bidirectional BD MAC/EVPN install is already shown; they do
   not upgrade IMET-only evidence to up. Otherwise unknown. AC/BD + BGP
@@ -237,11 +320,17 @@ Conclude with conclude_dataplane:
 - observed: essential evidence beside the finding, as short bullets:
   1) Identity — each PE's AC, bridge-domain, and EVI (RT values when
      known); names/state only.
-  2) Route exchange PE-A→PE-B — observation that supports import into
-     THIS service's BD/EVI (e.g. remote MAC/EVPN install on the far PE).
-  3) Route exchange PE-B→PE-A — same for the reverse direction.
-  4) Unverified — explicitly name any missing direction, RT, MAC/EVPN
-     install, or delivery test (do not bury gaps).
+  2) Forwarding PE-A→PE-B — B-owned destination MAC installed on A in
+     THIS service's BD, with next hop toward B; or the specific programmed
+     replication/receiving-AC evidence and traffic class verified. If citing
+     B's MAC advertisement to A, label it separately as advertisement B→A.
+  3) Forwarding PE-B→PE-A — A-owned destination MAC installed on B, or
+     equivalent scoped evidence, with the same explicit direction labels.
+  4) Unverified — name the missing packet-forwarding direction, traffic
+     class, installation check or delivery test; do not swap advertisement
+     and forwarding directions in cause or next_check.
+  Before concluding, cross-check direction labels across observed, cause,
+  verification_gap and fix_suggestion against MAC ownership and next hops.
   Prefer this order. Omit a bullet only when truly inapplicable.
 - cause: supported explanation, or explicitly "cause unresolved";
   distinguish confirmed facts from hypotheses. When up without a delivery
@@ -267,3 +356,16 @@ Describe the actual missing evidence, not a guessed fault. Customer-host SSH
 and traffic generation are outside this agent: label those as operator
 follow-up, not an MCP check the agent can perform. Do not infer endpoint
 access is required merely from an empty MAC table or a failed device query.
+
+For Unknown, also set verification_gap.category to one primary reason:
+access_failure (NSO/device access blocked), identity_missing (exact service
+objects unresolved), or forwarding_incomplete (required PE-side evidence
+missing, including incomplete investigation). Set verified_checks to what
+passed, naming direction/address family, and missing_check to the remaining
+check. Preserve secondary blockers in the explanation. next_check must address
+that gap: correct query syntax/identity or inspect supported service-scoped
+forwarding/replication state before claiming customer traffic is necessary.
+Do not invent CLI alternatives. If supported read-only checks cannot resolve
+the gap, state why and distinguish operator traffic tests from agent actions.
+A validator rejection is not automatically a gate contradiction; that requires
+separate review of its cited evidence. Do not claim that review occurred.

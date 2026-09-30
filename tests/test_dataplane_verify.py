@@ -71,7 +71,7 @@ def test_disallowed_bare_show_evpn():
     assert "Config alone is not enough" in bare
     assert "conclude_dataplane now" not in bare
     evi_detail = disallowed_dataplane_show_command("evpn evi vpn-id 9037 detail")
-    assert evi_detail and "bgp l2vpn evpn rd" in evi_detail
+    assert evi_detail is None  # Verified XR EVI detail form is now allowed.
     assert disallowed_dataplane_show_command("bgp l2vpn evpn") is None
     assert disallowed_dataplane_show_command("show bgp l2vpn evpn summary") is None
     assert disallowed_dataplane_show_command("bgp l2vpn evpn rd 10.1.1.1:9037") is None

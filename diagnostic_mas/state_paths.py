@@ -18,6 +18,7 @@ def diagnostic_mas_state_dir(settings: Settings) -> Path:
 def case_to_dict(case: CaseFile) -> dict[str, Any]:
     return {
         "budget": asdict(case.budget),
+        "run_configuration": dict(case.run_configuration),
         "evidence": case.evidence,
         "issues": case.issues,
         "diagnoses": case.diagnoses,
@@ -52,7 +53,7 @@ def persist_case(
         report_path.write_text(report, encoding="utf-8")
         from diagnostic_mas.html_report import render_html_report
 
-        (run_dir / "report.html").write_text(render_html_report(report, run_id), encoding="utf-8")
+        (run_dir / "report.html").write_text(render_html_report(report, run_id, case=case_to_dict(case)), encoding="utf-8")
     latest = state_dir / "latest.json"
     meta: dict[str, Any] = {
         "run_id": run_id,

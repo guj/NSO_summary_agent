@@ -72,6 +72,8 @@ def issues_from_service_health(services: dict[str, Any]) -> list[dict[str, Any]]
 def _append_service_issue(
     out: list[dict[str, Any]], stype: str, inst: dict[str, Any]
 ) -> None:
+    if (inst.get("basic_checks") or {}).get("status") == "not_checked":
+        return
     status = (inst.get("status") or "").lower()
     if status not in {"down", "degraded"}:
         return
@@ -95,6 +97,9 @@ def _append_service_issue(
         "message": message,
         "devices": list(inst.get("devices") or []),
     }
+    if isinstance(inst.get("basic_checks"), dict):
+        rec["basic_checks"] = inst["basic_checks"]
+        rec["message"] += " — " + inst["basic_checks"].get("reason", "")
     if live_l2 is not None:
         rec["live_l2"] = live_l2
     if "in_sync" in inst:
@@ -117,6 +122,7 @@ async def run_service_spine(
     service_type: str | None = None,
     service_id: str | None = None,
     filter_to_devices: bool = False,
+    spine_concurrent_devices: int = 1,
 ) -> dict[str, Any]:
     # Focused type/id → lean MCP (no fleet-wide type walk / HW / phys op)
     lean = bool(service_type or service_id)
@@ -131,6 +137,9 @@ async def run_service_spine(
         only_service_types=only_types,
         only_service_ids=only_ids,
         lean=lean,
+        retry_inconclusive_sync=True,
+        spine_concurrent_devices=spine_concurrent_devices,
+        operational_policy="force" if service_id else "routine",
     )
     device_filter = list(device_names) if filter_to_devices else None
     services = filter_services(
@@ -146,6 +155,7 @@ async def run_service_spine(
     extra: dict[str, Any] = {
         "services": services,
         "fleet_sync": pack.get("fleet_sync"),
+        "sync_rechecks": pack.get("sync_rechecks") or {},
         "hardware_health": hw,
         "system_health": sys_h,
         "physical_operational_edges": pack.get("physical_operational_edges")

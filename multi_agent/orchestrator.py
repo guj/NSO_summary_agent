@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from agent.config import llm_temperature_kwargs
+
 import json
 import sys
 import time
@@ -314,7 +316,7 @@ def _summarize(settings: Settings, merged: dict[str, Any]) -> str:
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        temperature=0.2,
+        **llm_temperature_kwargs(settings),
     )
     return (resp.choices[0].message.content or "").strip() if resp.choices else ""
 

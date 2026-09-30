@@ -278,7 +278,9 @@ async def test_llm_handoff_to_device_records_hypothesis():
     assert case.hypotheses
     assert case.hypotheses[0]["text"] == "possible optic fault"
     text = render_report(case)
-    facts = text.split("Hypothes")[0]
+    facts, heading, hypotheses = text.partition("**Open hypotheses (not ground truth):**")
+    assert heading
+    assert "possible optic fault" in hypotheses
     assert "possible optic fault" not in facts
     assert "possible optic fault" in text
 

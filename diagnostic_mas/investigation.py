@@ -14,6 +14,9 @@ GAP_SCHEMA = {
     "type": "object",
     "description": "For Unknown, specify the missing PE-readiness evidence and next check. Customer-host tests are outside this agent.",
     "properties": {
+        "category": {"type": "string", "enum": ["access_failure", "identity_missing", "forwarding_incomplete"],
+                     "description": "Primary Unknown reason; gate rejection alone is not a gate contradiction."},
+        "verified_checks": {"type": "string", "description": "What passed, including direction/address family; keep separate from the missing check."},
         "blocker": {"type": "string", "enum": list(BLOCKERS)},
         "missing_check": {"type": "string"},
         "direction": {"type": "string"},
@@ -29,11 +32,13 @@ def normalize_gap(value: Any) -> dict[str, str] | None:
         return None
     if value.get("blocker") not in BLOCKERS:
         return None
-    fields = ("blocker", "missing_check", "direction", "next_check", "required_access")
+    fields = ("blocker", "missing_check", "direction", "next_check", "required_access", "verified_checks", "category")
     out = {k: v.strip() for k in fields
            if isinstance((v := value.get(k)), str) and v.strip()}
     if not all(out.get(k) for k in GAP_SCHEMA["required"]):
         return None
+    if out.get("category") not in {"access_failure", "identity_missing", "forwarding_incomplete"}:
+        out.pop("category", None)
     return {**out, "source": "llm"}
 
 

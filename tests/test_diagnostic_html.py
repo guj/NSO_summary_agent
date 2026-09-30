@@ -81,3 +81,13 @@ def test_slack_upload_flow(tmp_path):
     with patch('agent.publish.urllib.request.urlopen',return_value=Response(b'{"ok":false,"error":"missing_scope"}')):
         with pytest.raises(RuntimeError,match='missing_scope'):
             publish_slack_file(path,'Brief',settings)
+
+
+def test_grouped_service_headers():
+    from diagnostic_mas.report import format_services_table
+    table = '\n'.join(format_services_table({'l2ptp': dict(total=7, sync_in=7, dp_up=4, dp_down=3)}))
+    doc = render_html_report('## Services\n' + table + '\n', 'test')
+    assert 'colspan="3" scope="colgroup">Configuration sync' in doc
+    assert 'colspan="5" scope="colgroup">Dataplane (PE readiness)' in doc
+    assert 'rowspan="2" scope="col">Total' in doc
+    assert '<th scope="col">Not checked</th>' in doc

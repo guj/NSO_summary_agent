@@ -32,6 +32,7 @@ def test_services_footnote_systemup_omitted_excludes_displayed_digs():
             "system_status": "up",
             "dataplane_status": "not_checked",
             "devices": ["wash-data-sw", "max-data-sw"],
+            "basic_checks": {"status": "up", "sync_ready": True},
         }
     add_evidence(
         case,
@@ -54,9 +55,8 @@ def test_services_footnote_systemup_omitted_excludes_displayed_digs():
             extra={"complete": False},
         )
     text = "\n".join(format_services_operator(case, services_detail=False))
-    assert "Only these 2 investigated/impaired instances" in text
-    assert "3 SystemUp omitted" in text
-    assert "5 SystemUp omitted" not in text
+    assert "3 services skipped LLM investigation" in text
+    assert "5 services skipped LLM investigation" not in text
 
 
 def test_scrub_internal_ids_from_remedies():
@@ -660,7 +660,7 @@ def test_services_table_helper_still_works():
         "l3rt": {"up": 1, "down": 1, "degraded": 0, "unknown": 0},
     }
     table = "\n".join(format_services_table(counts))
-    assert "SystemUp" in table
+    assert "Sync In" in table
     assert "Total" in table
     assert "| up |" not in table
     assert "l2ptp" in table and "l3rt" in table
@@ -702,7 +702,7 @@ def test_dataplane_dig_line_counts():
     )
     line = format_dataplane_dig_line(case)
     assert line == (
-        "SystemUp above is a baseline sync result, not fleet-wide "
+        "Configuration sync and dataplane are independent; sync is not "
         "dataplane verification. Only 2 services received additional "
         "dataplane investigation: 1 passed PE-side readiness checks; "
         "1 inconclusive/incomplete. Customer traffic delivery was not tested."
@@ -726,7 +726,7 @@ def test_dataplane_dig_line_all_passed():
         )
     line = format_dataplane_dig_line(case)
     assert line == (
-        "SystemUp above is a baseline sync result, not fleet-wide "
+        "Configuration sync and dataplane are independent; sync is not "
         "dataplane verification. Only 3 services received additional "
         "dataplane investigation; all passed PE-side readiness checks. "
         "Customer traffic delivery was not tested."
@@ -793,15 +793,15 @@ def test_operator_services_from_diagnosis():
     assert "## Devices" in text
     assert "## Services" in text
     # Per-type summary table restored at top of Services
-    assert "| service" in text
-    assert "SystemUp" in text
+    assert "| Service type | Total | OpUp | Down | Degraded | Unknown |" in text
+    assert "Sync out/unknown has final status Unknown" in text
     assert "| l2ptp" in text
     assert text.index("## Services") < text.index("| l2ptp")
     assert text.index("| l2ptp") < text.index(
         "received additional dataplane investigation"
     )
     assert (
-        "SystemUp above is a baseline sync result, not fleet-wide "
+        "Configuration sync and dataplane are independent; sync is not "
         "dataplane verification. Only 1 service received additional "
         "dataplane investigation; all passed PE-side readiness checks. "
         "Customer traffic delivery was not tested."
@@ -1186,12 +1186,9 @@ def test_result_and_followup_group_unknowns_by_endpoint():
     )
     # No service_coverage — mirrors spine-only / skip-llm runs.
     result = format_result_line(case)
-    assert "11 services unknown from endpoint sync/query gaps" in result
-    assert "`gpn-data-sw` (5)" in result
-    assert "`star-data-sw` (3)" in result
-    assert "`eduky-data-sw` (2)" in result
-    assert "`star-data-sw` + `toky-data-sw` (1)" in result
-    assert "not confirmed down" in result
+    # The headline shares the table's final counts. The legacy sync-only
+    # "ok" record has no operational proof, so it is also Unknown.
+    assert "Final service status: 0 OpUp, 0 Down, 0 Degraded, 12 Unknown." in result
 
     follow = "\n".join(format_followup_operator(case))
     # One action per device; combination rows stay out of follow-up.
@@ -1225,14 +1222,14 @@ def test_result_and_followup_group_unknowns_by_endpoint():
     assert "not device down" in follow
 
     compact = render_report(case)
-    assert "| service" in compact
+    assert "| Service type | Total | OpUp | Down | Degraded | Unknown |" in compact
     assert "### Incomplete collection checks" in compact
     assert "`gpn-data-sw` · sync check error — 5 services" in compact
     assert "`star-data-sw` · sync check timed out — 3 services" in compact
     assert "`star-data-sw` + `toky-data-sw`" in compact
     assert "### L3RT · gpn-0" not in compact
     assert "### L3RT · ok" not in compact
-    assert "--services-detail" in compact
+    assert "--services-detail" not in compact
     assert compact.index("### Incomplete collection checks") < compact.index(
         "## Recommended follow-up"
     )
@@ -1317,3 +1314,33 @@ def test_summary_heading_is_owned_by_renderer():
         text = render_report(case, summary=prefix + body)
         assert text.count("## Summary\n") == 1
         assert body in text
+
+
+def test_service_layers_keep_sync_independent_and_require_dig_evidence():
+    from diagnostic_mas.report import service_layer_counts
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    services = {}
+    for i in range(7):
+        services[f'l2ptp/s{i}'] = dict(service_type='l2ptp', name=f's{i}',
+            devices=['a', 'b'], device_sync={'a': 'in-sync', 'b': 'in-sync'},
+            status='down' if i < 3 else 'up', dataplane_status='up')
+        case.diagnoses.append(dict(kind='dataplane', subject={'name': f's{i}'},
+                                   status='down' if i < 3 else 'up', complete=True))
+    services['l2sts/unexamined'] = dict(service_type='l2sts', name='unexamined',
+        devices=['a', 'b'], device_sync={'a': 'in-sync'}, dataplane_status='up')
+    services['l2sts/incomplete'] = dict(service_type='l2sts', name='incomplete',
+        devices=['a', 'b'], device_sync={'a': 'out-of-sync', 'b': 'unknown'})
+    case.diagnoses.append(dict(kind='dataplane', subject={'name': 'incomplete'},
+                               status='up', complete=False))
+    case.evidence.append(dict(kind='spine', role='service', payload={'extra': {'services': services}}))
+    counts = service_layer_counts(case)
+    assert counts['l2ptp']['sync_in'] == 7
+    assert counts['l2ptp']['dp_up'] == 4
+    assert counts['l2ptp']['dp_down'] == 3
+    assert counts['l2sts']['sync_out'] == 1
+    assert counts['l2sts']['sync_unknown'] == 1
+    assert counts['l2sts']['dp_unknown'] == 1
+    assert counts['l2sts']['dp_not_checked'] == 1
+    for b in counts.values():
+        assert sum(b[k] for k in ('sync_in', 'sync_out', 'sync_unknown')) == b['total']
+        assert sum(b[k] for k in ('dp_up', 'dp_down', 'dp_degraded', 'dp_unknown', 'dp_not_checked')) == b['total']

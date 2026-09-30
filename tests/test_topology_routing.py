@@ -256,7 +256,7 @@ async def test_collect_static_and_operational_routing():
         result = await client_arg.call_tool(tool, {"params": params or {}})
         return _tool_data(result)
 
-    import agent.topology.routing as routing_mod
+    import nso_facts.topology.routing as routing_mod
 
     original = routing_mod.call_mcp
     routing_mod.call_mcp = call_mcp
@@ -301,7 +301,7 @@ async def test_collect_static_lbnl_uky_from_config_and_live():
         result = await client_arg.call_tool(tool, {"params": params or {}})
         return _tool_data(result)
 
-    import agent.topology.routing as routing_mod
+    import nso_facts.topology.routing as routing_mod
 
     original = routing_mod.call_mcp
     routing_mod.call_mcp = call_mcp
@@ -356,7 +356,7 @@ async def test_exec_show_mcp_returns_bare_string():
         result = await client_arg.call_tool(tool, {"params": params or {}})
         return _tool_data(result)
 
-    import agent.topology.routing as routing_mod
+    import nso_facts.topology.routing as routing_mod
 
     original = routing_mod.call_mcp
     routing_mod.call_mcp = call_mcp

@@ -24,6 +24,9 @@ async def collect_fleet_spine(
     only_service_types: Sequence[str] | None = None,
     only_service_ids: Sequence[str] | None = None,
     lean: bool = False,
+    retry_inconclusive_sync: bool = False,
+    operational_policy: str = "",
+    spine_concurrent_devices: int = 1,
 ) -> dict[str, Any]:
     """Services, fleet sync, CPU/mem, hardware, physical operational.
 
@@ -40,6 +43,9 @@ async def collect_fleet_spine(
         # Fleet sync is cheap (one call) and required for service up/unknown
         # classification when check_service_sync shape is ambiguous.
         include_fleet_sync=True,
+        retry_inconclusive_sync=retry_inconclusive_sync,
+        operational_policy=operational_policy,
+        spine_concurrent_devices=spine_concurrent_devices,
         physical_edges=physical_edges,
         include_physical_operational=bool(physical_edges) and not lean,
         only_service_types=only_service_types,

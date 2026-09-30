@@ -22,7 +22,7 @@ If you already run containers named `prometheus` or `pushgateway` on those ports
 ## Quick start
 
 ```bash
-cd /Users/dec2023/Work/ESnet/NSO_summary_agent/deploy/monitoring
+cd /path/to/checkout/deploy/monitoring
 
 # If old containers use the same ports:
 # docker stop prometheus pushgateway 2>/dev/null; docker rm prometheus pushgateway 2>/dev/null
@@ -235,7 +235,7 @@ You want **`nso-grafana`** (not a one-off `grafana/grafana` container without vo
 **2. Start (or recreate) the stack from this directory**
 
 ```bash
-cd /Users/dec2023/Work/ESnet/NSO_summary_agent/deploy/monitoring
+cd /path/to/checkout/deploy/monitoring
 docker compose up -d
 docker compose restart grafana
 ```

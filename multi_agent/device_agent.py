@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from agent.config import llm_temperature_kwargs
+
 import json
 from pathlib import Path
 from typing import Any
@@ -232,7 +234,7 @@ async def _llm_plan(
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        temperature=0.1,
+        **llm_temperature_kwargs(settings),
     )
     text = (resp.choices[0].message.content or "") if resp.choices else ""
     return parse_plan_json(text)
@@ -273,7 +275,7 @@ async def _llm_device_blurb(
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            temperature=0.2,
+            **llm_temperature_kwargs(settings),
         )
         return (resp.choices[0].message.content or "").strip() if resp.choices else ""
     except Exception:  # noqa: BLE001

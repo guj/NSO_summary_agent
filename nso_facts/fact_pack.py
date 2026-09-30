@@ -74,6 +74,9 @@ async def collect_services_fact_slice(
     only_service_types: Sequence[str] | None = None,
     only_service_ids: Sequence[str] | None = None,
     include_fleet_sync: bool = True,
+    retry_inconclusive_sync: bool = False,
+    operational_policy: str = "",
+    spine_concurrent_devices: int = 1,
 ) -> dict[str, Any]:
     """Service types, fleet sync, instances, health records, and counts.
 
@@ -126,6 +129,15 @@ async def collect_services_fact_slice(
         )
 
     device_sync_map = build_device_sync_map(fleet_sync)
+    sync_rechecks = {}
+    if include_fleet_sync and retry_inconclusive_sync:
+        from nso_facts.sync_recheck import recheck_sync
+        from nso_facts.health import extract_devices
+        relevant = {device for payload in services_by_type.values()
+                    for instance in extract_service_instances(payload)
+                    for device in extract_devices(instance)}
+        device_sync_map, sync_rechecks = await recheck_sync(
+            client, device_sync_map, relevant, call=call_mcp)
     mode = getattr(settings, "service_sync_mode", "check")
     if type_names:
         services = await collect_service_health(
@@ -134,6 +146,8 @@ async def collect_services_fact_slice(
             sync_modules,
             device_sync_map,
             service_sync_mode=mode,
+            operational_policy=operational_policy,
+            spine_concurrent_devices=spine_concurrent_devices,
         )
     else:
         services = {}
@@ -158,6 +172,7 @@ async def collect_services_fact_slice(
         "service_types": service_types,
         "ignored_service_types": sorted(settings.ignore_service_types),
         "fleet_sync": fleet_sync,
+        "sync_rechecks": sync_rechecks,
         "services_by_type": services_by_type,
         "services": services,
         "counts": derive_counts(services_by_type, services),
@@ -210,6 +225,9 @@ async def build_fact_pack(
     include_system_health: bool = True,
     include_hardware_health: bool = True,
     include_fleet_sync: bool = True,
+    retry_inconclusive_sync: bool = False,
+    operational_policy: str = "",
+    spine_concurrent_devices: int = 1,
     physical_edges: list[dict[str, Any]] | None = None,
     include_physical_operational: bool = False,
     only_service_types: Sequence[str] | None = None,
@@ -226,6 +244,9 @@ async def build_fact_pack(
         only_service_types=only_service_types,
         only_service_ids=only_service_ids,
         include_fleet_sync=include_fleet_sync,
+        retry_inconclusive_sync=retry_inconclusive_sync,
+        operational_policy=operational_policy,
+        spine_concurrent_devices=spine_concurrent_devices,
     )
 
     if include_capabilities:

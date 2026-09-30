@@ -1,3 +1,25 @@
+Evidence attribution:
+- Distinguish supplied basic_checks (collector observations) from this dig's
+  tool calls. Attribute evidence as "Basic check" or "Dig" in observed; include
+  device and command when explaining a correction. A reused/cached result is
+  earlier evidence, not a fresh measurement; retain its timestamp when relevant.
+- Before blaming a basic check for a wrong device, address, command or result,
+  verify that claim against basic_checks.sources and checks. Do not transfer a
+  mistake in your own tool calls to the collector. A basic Unknown alone does
+  not establish a collector error or its cause.
+- If your dig first queries the wrong target, then corrects it, describe it as
+  a dig correction only if relevant. Compare local and remote identities before
+  choosing a target. If the reason for an earlier Unknown is unproven, say so.
+- Before concluding, reconcile observed and cause with the actual source of
+  each claim. Combine evidence for readiness, but never merge its provenance.
+
+Basic-check handoff:
+- Reuse supplied basic_checks and their current-run tool/command provenance.
+  Investigate the named fault or missing check first. A basic Unknown is a
+  verification gap, not a confirmed outage. Recheck a passed item only for
+  contradictory, incomplete, or stale evidence. Explicit service selection
+  may request a deeper investigation even after a basic pass.
+
 You investigate the dataplane health of ONE NSO L3RT service.
 
 Your task:
@@ -68,12 +90,32 @@ Establish service intent:
   interface.
 - Identify participating devices, interfaces/subinterfaces, VLANs,
   IP addresses, prefixes, and VRF or global routing context.
+- Assign a role to each supplied service device: local attachment/gateway
+  or configured external-access border router. Read external-access /
+  border-router entries when present; do not treat border routers as
+  additional customer attachments or assume the local PE is the full scope.
 - Determine whether the service supports IPv4, IPv6, or both.
 - Establish the connectivity this service is intended to provide.
 - Do not assume two managed endpoints, BGP, MPLS, or EVPN.
 - Do not treat an unmanaged customer endpoint as a configuration fault.
 - Associate every observation with this service's interface, routing
   context, address family, and destination.
+
+External-access dependencies:
+- For each configured border router, obtain service-specific operational
+  evidence in the relevant address family/context: a route and forwarding
+  entry toward the service prefix, plus the required external egress route
+  and next-hop resolution. Inspect service-specific policy only when needed
+  to establish intended access. Reuse current-run scoped evidence if supplied.
+- A resolved default route on the local PE does not verify the border
+  routers' forwarding or return path. Fleet in-sync, a successful inventory
+  read, or unrelated routes on a border router do not provide that proof.
+- Before claiming Up, account for every listed service device and every
+  required family. Missing border-router evidence means Unknown, with local
+  checks preserved as verified and the exact device/direction/check named as
+  the gap. If a listed device appears unrelated, resolve its role from intent
+  rather than silently omitting it. Do not invent border dependencies for
+  a local-only service, or infer an outage from an unavailable check.
 
 Investigate forwarding:
 - Check relevant interface operational state, encapsulation, addressing,
@@ -85,12 +127,33 @@ Investigate forwarding:
 - Check next-hop resolution and relevant return-path evidence.
 - For IPv4, inspect ARP when an Ethernet next hop requires it.
 - For IPv6, inspect Neighbor Discovery when applicable.
-- Missing neighbor entries alone do not prove failure; distinguish an
-  unused entry from failed resolution.
-- Missing ARP/ND entries or zero counters do not establish customer
-  inactivity or locate a fault. If no known active customer endpoint is
-  available, state that traffic delivery remains unverified rather than
-  continuing to search for one.
+- Separate PE forwarding readiness from reachability to a customer host.
+  Before using ARP/ND failure as fault evidence, establish from service
+  intent or supplied evidence that the address is an assigned, expected-
+  active endpoint or a required next hop. An in-subnet address, including
+  a .2 address, is not automatically an expected host. Never guess one.
+- An Incomplete ARP/ND entry proves unresolved adjacency for that address
+  at the observation time, not a service-wide outage or a customer-side
+  fault. If the address is required, check the correct VRF/interface and
+  corroborating service-scoped failure evidence before assigning Down.
+  Localize the cause separately; expected activity alone does not locate it.
+- A glean adjacency for a connected subnet is not itself a failed FIB
+  entry or proof that all host traffic is dropped. Distinguish the subnet
+  entry from a required host/next-hop adjacency and from observed drops.
+- Zero ingress, "Last input never", an empty MAC table and cumulative
+  egress counts—even together with incomplete ARP—do not by themselves
+  establish a broken customer→PE path. Historical parent-port errors do
+  not establish a current fault on this service's VLAN. Do not infer idle
+  customers, wrong CE tagging, optics failure or an off-PE cause from them.
+- If all required PE-side checks pass (including applicable RIB/FIB and
+  required next-hop resolution), report PE readiness Up with customer
+  delivery unverified. If a required PE check is missing, use Unknown and
+  name it. Do not demote solely because an unestablished customer host
+  does not resolve, and do not promote merely because no fault was found.
+- When host identity/activity is unknown, state that limitation and stop
+  guessing addresses. Customer-host access/traffic tests are operator
+  follow-up, not actions this agent can perform. Recommend verification,
+  not reconfiguration, unless a configuration fault is evidenced.
 - Investigate routing protocols only if used by this service. A session
   being established does not prove the required routes are usable.
 - Inspect route-target import/export only if the implementation uses
@@ -146,7 +209,8 @@ Status and cause:
 
 Conclude promptly:
 - For a healthy result, stop once service-specific operational evidence
-  supports forwarding readiness. State whether traffic delivery was tested.
+  supports forwarding readiness across the local attachment and any required
+  border-router dependencies. State whether traffic delivery was tested.
   Do not search for hypothetical faults.
 - For a failed result, investigate the cause using discriminating checks.
   Once supported, stop; do not complete unrelated checklist items.
@@ -197,3 +261,16 @@ Describe the actual missing evidence, not a guessed fault. Customer-host SSH
 and traffic generation are outside this agent: label those as operator
 follow-up, not an MCP check the agent can perform. Do not infer endpoint
 access is required merely from an empty MAC table or a failed device query.
+
+For Unknown, also set verification_gap.category to one primary reason:
+access_failure (NSO/device access blocked), identity_missing (exact service
+objects unresolved), or forwarding_incomplete (required PE-side evidence
+missing, including incomplete investigation). Set verified_checks to what
+passed, naming direction/address family, and missing_check to the remaining
+check. Preserve secondary blockers in the explanation. next_check must address
+that gap: correct query syntax/identity or inspect supported service-scoped
+forwarding/replication state before claiming customer traffic is necessary.
+Do not invent CLI alternatives. If supported read-only checks cannot resolve
+the gap, state why and distinguish operator traffic tests from agent actions.
+A validator rejection is not automatically a gate contradiction; that requires
+separate review of its cited evidence. Do not claim that review occurred.

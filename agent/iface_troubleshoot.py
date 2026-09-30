@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from agent.config import llm_temperature_kwargs
+
 import json
 import re
 from typing import Any
@@ -188,7 +190,7 @@ async def troubleshoot_interface(
                 messages=messages,
                 tools=[MCP_CALL_TOOL],
                 tool_choice="auto",
-                temperature=0,
+                **llm_temperature_kwargs(settings),
             )
             message = response.choices[0].message
             tool_calls = getattr(message, "tool_calls", None) or []

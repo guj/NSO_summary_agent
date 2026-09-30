@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from agent.config import llm_temperature_kwargs
+
 import json
 import os
 import re
@@ -427,7 +429,7 @@ def _llm_summary(
     case_delta: dict[str, Any] | None = None,
     previous_run_id: str | None = None,
 ) -> str:
-    from agent.summarize import FABRIC_CHAT_TIMEOUT_SEC, fabric_openai_client
+    from agent.summarize import llm_timeout_seconds, fabric_openai_client
 
     system = _system_prompt_for_summary(pinned=pinned)
     compact = _compact_case_for_llm(
@@ -438,7 +440,7 @@ def _llm_summary(
     user_n = len(user)
     print(
         f"[summary] LLM request model={settings.fabric_model!r} "
-        f"pinned={pinned} timeout={FABRIC_CHAT_TIMEOUT_SEC:g}s "
+        f"pinned={pinned} timeout={llm_timeout_seconds(settings):g}s "
         f"system={sys_n} chars user={user_n} chars "
         f"total≈{sys_n + user_n} chars "
         f"(evidence={len(compact.get('evidence') or [])} "
@@ -455,7 +457,7 @@ def _llm_summary(
                 {
                     "model": settings.fabric_model,
                     "pinned": pinned,
-                    "timeout_sec": FABRIC_CHAT_TIMEOUT_SEC,
+                    "timeout_sec": llm_timeout_seconds(settings),
                     "system": system,
                     "user": compact,
                     "user_json_chars": user_n,
@@ -469,7 +471,7 @@ def _llm_summary(
         print(f"[summary] dumped request to {path}", file=sys.stderr)
 
     # Keep summary bounded — default OpenAI SDK 600s hangs dominate lean runs.
-    client = fabric_openai_client(settings, timeout=FABRIC_CHAT_TIMEOUT_SEC)
+    client = fabric_openai_client(settings, timeout=llm_timeout_seconds(settings))
     t0 = time.monotonic()
     try:
         resp = client.chat.completions.create(
@@ -478,7 +480,7 @@ def _llm_summary(
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            temperature=0.2,
+            **llm_temperature_kwargs(settings),
         )
     except Exception:
         print(
@@ -496,12 +498,12 @@ def _llm_summary(
 
 
 def _format_summary_llm_failure(settings: Settings, exc: BaseException) -> str:
-    from agent.summarize import FABRIC_CHAT_TIMEOUT_SEC
+    from agent.summarize import llm_timeout_seconds
 
     return (
         f"LLM summary failed: {exc} "
         f"(final summary chat; model={settings.fabric_model!r}; "
-        f"timeout={FABRIC_CHAT_TIMEOUT_SEC:g}s)"
+        f"timeout={llm_timeout_seconds(settings):g}s)"
     )
 
 

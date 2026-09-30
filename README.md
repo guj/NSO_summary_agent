@@ -14,7 +14,7 @@ LLM settings use the env names `FABRIC_AI_API_KEY`, `FABRIC_AI_API_URL`, and
 `FABRIC_AI_API_URL` must speak the OpenAI chat API (`/v1/chat/completions`);
 Anthropic-only bases (for example `…/anthropic`) are not supported.
 
-See [WORK_PLAN.md](WORK_PLAN.md) for the full roadmap.
+See [docs/DIAGNOSTIC_RUNNER.md](docs/DIAGNOSTIC_RUNNER.md) for the current diagnostic workflow and report.
 
 **New here?** Start with [docs/TRY_ME_OUT.md](docs/TRY_ME_OUT.md) — install, smoke checks, and common ways to run the agent. Prefer containers? See [docs/DOCKER.md](docs/DOCKER.md).
 
@@ -23,6 +23,14 @@ See [WORK_PLAN.md](WORK_PLAN.md) for the full roadmap.
 - Python 3.12+
 - Running [fabric-nso-mcp-server](https://github.com/fabric-testbed/fabric-nso-mcp-server) (same binary as Cursor `myNso` MCP)
 - LLM API access via `FABRIC_AI_API_KEY` / `FABRIC_AI_API_URL` / `FABRIC_AI_MODEL` (OpenAI-compatible; FABRIC AI is the default free endpoint, or substitute your own)
+
+## Diagnostic runner: standalone checkout
+
+All diagnostic code, service prompts, operational checks and HTML topology assets
+are included here. No sibling NSO_summary_agent directory is required. Install
+and configure this checkout as below, then see [the diagnostic guide](docs/DIAGNOSTIC_RUNNER.md).
+The external Cisco NSO MCP server must be installed separately and reachable via
+`MCP_SERVER_CMD`; this repository does not vendor that server or credentials.
 
 ## Setup
 
@@ -295,7 +303,7 @@ Default when unset: `executive,devices,ignored_types`.
 | `MCP_SERVER_CMD`              | no       | Path to `cisco-nso-mcp-server` binary                                     |
 | `STATE_DIR`                   | no       | Default `./state`                                                         |
 | `IGNORE_SERVICE_TYPES`        | no       | Comma-separated types to skip (default `idipa`; set empty to include all) |
-| `NSO_SERVICE_SYNC_MODE`       | no       | `check` (default) calls `check_service_sync` per instance; `skip` uses endpoint fleet sync only (this lab). SystemUp starts from that sync; incomplete digs keep SystemUp; dig-confirmed down/degraded demote |
+| `NSO_SERVICE_SYNC_MODE`       | no       | `check` (default) calls `check_service_sync` per instance; `skip` uses endpoint fleet sync only (this lab). Overall status combines sync and dataplane; the diagnostic table counts endpoint sync and dataplane independently |
 | `MAX_SERVICE_TYPES`           | no       | Cap on service types queried per run (default `10`; also `--max-service-types`) |
 | `REPORT_SECTIONS`             | no       | Ordered section allowlist (includes `system_health`, `devices`; see above) |
 | `INTERFACE_EQUIVALENCES_FILE` | no       | JSON of admin NSO↔box interface mappings (see `config/interface-equivalences.example.json`) |
@@ -333,7 +341,7 @@ SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T.../B.../...
 **Test the webhook** — no NSO collect, no LLM:
 
 ```bash
-cd /Users/dec2023/Work/ESnet/NSO_summary_agent
+cd /path/to/checkout
 set -a && source .env && set +a
 
 curl -sS -X POST -H 'Content-type: application/json' \
@@ -427,7 +435,7 @@ Run the summary automatically at fixed times. **Pick one scheduler** — cron **
 1. Confirm a manual run works (no `--dry-run` if you want email/Slack delivery):
 
 ```bash
-cd /Users/dec2023/Work/ESnet/NSO_summary_agent
+cd /path/to/checkout
 source .venv/bin/activate
 nso-summary-run
 ```
@@ -453,7 +461,7 @@ crontab -e
 **Step 2 — paste this single line** (adjust path if your install differs):
 
 ```cron
-0 8,14,20 * * * cd /Users/dec2023/Work/ESnet/NSO_summary_agent && . .venv/bin/activate && set -a && source .env && set +a && nso-summary-run >> logs/run.log 2>> logs/run.err
+0 8,14,20 * * * cd /path/to/checkout && . .venv/bin/activate && set -a && source .env && set +a && nso-summary-run >> logs/run.log 2>> logs/run.err
 ```
 
 **Step 3 — save and quit** the editor (`:wq` in vim, or Ctrl+O then Ctrl+X in nano).
@@ -517,8 +525,26 @@ Launchd does **not** require a crontab entry. `.env` in the project directory is
 Each service **instance** has a sync-layer **system status** (`up` / `degraded` /
 `unknown`) and an optional **dataplane** status after dig. Overall `status` is
 the worse of the two (incomplete digs do **not** demote — see Diagnostic MAS
-below). Type-level **SystemUp** / down / degraded / unknown in the diagnostic
-table are rollups of that overall status.
+below). The diagnostic category table has two independent groups after Total:
+**Configuration sync** (In / Out / Unknown) and **Dataplane** (Up / Down /
+Degraded / Unknown / Not checked). Each group sums to Total. Sync counts use
+all endpoint fleet-sync results: any confirmed out-of-sync endpoint means Out;
+otherwise missing/unresolved endpoints mean Unknown; all in-sync means In.
+A dataplane fault does not alter configuration sync. Dataplane Unknown means an
+inconclusive investigation; Not checked means no investigation. Collection's
+default dataplane status does not count as a verified Up. Up denotes PE-side
+readiness, not tested customer traffic delivery.
+
+The HTML table includes a collapsed **Status definitions** section:
+- **Dataplane Up:** required PE-side checks passed; customer delivery was not tested.
+- **Down:** evidence confirms a failed component or forwarding path required by the service.
+- **Degraded:** evidence confirms partial impairment while some service functionality remains available.
+- **Unknown:** investigation was attempted, but evidence is insufficient or contradictory; timeout alone does not mean Down.
+- **Not checked:** no dataplane investigation was performed this run.
+
+Configuration-sync **In** means all endpoints report in-sync; **Out** means at
+least one reports out-of-sync; **Unknown** means no confirmed out-of-sync
+endpoint but missing or unresolved endpoint evidence.
 
 Implementation: `nso_facts/health.py` (`classify_system_status`,
 `combine_service_status`). Tests: `tests/test_health.py`.
@@ -595,7 +621,7 @@ for k, v in sorted(s['services'].items()):
 
 ### Not included yet
 
-These are on the [roadmap](WORK_PLAN.md) or only partly used for service up/down today (topology design: [agent/topology/docs/DESIGN.md](agent/topology/docs/DESIGN.md)):
+These are on the [Diagnostic runner guide](docs/DIAGNOSTIC_RUNNER.md) or only partly used for service up/down today (topology design: [Topology design](nso_facts/topology/docs/DESIGN.md)):
 
 - Broader live ops via dedicated MCP helpers (e.g. `get_live_status`) where not already covered by topology `exec_show` paths
 - Ping / reachability checks beyond device sync errors from `get_fleet_sync_summary` (and any optional investigate deep-checks)
@@ -614,11 +640,11 @@ Documentation:
 
 | Doc | Purpose |
 |-----|---------|
-| [docs/NOTES-2026-07-13.md](docs/NOTES-2026-07-13.md) | Changelog notes for 2026-07-13 Devices/topology work |
-| [docs/NOTES-2026-07-28.md](docs/NOTES-2026-07-28.md) | Services topology layer (Phase 3) |
+| [Diagnostic runner guide](docs/DIAGNOSTIC_RUNNER.md) | Changelog notes for 2026-07-13 Devices/topology work |
+| [Diagnostic runner guide](docs/DIAGNOSTIC_RUNNER.md) | Services topology layer (Phase 3) |
 | [docs/FAQ.md](docs/FAQ.md) | Operator FAQ (counts vs CLI, unknown, unmapped peers, services edges, …) |
-| [agent/topology/README.md](agent/topology/README.md) | Package overview |
-| [agent/topology/docs/DESIGN.md](agent/topology/docs/DESIGN.md) | Full design: JSON shape, MCP mapping, static vs operational |
+| [Topology design](nso_facts/topology/docs/DESIGN.md) | Package overview |
+| [Topology design](nso_facts/topology/docs/DESIGN.md) | Full design: JSON shape, MCP mapping, static vs operational |
 
 **Pitfall:** IOS-XR **config** uses long interface names (`HundredGigE…`) while **`show`** returns abbreviations (`Hu…`). Matching uses `agent/topology/interfaces.py`. Interface **status** comes from `show interfaces brief` (not `interfaces summary` on these XR boxes).
 
@@ -628,7 +654,7 @@ Documentation:
 
 ### Viewing topology
 
-Read `state/latest.json` → `topology`, or `state/runs/<run-id>/snapshot.json` / `report.md`. Details: [DESIGN.md — Viewing topology](agent/topology/docs/DESIGN.md#viewing-topology).
+Read `state/latest.json` → `topology`, or `state/runs/<run-id>/snapshot.json` / `report.md`. Details: [Topology design](nso_facts/topology/docs/DESIGN.md).
 
 | Goal | Where |
 |------|--------|
@@ -639,7 +665,7 @@ Read `state/latest.json` → `topology`, or `state/runs/<run-id>/snapshot.json` 
 | Static graph image (Graphviz) | `scripts/export_topology_dot.py` → `.dot` / `.png` / `.svg` |
 
 ```bash
-cd /Users/dec2023/Work/ESnet/NSO_summary_agent
+cd /path/to/checkout
 
 # Latest report path
 cat state/latest.meta.json
@@ -710,7 +736,7 @@ There is **no interactive map UI in v1** — use JSON, `report.md`, or the Graph
 Sibling pipeline for IS-IS + BGP + device investigation: **`nso-multi-agent-run`**.
 
 - Docs: [`multi_agent/README.md`](multi_agent/README.md)
-- Design: [`docs/superpowers/specs/2026-08-10-multi-agent-production-mvp-design.md`](docs/superpowers/specs/2026-08-10-multi-agent-production-mvp-design.md)
+- Design: [Diagnostic runner guide](docs/DIAGNOSTIC_RUNNER.md)
 - Own state under `state/multi_agent/` (does not overwrite summary-run `state/latest.json`)
 - Default is dry-run; use `--publish` to Slack/email and persist artifacts
 
@@ -723,7 +749,7 @@ nso-multi-agent-run --publish
 
 Blackboard coordinator with ISIS / BGP / Service / Device roles: **`nso-diagnostic-run`**.
 
-- Design: [`docs/superpowers/specs/2026-08-17-diagnostic-mas-design.md`](docs/superpowers/specs/2026-08-17-diagnostic-mas-design.md)
+- Design: [Diagnostic runner guide](docs/DIAGNOSTIC_RUNNER.md)
 - Evidence / diagnoses only from MCP + attributed conclusions; state under `state/diagnostic_mas/` (skipped in dry-run)
 - Default is dry-run; use `--publish` (or `DRY_RUN=0`) for Slack/email + artifacts
 - Does not replace `nso-multi-agent-run`
@@ -735,10 +761,8 @@ Stdout / `report.md` use a concise operator layout (not the older Issues/Budget 
 1. **Header** — Scope (devices · services), Duration, Result  
 2. **Summary** — LLM prose only (when LLM is enabled); omitted on `--skip-llm`  
 3. **Devices** — per-device sync / health / BGP·IS-IS / Attention (deterministic)  
-4. **Services** — category table (Total / SystemUp / down / degraded / unknown);
-   under `NSO_SERVICE_SYNC_MODE=skip`, a note that SystemUp starts from endpoint
-   fleet sync (incomplete digs keep SystemUp; dig-confirmed down/degraded
-   demote); DataplaneDig line; incomplete collection checks grouped by
+4. **Services** — category table with Total and grouped configuration-sync / dataplane
+   columns (independent counts); DataplaneDig line; incomplete collection checks grouped by
    endpoint/reason; per-instance sections only for digs / confirmed impairments
    (`--services-detail` for every instance). Dig `dataplane=up` renders as
    "Passed PE-side readiness checks. Customer traffic delivery was not
@@ -890,3 +914,23 @@ contents of the diagnostic `runs/` directory; webhook posts will link to
 `<base>/<run-id>/report.html`. The runner does not deploy or host those files.
 Without bot upload or hosting, full details remain in run artifacts and the email
 attachment. HTML attachments may require downloading or may be blocked by mail policy.
+
+### Run configuration snapshot
+
+HTML reports include a collapsed **Run configuration** section near Run details.
+The runner captures effective model/provider host, scope, sampling, budgets,
+known timeouts, service-sync and publishing/report modes before collection and
+saves them in `case.json`. Only selected non-secret settings are included; API
+keys, passwords, webhook URLs and full MCP command/environment are excluded.
+Server-controlled timeouts not supplied by the runner are marked unrecorded.
+Older reports without a snapshot do not substitute current environment values.
+
+### Optional LLM temperature
+
+`FABRIC_AI_TEMPERATURE` controls all LLM requests, including dataplane,
+drills, planning, agent follow-ups and summaries. Unset defaults to **0.1**.
+Set `FABRIC_AI_TEMPERATURE=1` for a model requiring 1. An explicitly blank
+`FABRIC_AI_TEMPERATURE=` omits the API parameter and uses the provider default.
+Numeric values must be finite and between 0 and 2; individual models may
+restrict that range further. Run configuration records the effective value
+or "Provider default (parameter omitted)". Existing `.env` values are preserved.

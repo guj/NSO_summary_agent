@@ -41,6 +41,7 @@ async def run_mandatory_spines(
     service_type: str | None = None,
     service_id: str | None = None,
     filter_services_to_devices: bool = False,
+    spine_concurrent_devices: int = 1,
 ) -> list[dict[str, Any]]:
     """Collect physical + enabled layer spines into the case. Returns physical_edges."""
     # Lean focus: skip physical inventory walk
@@ -108,6 +109,7 @@ async def run_mandatory_spines(
             service_type=service_type,
             service_id=service_id,
             filter_to_devices=filter_services_to_devices,
+            spine_concurrent_devices=spine_concurrent_devices,
         )
         ingest_layer_spine(
             case,

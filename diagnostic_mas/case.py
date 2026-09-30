@@ -42,6 +42,7 @@ class DrillSession:
 @dataclass
 class CaseFile:
     budget: Budget
+    run_configuration: dict[str, Any] = field(default_factory=dict)
     evidence: list[dict[str, Any]] = field(default_factory=list)
     issues: list[dict[str, Any]] = field(default_factory=list)
     # Attributed conclusions (LLM/fallback). Not Evidence — cite evidence_ids.

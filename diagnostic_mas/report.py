@@ -148,15 +148,60 @@ def _service_counts_from_case(case: CaseFile) -> dict[str, dict[str, int]]:
     return {}
 
 
-# Display labels for combined service status (fleet sync + finished digs).
-# Incomplete digs do not demote SystemUp; dig down/degraded do.
+# Independent status dimensions; neither group changes the other.
 _SERVICE_TABLE_COLS = (
     ("total", "Total"),
-    ("up", "SystemUp"),
-    ("down", "down"),
-    ("degraded", "degraded"),
-    ("unknown", "unknown"),
+    ("sync_in", "Sync In"), ("sync_out", "Sync Out"),
+    ("sync_unknown", "Sync Unknown"),
+    ("dp_up", "DP Up"), ("dp_down", "DP Down"),
+    ("dp_degraded", "DP Degraded"), ("dp_unknown", "DP Unknown"),
+    ("dp_not_checked", "DP Not checked"),
 )
+
+
+def service_layer_counts(case: CaseFile) -> dict[str, dict[str, int]]:
+    """Count endpoint configuration sync separately from current-run dig outcomes.
+
+    Collection's default dataplane_status is not proof that a dig occurred.
+    Missing endpoint evidence is unknown, never inferred from overall status.
+    """
+    from diagnostic_mas.device_health import services_from_case
+
+    services = services_from_case(case)
+    digs = _dataplane_dig_subjects(case)
+    counts: dict[str, dict[str, int]] = {}
+    for key, service in services.items():
+        if not isinstance(service, dict):
+            continue
+        stype = str(service.get("service_type") or key.split("/", 1)[0])
+        bucket = counts.setdefault(stype, {k: 0 for k, _ in _SERVICE_TABLE_COLS})
+        bucket["total"] += 1
+        devices = service.get("devices") or []
+        sync = service.get("device_sync") or {}
+        states = [str(sync.get(d) or "").lower().replace("_", "-") for d in devices]
+        sync_key = ("sync_out" if "out-of-sync" in states else
+                    "sync_in" if states and all(v == "in-sync" for v in states) else
+                    "sync_unknown")
+        bucket[sync_key] += 1
+        name = str(service.get("name") or key.split("/", 1)[-1])
+        dig = digs.get(name)
+        if dig is not None:
+            status = str(dig.get("status") or "").lower()
+            if dig.get("complete") is False or status not in {"up", "ok", "down", "degraded"}:
+                status = "unknown"
+            if status == "ok":
+                status = "up"
+        else:
+            status = ("unknown" if (case.service_coverage or {}).get(name) in
+                      {"unresolved", "investigated"} else "not_checked")
+        bucket["dp_" + status] += 1
+    if not services:
+        # Older cases only have aggregate status, which cannot prove either layer.
+        for stype, old in _service_counts_from_case(case).items():
+            total = _service_bucket_total(old)
+            counts[stype] = {k: 0 for k, _ in _SERVICE_TABLE_COLS}
+            counts[stype].update(total=total, sync_unknown=total, dp_not_checked=total)
+    return dict(sorted(counts.items()))
 
 
 def _service_bucket_total(bucket: dict[str, int]) -> int:
@@ -175,7 +220,7 @@ def _service_bucket_total(bucket: dict[str, int]) -> int:
 
 
 def format_services_table(counts: dict[str, dict[str, int]]) -> list[str]:
-    """Markdown table: service type × Total / SystemUp / down / degraded / unknown."""
+    """Flat text headers; HTML groups sync and dataplane into two levels."""
     if not counts:
         return ["(none)"]
     name_w = max(len("service"), max(len(n) for n in counts))
@@ -185,6 +230,11 @@ def format_services_table(counts: dict[str, dict[str, int]]) -> list[str]:
         name: {**dict(bucket), "total": _service_bucket_total(bucket)}
         for name, bucket in counts.items()
     }
+    for bucket in enriched.values():
+        if not any(k.startswith("sync_") for k in bucket):
+            bucket["sync_unknown"] = bucket["total"]
+        if not any(k.startswith("dp_") for k in bucket):
+            bucket["dp_not_checked"] = bucket["total"]
     col_w = {c: max(len(labels[c]), 3) for c in keys}
     for bucket in enriched.values():
         for c in keys:
@@ -342,7 +392,7 @@ def format_dataplane_dig_line(case: CaseFile) -> str:
     investigated = passed + incomplete + faults
     if investigated <= 0:
         return (
-            "SystemUp above is a baseline sync result, not fleet-wide "
+            "Configuration sync and dataplane are independent; sync is not "
             "dataplane verification. No services received additional "
             "dataplane investigation this run."
         )
@@ -351,7 +401,7 @@ def format_dataplane_dig_line(case: CaseFile) -> str:
     svc = "service" if n == 1 else "services"
     only = f"Only {n} {svc} received additional dataplane investigation"
     preface = (
-        "SystemUp above is a baseline sync result, not fleet-wide "
+        "Configuration sync and dataplane are independent; sync is not "
         "dataplane verification. "
     )
     if passed == n and incomplete == 0 and faults == 0:
@@ -530,18 +580,53 @@ def render_report(
     lines.extend(format_devices_operator(case, full=full))
     lines.append("")
 
+    from diagnostic_mas.service_presence import disappearance_section
+    lines.extend(disappearance_section(case))
     lines.append("## Services")
     lines.append("")
-    counts = _service_counts_from_case(case)
+    from diagnostic_mas.service_final_status import final_service_counts, format_final_services_table
+    counts = final_service_counts(case)
     if counts:
-        lines.extend(format_services_table(counts))
+        lines.extend(format_final_services_table(counts))
+        lines.append("")
+        lines.append("Each service is counted once; the four final-status columns sum to Total.")
         lines.append("")
         sync_note = service_sync_note_from_case(case)
         if sync_note:
             lines.append(scrub_internal_ids(sync_note))
             lines.append("")
+        from diagnostic_mas.dataplane_verify import iter_service_records
+        basic_counts = {}
+        for _, record in iter_service_records(case):
+            from diagnostic_mas.service_presence import disappeared
+            if disappeared(record):
+                continue
+            basic = record.get("basic_checks")
+            if isinstance(basic, dict):
+                status = basic.get("status", "unknown")
+                bucket = basic_counts.setdefault(record.get("service_type", "service"), {})
+                bucket[status] = bucket.get(status, 0) + 1
+        for service_type, bucket in sorted(basic_counts.items()):
+            lines.append(f"**{service_type} basic operational checks:** " + " · ".join(
+                f"{label}: {bucket.get(status, 0)}" for status, label in
+                [("up", "Up"), ("down", "Down"), ("unknown", "Unknown"), ("not_checked", "Not checked")]
+            ) + ". Separate from LLM dataplane verification; customer delivery not tested.")
+            lines.append("")
         lines.append(format_dataplane_dig_line(case))
         lines.append("")
+    for evidence in case.evidence:
+        if evidence.get("kind") == "spine" and evidence.get("role") == "service":
+            retries = (evidence.get("payload", {}).get("extra") or {}).get("sync_rechecks") or {}
+            if retries:
+                lines.extend(["**Targeted device-sync rechecks:**", ""])
+                for device, result in sorted(retries.items()):
+                    initial = result.get("fleet_result") or "missing"
+                    effective = result.get("effective_result") or "unknown"
+                    outcome = effective if result.get("resolved") else "inconclusive; Sync Unknown retained"
+                    lines.append(f"- {device}: fleet `{initial}` → retry {outcome}.")
+                lines.append("")
+    from diagnostic_mas.unknown_breakdown import format_unknown_breakdown
+    lines.extend(format_unknown_breakdown(case))
     lines.extend(
         format_services_operator(case, services_detail=services_detail)
     )
@@ -555,6 +640,8 @@ def render_report(
     lines.extend(format_followup_operator(case))
     lines.append("")
 
+    from diagnostic_mas.run_configuration import format_run_configuration
+    lines.extend(format_run_configuration(case))
     lines.append("## Run details")
     lines.append("")
     lines.extend(

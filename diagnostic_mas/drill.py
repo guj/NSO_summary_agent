@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from agent.config import llm_temperature_kwargs
+
 import json
 import re
 import sys
@@ -25,7 +27,7 @@ _JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
 _JSON_ARRAY_RE = re.compile(r"\[[\s\S]*\]")
 _RESULT_CLIP = 20_000
 # Avoid OpenAI SDK default 600s hangs on Fabric after each batch
-from agent.summarize import FABRIC_CHAT_TIMEOUT_SEC as _FABRIC_DRILL_TIMEOUT_SEC
+from agent.summarize import llm_timeout_seconds, llm_error_category
 
 DRILL_MCP_CALL_TOOL = {
     "type": "function",
@@ -120,6 +122,8 @@ def _issue_brief(i: dict[str, Any]) -> dict[str, Any]:
         brief["devices"] = list(i["devices"])
     if isinstance(i.get("live_l2"), dict):
         brief["live_l2"] = i["live_l2"]
+    if isinstance(i.get("basic_checks"), dict):
+        brief["basic_checks"] = i["basic_checks"]
     if i.get("system_status"):
         brief["system_status"] = i.get("system_status")
     if i.get("dataplane_status"):
@@ -1112,7 +1116,7 @@ async def llm_drill_tool_loop(
         },
     ]
     oai = openai_client or fabric_openai_client(
-        settings, timeout=_FABRIC_DRILL_TIMEOUT_SEC
+        settings, timeout=llm_timeout_seconds(settings)
     )
     max_rounds = remaining + 2
     concluded = False
@@ -1148,7 +1152,7 @@ async def llm_drill_tool_loop(
                 messages=messages,
                 tools=DRILL_AGENT_TOOLS,
                 tool_choice="auto",
-                temperature=0.1,
+                **llm_temperature_kwargs(settings),
             )
         except Exception as exc:  # noqa: BLE001
             from agent.llm_budget import (
@@ -1164,7 +1168,7 @@ async def llm_drill_tool_loop(
                     f"LLM budget exceeded — stopping further drills: {exc}"
                 )
                 break
-            _log_drill(f"LLM error: {exc}")
+            _log_drill(f"LLM error [{llm_error_category(exc)}]: {exc}")
             break
         message = response.choices[0].message
         tool_calls = getattr(message, "tool_calls", None) or []

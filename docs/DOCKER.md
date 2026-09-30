@@ -1,3 +1,10 @@
+# Diagnostic container entry point
+
+The image includes all three runners. To select the diagnostic runner, use
+`docker run --rm --env-file .env --entrypoint nso-diagnostic-run IMAGE --dry-run`.
+The default entry point remains the legacy summary runner. The MCP build context
+is an external prerequisite, as described below.
+
 # Docker
 
 Run the NSO summary agent from a container — no local Python venv for the agent.
@@ -29,7 +36,7 @@ docker build -t nso-summary-agent \
 On this machine that is typically:
 
 ```bash
-cd /Users/dec2023/Work/ESnet/NSO_summary_agent
+cd /path/to/checkout
 docker build -t nso-summary-agent \
   --build-context mcp=/Users/dec2023/Work/ESnet/MCP_server/fabric-nso-mcp-server \
   .

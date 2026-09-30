@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -68,6 +69,30 @@ class Settings:
     slack_channel_id: str | None = None
     diagnostic_report_base_url: str | None = None
     service_sync_mode: str = "check"
+    fabric_temperature: float | None = 0.1
+    fabric_max_retries: int = 0
+    fabric_chat_timeout_sec: float = 60.0
+    fabric_chat_connect_timeout_sec: float = 20.0
+
+
+def _parse_temperature(raw: str | None) -> float | None:
+    if raw is None:
+        return 0.1
+    if not raw.strip():
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ValueError("FABRIC_AI_TEMPERATURE must be blank or a number between 0 and 2") from None
+    if not math.isfinite(value) or not 0 <= value <= 2:
+        raise ValueError("FABRIC_AI_TEMPERATURE must be blank or a number between 0 and 2")
+    return value
+
+
+def llm_temperature_kwargs(settings: Settings) -> dict[str, float]:
+    """Omit the API parameter entirely when the provider default is requested."""
+    value = getattr(settings, "fabric_temperature", 0.1)
+    return {} if value is None else {"temperature": value}
 
 
 def _mcp_env(nso_address: str, nso_password: str) -> dict[str, str]:
@@ -114,6 +139,42 @@ def _mcp_args() -> list[str]:
     return args
 
 
+def _parse_chat_timeout(raw: str | None) -> float:
+    if raw is None:
+        return 60.0
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError("FABRIC_CHAT_TIMEOUT_SEC must be a positive finite number") from None
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError("FABRIC_CHAT_TIMEOUT_SEC must be a positive finite number")
+    return value
+
+
+def _parse_connect_timeout(raw: str | None) -> float:
+    if raw is None:
+        return 20.0
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError("FABRIC_CHAT_CONNECT_TIMEOUT_SEC must be a positive finite number") from None
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError("FABRIC_CHAT_CONNECT_TIMEOUT_SEC must be a positive finite number")
+    return value
+
+
+def _parse_max_retries(raw: str | None) -> int:
+    if raw is None:
+        return 0
+    try:
+        value = int(raw)
+    except (ValueError, TypeError):
+        raise ValueError("FABRIC_CHAT_MAX_RETRIES must be a nonnegative integer") from None
+    if value < 0:
+        raise ValueError("FABRIC_CHAT_MAX_RETRIES must be a nonnegative integer")
+    return value
+
+
 def load_settings() -> Settings:
     nso_password = os.environ.get("NSO_PASSWORD")
     if not nso_password:
@@ -140,6 +201,10 @@ def load_settings() -> Settings:
         fabric_api_key=fabric_key,
         fabric_api_url=os.environ.get("FABRIC_AI_API_URL", "https://ai.fabric-testbed.net"),
         fabric_model=os.environ.get("FABRIC_AI_MODEL", "gpt-oss-20b"),
+        fabric_temperature=_parse_temperature(os.environ.get("FABRIC_AI_TEMPERATURE")),
+        fabric_max_retries=_parse_max_retries(os.environ.get("FABRIC_CHAT_MAX_RETRIES")),
+        fabric_chat_timeout_sec=_parse_chat_timeout(os.environ.get("FABRIC_CHAT_TIMEOUT_SEC")),
+        fabric_chat_connect_timeout_sec=_parse_connect_timeout(os.environ.get("FABRIC_CHAT_CONNECT_TIMEOUT_SEC")),
         state_dir=Path(os.environ.get("STATE_DIR", root / "state")),
         # Default dry-run (safe): no state write / Slack / email unless DRY_RUN=0 or --publish
         dry_run=os.environ.get("DRY_RUN", "1") in ("1", "true", "yes"),

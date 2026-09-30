@@ -1,3 +1,7 @@
+# Current diagnostic workflow
+
+For a fresh checkout, start with [Diagnostic runner](DIAGNOSTIC_RUNNER.md).
+
 # Try me out
 
 Hands-on guide for running this repo. For operator details (report sections, Slack/email, scheduling, topology), see [README.md](../README.md) and [FAQ.md](FAQ.md).

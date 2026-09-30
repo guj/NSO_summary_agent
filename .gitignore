@@ -36,3 +36,6 @@ nso[0-9]*.txt
 nso[0-9]*.md
 curr*.txt
 config/to_confirm.*
+
+liteLLM/
+BASELINE_SOURCE_HASHES.json

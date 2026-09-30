@@ -42,6 +42,8 @@ async def collect_service_health(
     device_sync_map: dict[str, str],
     *,
     service_sync_mode: str | None = None,
+    operational_policy: str = "",
+    spine_concurrent_devices: int = 1,
 ) -> dict[str, dict[str, Any]]:
     """Run check_service_sync (+ live L2 xconnect for l2ptp/l2sts) per instance.
 
@@ -65,7 +67,7 @@ async def collect_service_health(
             if not name:
                 continue
             planned.append((service_type, instance, sync_module, name))
-            if is_l2_service_type(service_type):
+            if is_l2_service_type(service_type) and not operational_policy:
                 for ep in extract_l2_access_endpoints(instance):
                     l2_devices.add(ep["device"])
 
@@ -87,7 +89,7 @@ async def collect_service_health(
                 sync_result = {"status": "error", "error_message": str(exc)}
 
         live_l2 = None
-        if is_l2_service_type(service_type):
+        if is_l2_service_type(service_type) and not operational_policy:
             endpoints = extract_l2_access_endpoints(instance)
             live_l2 = summarize_live_l2(endpoints, rows_by_device)
 
@@ -105,18 +107,54 @@ async def collect_service_health(
             record["service_sync_mode"] = SERVICE_SYNC_MODE_CHECK
         services[key] = record
 
+    if operational_policy:
+        from diagnostic_mas.operational_checks.common import sync_ready
+        from diagnostic_mas.operational_checks.l2ptp import evaluate
+        from diagnostic_mas.operational_checks.scheduler import DeviceCalls, ProbeCache, run_groups
+        workers = spine_concurrent_devices
+        calls = DeviceCalls(call_mcp, workers)
+        force = operational_policy == "force"
+        ptp = [(services[f"{t}/{n}"], inst) for t, inst, _, n in planned if t == "l2ptp"]
+        eligible = [(r, inst) for r, inst in ptp if force or sync_ready(r)]
+        needed = {ep["device"] for _, inst in eligible for ep in extract_l2_access_endpoints(inst)}
+        # Reuse any observations already collected for other L2 services.
+        async def probe_xconnect(device):
+            rows_by_device.update(await _probe_l2vpn_xconnect(client, [device], call=calls))
+        await run_groups(sorted(needed - l2_devices), probe_xconnect, lambda d: d, workers)
+        for rec, inst in ptp:
+            if force or sync_ready(rec):
+                rec["live_l2"] = summarize_live_l2(extract_l2_access_endpoints(inst), rows_by_device)
+            basic = evaluate(rec, force=force)
+            rec["basic_checks"] = basic
+            rec["operational_status"] = basic["status"]
+            if basic["status"] in {"down", "unknown"}:
+                rec["status"] = basic["status"]
+        from diagnostic_mas.operational_checks.runner import CHECKS, evaluate as evaluate_other
+        cache = ProbeCache()
+        jobs = [(services[f"{t}/{n}"], inst) for t, inst, _, n in planned if t in CHECKS]
+        async def evaluate_job(job):
+            rec, instance = job
+            basic = await evaluate_other(rec, instance, client, calls, cache, force=force)
+            rec["basic_checks"] = basic
+            rec["operational_status"] = basic["status"]
+            if basic["status"] in {"down", "unknown", "degraded"}:
+                rec["status"] = basic["status"]
+        await run_groups(jobs, evaluate_job,
+                         lambda job: next(iter(job[0].get("devices") or []), "unknown"), workers)
     return services
 
 
 async def _probe_l2vpn_xconnect(
     client: Any,
     devices: list[str],
+    *, call=None,
 ) -> dict[str, list[dict[str, Any]]]:
     """One ``show l2vpn xconnect`` per device; omit device on failure."""
     out: dict[str, list[dict[str, Any]]] = {}
+    call = call or call_mcp
     for device in devices:
         try:
-            result = await call_mcp(
+            result = await call(
                 client,
                 "exec_show",
                 {"device_name": device, "input_command": "l2vpn xconnect"},

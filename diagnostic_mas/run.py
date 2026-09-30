@@ -167,6 +167,10 @@ async def _run(args: argparse.Namespace) -> int:
             max_dataplane_tools=max(0, getattr(args, "max_dataplane_tools", 40)),
         )
     )
+    from diagnostic_mas.run_configuration import capture_run_configuration
+    case.run_configuration = capture_run_configuration(
+        args, settings, case.budget, skip_llm=skip_llm, dry_run=dry_run
+    )
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     t0 = time.monotonic()
     start_mcp_accounting()
@@ -295,6 +299,7 @@ async def _run_after_accounting(
             service_type=service_type,
             service_id=service_id,
             filter_services_to_devices=filter_services_to_devices,
+            spine_concurrent_devices=getattr(args, "spine_concurrent_devices", 1),
         )
         if lean_service:
             matched = services_from_case(case)
@@ -353,6 +358,7 @@ async def _run_after_accounting(
                 max_per_category=getattr(
                     args, "max_dataplane_per_category", None
                 ),
+                concurrent_works=getattr(args, "dataplane_concurrent_works", 1),
                 category_rotate_seed=run_id,
             )
 
@@ -554,6 +560,13 @@ async def _run_after_accounting(
     return 0
 
 
+def _positive_worker_count(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return number
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Diagnostic MAS: ISIS/BGP/Service/Device blackboard runner"
@@ -584,6 +597,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=12,
         help="Max MCP tool calls per drilled Issue (default 12)",
+    )
+    parser.add_argument(
+        "--spine-concurrent-devices", type=_positive_worker_count, default=1,
+        help="Maximum simultaneous device calls in service operational checks (default 1)",
+    )
+    parser.add_argument(
+        "--dataplane-concurrent_works", type=_positive_worker_count, default=1,
+        help="Concurrent service dataplane digs (default 1); overlapping endpoints wait",
     )
     parser.add_argument(
         "--max-dataplane-tools",

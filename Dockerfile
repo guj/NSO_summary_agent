@@ -20,6 +20,10 @@ COPY --from=mcp cisco_nso_mcp_server /tmp/fabric-nso-mcp-server/cisco_nso_mcp_se
 # Editable install keeps Path(__file__) under /app so prompts/ and config/ resolve.
 COPY pyproject.toml README.md ./
 COPY agent ./agent
+COPY nso_facts ./nso_facts
+COPY nso_report ./nso_report
+COPY multi_agent ./multi_agent
+COPY diagnostic_mas ./diagnostic_mas
 COPY prompts ./prompts
 COPY config ./config
 

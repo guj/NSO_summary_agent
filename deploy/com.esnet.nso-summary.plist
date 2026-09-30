@@ -6,10 +6,10 @@
     <string>net.esnet.nso-summary-agent</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/dec2023/Work/ESnet/NSO_summary_agent/.venv/bin/nso-summary-run</string>
+        <string>/path/to/checkout/.venv/bin/nso-summary-run</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>/Users/dec2023/Work/ESnet/NSO_summary_agent</string>
+    <string>/path/to/checkout</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
@@ -22,8 +22,8 @@
         <dict><key>Hour</key><integer>20</integer><key>Minute</key><integer>0</integer></dict>
     </array>
     <key>StandardOutPath</key>
-    <string>/Users/dec2023/Work/ESnet/NSO_summary_agent/logs/run.log</string>
+    <string>/path/to/checkout/logs/run.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/dec2023/Work/ESnet/NSO_summary_agent/logs/run.err</string>
+    <string>/path/to/checkout/logs/run.err</string>
 </dict>
 </plist>

@@ -253,7 +253,7 @@ See [README — Graphviz export](../README.md#graphviz-export-scriptsexport_topo
 
 ## Related docs
 
-- [NOTES-2026-07-13.md](NOTES-2026-07-13.md) — work done on 2026-07-13
-- [NOTES-2026-07-28.md](NOTES-2026-07-28.md) — services topology layer (Phase 3)
-- [agent/topology/docs/DESIGN.md](../agent/topology/docs/DESIGN.md) — static vs operational design
+- [Diagnostic runner guide](DIAGNOSTIC_RUNNER.md) — work done on 2026-07-13
+- [Diagnostic runner guide](DIAGNOSTIC_RUNNER.md) — services topology layer (Phase 3)
+- [Topology design](../nso_facts/topology/docs/DESIGN.md) — static vs operational design
 - [README.md](../README.md) — `REPORT_SECTIONS`, run instructions

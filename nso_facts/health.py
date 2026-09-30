@@ -94,6 +94,23 @@ def parse_in_sync(sync_result: dict[str, Any] | None) -> bool | None:
     if not isinstance(data, dict):
         return None
 
+    # Some MCP versions set in_sync=False for every non-in-sync result,
+    # including a failed check. Explicit unknown/error results are not drift.
+    containers = [data]
+    if isinstance(data.get("details"), dict):
+        containers.append(data["details"])
+    explicit = []
+    for container in containers:
+        for key in ("result", "sync_state"):
+            if key not in container:
+                continue
+            value = _coerce_sync_value(container[key])
+            if value is None:
+                return None
+            explicit.append(value)
+    if explicit:
+        return explicit[0] if all(v == explicit[0] for v in explicit) else None
+
     for key in ("in_sync", "in-sync", "sync_state", "result"):
         direct = _coerce_sync_value(data.get(key))
         if direct is not None:

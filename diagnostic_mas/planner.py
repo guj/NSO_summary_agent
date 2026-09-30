@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from agent.config import llm_temperature_kwargs
+
 import json
 import re
 from pathlib import Path
@@ -137,7 +139,7 @@ def llm_turn_raw(
     import sys
     import time
 
-    from agent.summarize import FABRIC_CHAT_TIMEOUT_SEC, fabric_openai_client
+    from agent.summarize import llm_timeout_seconds, fabric_openai_client
 
     layer = str(issue.get("layer") or "")
     ctx = _spine_context(case, layer)
@@ -169,18 +171,18 @@ def llm_turn_raw(
     t0 = time.monotonic()
     print(
         f"[autonomous] LLM plan start role={role} issue={edge} "
-        f"timeout={FABRIC_CHAT_TIMEOUT_SEC}s",
+        f"timeout={llm_timeout_seconds(settings)}s",
         file=sys.stderr,
     )
     try:
-        client = fabric_openai_client(settings, timeout=FABRIC_CHAT_TIMEOUT_SEC)
+        client = fabric_openai_client(settings, timeout=llm_timeout_seconds(settings))
         resp = client.chat.completions.create(
             model=settings.fabric_model,
             messages=[
                 {"role": "system", "content": _system_prompt(role)},
                 {"role": "user", "content": user},
             ],
-            temperature=0.1,
+            **llm_temperature_kwargs(settings),
         )
     except Exception as exc:  # noqa: BLE001
         elapsed = time.monotonic() - t0

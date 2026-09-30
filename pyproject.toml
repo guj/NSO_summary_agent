@@ -8,6 +8,7 @@ dependencies = [
     "fastmcp>=3.3.1",
     "openai>=1.0.0",
     "python-dotenv>=1.0.0",
+    "httpx>=0.27",
 ]
 
 [project.scripts]
@@ -29,3 +30,9 @@ packages = ["agent", "nso_facts", "nso_report", "multi_agent", "diagnostic_mas"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+# Root resources used by the legacy runner are included in wheel installs.
+[tool.hatch.build.targets.wheel.force-include]
+"prompts" = "prompts"
+"config/fleet_summary_thresholds.yaml" = "config/fleet_summary_thresholds.yaml"
+"config/interface-equivalences.example.json" = "config/interface-equivalences.example.json"

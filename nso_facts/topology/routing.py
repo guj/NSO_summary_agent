@@ -178,32 +178,22 @@ async def collect_operational_routing(
     for static_id, static_edge in static_by_id.items():
         if static_id in paired_ids:
             continue
-        operational.append(
-            {
-                "id": static_id,
-                "state": {
-                    "local": "unknown",
-                    "remote": "unknown",
-                    "status": "down",
-                    "detail": "no operational BGP session observed",
-                },
-            }
-        )
         local = static_edge.get("local") or {}
         remote = static_edge.get("remote") or {}
-        issues.append(
-            {
-                "severity": "high",
-                "layer": "routing",
-                "code": "configured_no_session",
-                "edge_id": static_id,
-                "message": (
-                    f"Configured/static BGP session missing live Established state: "
-                    f"{local.get('device')} {local.get('address')} ↔ "
-                    f"{remote.get('device')} {remote.get('address')}"
-                ),
-            }
-        )
+        state = _unpaired_session_state(static_edge, observations)
+        operational.append({"id": static_id, "state": state})
+        failed = state["status"] == "down"
+        issues.append({
+            "severity": "high" if failed else "medium",
+            "layer": "routing",
+            "code": "configured_no_session" if failed else "bgp_verification_incomplete",
+            "edge_id": static_id,
+            "message": (
+                f"BGP {local.get('device')} {local.get('address')} "
+                f"({state['local']}) ↔ {remote.get('device')} {remote.get('address')} "
+                f"({state['remote']}): {state['detail']}"
+            ),
+        })
 
     for edge in paired:
         if edge["id"] not in static_by_id:
@@ -218,6 +208,23 @@ async def collect_operational_routing(
             )
 
     return operational, issues, coverage
+
+
+def _unpaired_session_state(edge, observations):
+    """Keep exact endpoint observations when reciprocal pairing is incomplete."""
+    local, remote = edge.get("local") or {}, edge.get("remote") or {}
+    def observed(endpoint, peer):
+        rows = {_normalize_bgp_state(o.state) for o in observations
+                if o.device == endpoint.get("device")
+                and o.neighbor_address == peer.get("address")}
+        return next(iter(rows)) if len(rows) == 1 else "unknown"
+    left, right = observed(local, remote), observed(remote, local)
+    failed = any(s in {"idle", "active", "connect", "opensent", "openconfirm", "open-sent", "open-confirm", "admin", "shutdown"}
+                 for s in (left, right))
+    return {"local": left, "remote": right,
+            "status": "down" if failed else "up" if left == right == "established" else "unknown",
+            "detail": ("Observed non-established BGP session; missing endpoint evidence remains unverified"
+                       if failed else "Reciprocal verification incomplete; missing observation does not prove session failure")}
 
 
 def build_static_routing_layer(edges: list[dict[str, Any]]) -> dict[str, Any]:
