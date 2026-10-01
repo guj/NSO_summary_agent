@@ -22,7 +22,7 @@ See [docs/DIAGNOSTIC_RUNNER.md](docs/DIAGNOSTIC_RUNNER.md) for the current diagn
 
 - Python 3.12+
 - Running [fabric-nso-mcp-server](https://github.com/fabric-testbed/fabric-nso-mcp-server) (same binary as Cursor `myNso` MCP)
-- LLM API access via `FABRIC_AI_API_KEY` / `FABRIC_AI_API_URL` / `FABRIC_AI_MODEL` (OpenAI-compatible; FABRIC AI is the default free endpoint, or substitute your own)
+- Optional LLM API access via `FABRIC_AI_API_KEY` / `FABRIC_AI_API_URL` / `FABRIC_AI_MODEL` (OpenAI-compatible). Run `nso-diagnostic-run --skip-llm` without a model. Free/institutional access depends on provider eligibility and quotas; paid endpoints also work. See [model choices and our trial experience](docs/DIAGNOSTIC_RUNNER.md#running-without-an-llm-and-choosing-a-model).
 
 ## Diagnostic runner: standalone checkout
 

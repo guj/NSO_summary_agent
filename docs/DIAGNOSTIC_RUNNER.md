@@ -151,6 +151,44 @@ interpret a “no faults” summary as a successful scan. Correct the collection
 first. If only publication fails after collection, saved report files can be
 resent without repeating the network scan.
 
+## Running without an LLM and choosing a model
+
+An LLM is optional. To collect NSO/device facts, run deterministic operational
+checks, and produce a report without model calls:
+
+```sh
+nso-diagnostic-run --skip-llm --dry-run
+```
+
+No LLM API key is required in this mode. NSO/MCP access is still required; this is
+a live scan, not an offline simulation. LLM investigations, drills, and generated
+summaries are skipped. Confirmed operational faults remain faults; unresolved
+checks remain Unknown rather than being assumed healthy. Remove `--dry-run` and
+configure publication separately if you want saved/delivered reports.
+
+For LLM-assisted diagnosis, users can use an institution-provided or free-access
+model endpoint, such as the FABRIC/NRP endpoints used during development, or their
+own paid provider. Free access depends on provider eligibility, quotas, and current
+availability; the agent itself does not provide free model access. The endpoint
+must support the runner's OpenAI-compatible chat-completions interface. Set
+`FABRIC_AI_API_KEY`, `FABRIC_AI_API_URL`, and `FABRIC_AI_MODEL` to your provider's
+values; the FABRIC prefix does not lock the agent to one provider.
+
+**Experience from our development scans:** the endpoint model named
+`claude-opus-5` performed better overall in our trials, diagnosing service issues
+in reasonable time. Other tested models sometimes took substantially longer,
+timed out, or produced incomplete or incorrect diagnoses. These are observations
+from our network, prompts, and provider endpoints—not a controlled benchmark or
+a guarantee. Provider load, model capability, context size, tool latency, and
+service complexity all affect results. A timeout is not evidence of a service outage.
+
+Use the exact model ID advertised by your endpoint. The tested LiteLLM Opus 5
+endpoint required `FABRIC_AI_TEMPERATURE=1`; this is provider/model-specific.
+Compare candidate models on the same selected services and evidence, checking
+correctness as well as elapsed time and tool use. A completed response alone is
+not a verified diagnosis. Review the effective model, temperature, and request
+limits in the report's configuration section.
+
 ## Running
 
 ```sh
