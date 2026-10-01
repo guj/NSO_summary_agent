@@ -27,6 +27,63 @@ or leave the value explicitly blank to omit the parameter.
 `FABRIC_CHAT_CONNECT_TIMEOUT_SEC` to 20, and `FABRIC_CHAT_MAX_RETRIES` to 0.
 These are request limits, not an overall scan deadline.
 
+## Editable versus regular installation
+
+The setup above uses an **editable installation** (`-e`). Choose the mode based
+on how you use the checkout:
+
+- **Editable:** `python -m pip install -e /path/to/checkout` points the installed
+  command at that checkout. Most Python and prompt/template edits take effect on
+  the next run without reinstalling. Keep the checkout in place. Reinstall when
+  dependencies, entry points, or packaging configuration change.
+- **Regular:** `python -m pip install /path/to/checkout` builds and copies the
+  package into the environment's `site-packages`. Later checkout edits do not
+  update that copy. Reinstall after source updates. This mode is useful for
+  testing what a fresh installation receives, including packaged HTML assets.
+
+Activate the environment used for your scans, then check it:
+
+```sh
+command -v nso-diagnostic-run
+python -m pip list --editable
+python -m pip show nso-summary-agent
+```
+
+An editable installation appears in the first pip command with its source path;
+`pip show` includes **Editable project location**. A regular installation has no
+such field. If the package is absent, check that you selected the correct Python
+environment. Use `/path/to/venv/bin/python -m pip ...` to target one explicitly;
+a bare `pip` command may belong to a different environment.
+
+Refresh a regular installation from the updated checkout:
+
+```sh
+/path/to/venv/bin/python -m pip install --upgrade --force-reinstall --no-deps /path/to/checkout
+```
+
+This replaces the installed package without reinstalling dependencies. If the
+update changes dependencies, omit `--no-deps`. It does not edit your `.env`,
+regenerate existing reports, or change a scan already running. Start a new process
+for the updated code to take effect.
+
+To switch that environment to editable mode instead:
+
+```sh
+/path/to/venv/bin/python -m pip install -e /path/to/checkout
+```
+
+Running `python -m diagnostic_mas.run` from the checkout root can also load local
+source directly. That behavior alone does not prove an editable installation.
+For an unambiguous installed-module check, excluding the current directory:
+
+```sh
+/path/to/venv/bin/python -I -c "import diagnostic_mas.run as r; print(r.__file__)"
+```
+
+The path identifies which code that environment loads. Use the same environment's
+`nso-diagnostic-run` command for the scan. Updating a checkout and updating a
+regular installed copy are separate steps.
+
 ## Fresh-client configuration checklist
 
 Edit `.env` before a live run. Do not commit it.

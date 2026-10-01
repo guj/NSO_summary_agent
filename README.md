@@ -47,6 +47,8 @@ cp .env.example .env
 # MCP_SERVER_CMD: absolute path to cisco-nso-mcp-server if not on PATH
 ```
 
+The setup uses an editable install (`-e`), so most source edits apply on the next run. Regular installs copy code into `site-packages` and must be reinstalled after source updates. See [installation modes and refresh commands](docs/DIAGNOSTIC_RUNNER.md#editable-versus-regular-installation).
+
 ## Verify LLM models (OpenAI-compatible)
 
 Defaults target FABRIC AI; the same check works for any **OpenAI-compatible**
