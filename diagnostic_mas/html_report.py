@@ -99,7 +99,11 @@ def render_html_report(report: str, run_id: str, *, case: dict | None = None) ->
     sections = re.split(r'^## (.+)\n', report, flags=re.M)
     from diagnostic_mas.topology_report import render_topology
     topology = render_topology(case)
+    from diagnostic_mas.service_topology import render_service_topology
+    service_topology = render_service_topology(case)
     nav, blocks = [], []
+    if service_topology:
+        nav.append('<a href="#service-topology">Service topology</a>')
     if topology:
         nav.append('<a href="#routing-topology">Routing topology</a>')
     for i in range(1, len(sections), 2):
@@ -139,7 +143,7 @@ main{max-width:1200px;margin:auto;padding:24px}.controls{display:flex;gap:12px;f
 </style></head><body><header><h1>NSO diagnostic report</h1><div>''' + html.escape(run_id) + '''</div></header><nav>''' + ''.join(nav) + '''</nav><main>''' + _body(sections[0]) + '''
 <div class="controls"><input id="search" aria-label="Search report details" placeholder="Search service ID, device, type or evidence">
 <select id="status" aria-label="Service status"><option value="all">All service statuses</option><option value="down">Down</option><option value="degraded">Degraded</option><option value="unknown">Unknown / incomplete</option><option value="passed">PE-readiness passed</option><option value="basic">Basic checks only</option></select>
-<button id="expand">Expand visible details</button><button id="collapse">Collapse details</button></div><p id="count" aria-live="polite"></p>''' + topology + ''.join(blocks) + '''
+<button id="expand">Expand visible details</button><button id="collapse">Collapse details</button></div><p id="count" aria-live="polite"></p>''' + topology + service_topology + ''.join(blocks) + '''
 </main><script>
 window.addEventListener('message',event=>{const frame=document.querySelector('#routing-topology iframe');if(frame&&event.source===frame.contentWindow&&event.data?.type==='nso-topology-height'&&Number.isFinite(event.data.height)){frame.style.height=Math.max(200,Math.min(3000,event.data.height))+'px';}});
 const records=[...document.querySelectorAll('.record')], search=document.querySelector('#search'), status=document.querySelector('#status');
