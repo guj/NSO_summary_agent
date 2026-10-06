@@ -548,7 +548,7 @@ Stdout / `report.md` use a concise operator layout (not the older Issues/Budget 
    stay under Services  
 6. **Run details** — evidence counts, budgets, dry-run / reporting notes  
 
-`--full` appends **Appendix: Detailed Device Analysis** (legacy per-device dump).
+In the HTML report, each device also has a collapsed **Interfaces and hardware** block (interface counts, hardware readings, exceptions). It is not part of the terminal or Slack text.
 
 **Publish:** Slack and email receive a compact digest; email attaches the self-contained HTML report (see [Compact diagnostic notifications and HTML reports](#compact-diagnostic-notifications-and-html-reports)).
 
@@ -558,7 +558,6 @@ Stdout / `report.md` use a concise operator layout (not the older Issues/Budget 
 |------|------|
 | `--skip-llm` | Spines only; no dataplane/drill/summary LLM |
 | `--deterministic-summary` | Skip final Summary chat; restate dataplane diagnoses/findings (default is LLM Summary) |
-| `--full` | Appendix detailed devices |
 | `--service-type` / `--service-id` | **Service-first** (implies lean service-only): match instances, basic checks for all; with LLM enabled, an explicit `--service-id` also investigates instances whose basic checks pass (within budget); type-only focus investigates suspicious instances; no whole-NSO topology unless evidence expands. Combined = intersection; exit if nothing matches |
 | `--max-dataplane-tools N` | Per-service dataplane verify budget (default 40; `0` skips) |
 | `--max-dataplane-services N` | Total cap on dataplane LLM instances (default without per-category: one best per typed prompt; **two** if only one typed category is present) |
@@ -582,9 +581,6 @@ nso-diagnostic-run --dry-run
 
 # Deliver Slack/email + state/diagnostic_mas/
 nso-diagnostic-run --publish
-
-# Operator report + detailed device appendix
-nso-diagnostic-run --full --dry-run
 
 # Compare two published runs (new / recovered / persistent / coverage)
 nso-diagnostic-delta state/diagnostic_mas/runs/<older> state/diagnostic_mas/runs/<newer>

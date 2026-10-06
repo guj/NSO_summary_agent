@@ -10,7 +10,7 @@ from test_diagnostic_mas_publish import _settings
 def test_snapshot_redacts_secrets_and_preserves_effective_values(tmp_path):
     settings = replace(_settings(state_dir=tmp_path), fabric_api_url='https://user:secret@example.org/v1?token=secret',
                        fabric_api_key='secret', mcp_server_args=['--nso-timeout=30', '--nso-password=secret'])
-    args = SimpleNamespace(max_dataplane_per_category=20, max_dataplane_services=None, full=True)
+    args = SimpleNamespace(max_dataplane_per_category=20, max_dataplane_services=None)
     case = CaseFile(budget=Budget(0, 0))
     case.run_configuration = capture_run_configuration(args, settings, case.budget, skip_llm=True, dry_run=True)
     snapshot = case_to_dict(case)['run_configuration']

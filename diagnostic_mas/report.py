@@ -520,7 +520,6 @@ def render_report(
     case: CaseFile,
     *,
     summary: str | None = None,
-    full: bool = False,
     services_detail: bool = False,
     duration_seconds: float | None = None,
     dry_run: bool = False,
@@ -539,7 +538,6 @@ def render_report(
         format_result_line,
         format_run_details,
         format_services_operator,
-        format_appendix_full,
         scope_counts,
         service_sync_note_from_case,
     )
@@ -585,7 +583,7 @@ def render_report(
 
     lines.append("## Devices")
     lines.append("")
-    lines.extend(format_devices_operator(case, full=full))
+    lines.extend(format_devices_operator(case))
     lines.append("")
 
     from diagnostic_mas.service_presence import disappearance_section
@@ -658,9 +656,5 @@ def render_report(
         )
     )
     lines.append("")
-
-    if full:
-        lines.extend(format_appendix_full(case))
-        lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"

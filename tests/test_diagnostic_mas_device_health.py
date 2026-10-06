@@ -1,6 +1,5 @@
 from diagnostic_mas.case import Budget, CaseFile, add_evidence
 from diagnostic_mas.device_health import (
-    format_detailed_devices_section,
     format_device_health_section,
     topology_from_case,
 )
@@ -137,23 +136,6 @@ def test_device_health_section_in_report():
     assert "Detailed Device Analysis" not in text
 
 
-def test_detailed_device_analysis_in_report():
-    case = _case_with_spines()
-    detail = "\n".join(format_detailed_devices_section(case))
-    assert "Device: renc-data-sw" in detail
-    assert "Device: lbnl-data-sw" in detail
-    assert "Status" in detail
-    assert "Routing" in detail
-
-    text = render_report(case, full=True)
-    assert "## Appendix: Detailed Device Analysis" in text
-    assert text.index("## Devices") < text.index("## Appendix: Detailed Device Analysis")
-    assert text.index("## Run details") < text.index("## Appendix: Detailed Device Analysis")
-    assert "Device: renc-data-sw" in text
-    # Detail is the last major section
-    assert text.rfind("## Appendix: Detailed Device Analysis") == text.rfind("##")
-
-
 def test_endpoints_shaped_edges_normalized():
     case = CaseFile(
         budget=Budget(max_deep_checks=0, max_handoffs=0),
@@ -183,9 +165,6 @@ def test_endpoints_shaped_edges_normalized():
     edge = topo["operational"]["layers"]["underlay"]["edges"][0]
     assert edge["local"]["device"] == "a-sw"
     assert edge["remote"]["device"] == "b-sw"
-    detail = "\n".join(format_detailed_devices_section(case))
-    assert "Device: a-sw" in detail
-    assert "Device: b-sw" in detail
 
 
 def test_routing_count_prose_unknown_is_na():
@@ -343,7 +322,7 @@ def test_collection_status_reason_device_timeout():
             "device_sync": {
                 "atla-data-sw": "in-sync",
                 "star-data-sw": (
-                    "error: HTTPSConnectionPool(host='192.168.11.246', port=443): "
+                    "error: HTTPSConnectionPool(host='192.0.2.2', port=443): "
                     "Read timed out. (read timeout=10)"
                 ),
             },
@@ -452,15 +431,13 @@ def test_health_prose_states_observations_not_fault():
         "power": [{"ok": True}],
         "control_plane": [{"dropped": 123}],
     }
-    lean = _health_prose(row, full=False, hardware_entry=hw)
+    lean = _health_prose(row, hardware_entry=hw)
     assert "NSO↔device interface mapping unconfirmed" in lean
     assert "control-plane drop counter=123 recorded" in lean
     assert "confirmed hardware fault" in lean
-    assert "use --full" in lean
+    assert "per-device details are in the HTML report" in lean
+    assert "--full" not in lean
     assert "require explanation" not in lean
-    full = _health_prose(row, full=True, hardware_entry=hw)
-    assert "see Detailed Analysis" in full
-    assert "use --full" not in full
 
 
 def test_health_prose_still_flags_real_review():
@@ -472,8 +449,7 @@ def test_health_prose_still_flags_real_review():
             "hardware": "Review",
             "notes": "Mapping unknown — see Detailed Analysis",
         },
-        full=False,
     )
     assert "Inventory Review" in prose
     assert "mapping unconfirmed" in prose
-    assert "use --full" in prose
+    assert "per-device details are in the HTML report" in prose

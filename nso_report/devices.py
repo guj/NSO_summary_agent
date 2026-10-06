@@ -109,6 +109,77 @@ def format_devices_section(
     return body
 
 
+def device_detail_lines(
+    topology: Any,
+    *,
+    hardware_health: dict[str, Any] | None = None,
+    extra_devices: list[str] | None = None,
+    only_devices: list[str] | None = None,
+    live_verified: list[str] | None = None,
+) -> dict[str, list[str]]:
+    """Interfaces, hardware and exceptions text per device (no status, routing or services).
+
+    ``live_verified`` names the devices that answered a live query. For any other device
+    the interface state was not collected, which is reported as such rather than as
+    inventory mismatches. ``None`` skips that check. Devices with nothing to show are omitted.
+    """
+    from nso_facts.hardware_health import format_device_hardware_section
+
+    op_layers = _operational_layers(topology)
+    if op_layers is None:
+        return {}
+    static_layers = _static_layers(topology)
+    phys = _merged_edges(op_layers, static_layers, "physical")
+    under = _merged_edges(op_layers, static_layers, "underlay")
+    route = _merged_edges(op_layers, static_layers, "routing")
+    unmapped_bgp, unmapped_isis = _unmapped_by_device(topology)
+    unexpected_live = _unexpected_live_by_device(topology)
+    mismatch_by_edge = _mismatch_by_edge_id(topology)
+    hw = hardware_health if isinstance(hardware_health, dict) else {}
+    devices = (
+        _devices_in_edges(phys, under, route)
+        | set(unmapped_bgp)
+        | set(unmapped_isis)
+        | set(unexpected_live)
+        | set(hw)
+        | {n.strip() for n in (extra_devices or []) if isinstance(n, str) and n.strip()}
+    )
+    if only_devices:
+        devices = {n.strip() for n in only_devices if isinstance(n, str) and n.strip()}
+    verified = None if live_verified is None else set(live_verified)
+
+    details: dict[str, list[str]] = {}
+    for device in sorted(devices):
+        has_interfaces = _iface_pair_counts(device, phys)["total"] > 0
+        collected = verified is None or device in verified
+        exceptions = _exceptions_section(
+            device,
+            phys=phys if collected else [],
+            mismatch_by_edge=mismatch_by_edge,
+            unmapped_bgp=unmapped_bgp.get(device, []),
+            unmapped_isis=unmapped_isis.get(device, []),
+            unexpected_live=unexpected_live.get(device, []),
+            troubleshoot=_troubleshooting_for_device(topology, device),
+        )
+        if not (has_interfaces or hw.get(device) or exceptions):
+            continue
+        if collected:
+            lines = _interfaces_summary_section(device, phys)
+        else:
+            lines = [
+                "Interfaces",
+                "----------",
+                f"{_I1}Interface state was not collected for this device in this run.",
+            ]
+        lines.append("")
+        lines.extend(format_device_hardware_section(hw.get(device)))
+        if exceptions:
+            lines.append("")
+            lines.extend(exceptions)
+        details[device] = lines
+    return details
+
+
 def _index_services_by_device(
     services: dict[str, Any] | None,
 ) -> dict[str, list[dict[str, Any]]]:

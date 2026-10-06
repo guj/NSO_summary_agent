@@ -1,4 +1,4 @@
-"""Device Health table + Detailed Device Analysis for diagnostic_mas reports."""
+"""Device Health table and per-device detail for diagnostic_mas reports."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from typing import Any
 
 from diagnostic_mas.case import CaseFile
 from nso_facts.topology.physical import build_operational_physical_layer
-from nso_report.devices import format_devices_section
+from nso_report.devices import device_detail_lines as _device_detail_lines
 from nso_report.executive import (
     build_device_health_rows,
     format_device_health_table,
@@ -185,19 +185,15 @@ def format_device_health_section(case: CaseFile) -> list[str]:
     return [line[2:] if line.startswith("  ") else line for line in table.splitlines()]
 
 
-def format_detailed_devices_section(case: CaseFile) -> list[str]:
-    """Lines for ## Detailed Device Analysis (same body as nso-summary-run)."""
-    topology = topology_from_case(case)
-    fleet_sync, hardware_health, _system = fleet_maps_from_case(case)
-    only = list(case.focus_devices or []) or None
-    body = format_devices_section(
-        topology,
-        services=services_from_case(case),
-        fleet_sync=fleet_sync,
+def device_detail_lines(
+    case: CaseFile, *, live_verified: list[str] | None = None
+) -> dict[str, list[str]]:
+    """Per-device interface, hardware and exception text for the HTML report."""
+    _fleet_sync, hardware_health, _system = fleet_maps_from_case(case)
+    return _device_detail_lines(
+        topology_from_case(case),
         hardware_health=hardware_health,
         extra_devices=list(case.device_names or []),
-        only_devices=only,
+        only_devices=list(case.focus_devices or []) or None,
+        live_verified=live_verified,
     )
-    if body == "No device topology in snapshot.":
-        return ["(none — need ISIS/BGP edges, hardware, or device_names)"]
-    return body.splitlines()

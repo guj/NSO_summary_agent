@@ -39,8 +39,11 @@ One block per device:
 **Routing:** BGP 2/2 up · IS-IS 2/2 up
 ```
 
-An **Attention** line or list follows when something about that device needs a look. For the
-detailed per-device analysis, run with `--full`; it adds **Appendix: Detailed Device Analysis**.
+An **Attention** line or list follows when something about that device needs a look. In the HTML
+report each device also has a collapsed **Interfaces and hardware** block: interface counts,
+hardware readings, and exceptions such as interfaces that are down or could not be matched to the
+device. For a device that did not answer live queries, it says the interface state was not
+collected instead of listing its interfaces as missing.
 
 ### What do the NSO sync values mean?
 
@@ -57,7 +60,7 @@ detailed per-device analysis, run with `--full`; it adds **Appendix: Detailed De
 what was observed, then two labels:
 
 ```text
-**Health:** NSO↔device interface mapping unconfirmed; control-plane drop counter=1,234 recorded. Labels: interfaces=Inventory Review; hardware=Review. Review is a triage flag from this run's checks — do not treat it as a confirmed hardware fault (use --full).
+**Health:** NSO↔device interface mapping unconfirmed; control-plane drop counter=1,234 recorded. Labels: interfaces=Inventory Review; hardware=Review. Review is a triage flag from this run's checks — do not treat it as a confirmed hardware fault (per-device details are in the HTML report).
 ```
 
 | Observation | Meaning |

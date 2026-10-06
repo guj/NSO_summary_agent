@@ -9,7 +9,6 @@ from typing import Any
 from diagnostic_mas.case import CaseFile
 from diagnostic_mas.device_health import (
     fleet_maps_from_case,
-    format_detailed_devices_section,
     services_from_case,
     topology_from_case,
 )
@@ -167,7 +166,6 @@ def _inventory_observations(notes: str) -> list[str]:
 def _health_prose(
     row: dict[str, Any],
     *,
-    full: bool = False,
     hardware_entry: dict[str, Any] | None = None,
 ) -> str:
     iface = str(row.get("interfaces") or "—")
@@ -194,7 +192,7 @@ def _health_prose(
         return "Interface and hardware checks reported healthy"
 
     if obs_unique or not healthy_iface or not healthy_hw:
-        hint = "see Detailed Analysis" if full else "use --full"
+        hint = "per-device details are in the HTML report"
         obs_txt = (
             "; ".join(obs_unique)
             if obs_unique
@@ -776,7 +774,7 @@ def _device_rows(case: CaseFile) -> list[dict[str, Any]]:
     return rows
 
 
-def format_devices_operator(case: CaseFile, *, full: bool = False) -> list[str]:
+def format_devices_operator(case: CaseFile) -> list[str]:
     """Per-device operator sections."""
     rows = _device_rows(case)
     if not rows:
@@ -792,7 +790,7 @@ def format_devices_operator(case: CaseFile, *, full: bool = False) -> list[str]:
         lines.append("")
         lines.append(f"**NSO sync:** {_sync_prose(str(row.get('sync') or '—'))}")
         lines.append(
-            f"**Health:** {_health_prose(row, full=full, hardware_entry=hw_entry)}"
+            f"**Health:** {_health_prose(row, hardware_entry=hw_entry)}"
         )
         bgp_prose, drill_line = _bgp_routing_qualification(
             case, device, str(row.get("bgp") or "—")
@@ -2077,7 +2075,3 @@ def scope_counts(case: CaseFile) -> tuple[int, int]:
     return len(devices), svc_n
 
 
-def format_appendix_full(case: CaseFile) -> list[str]:
-    lines = ["## Appendix: Detailed Device Analysis", ""]
-    lines.extend(format_detailed_devices_section(case))
-    return lines

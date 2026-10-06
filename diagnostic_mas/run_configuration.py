@@ -55,7 +55,6 @@ def capture_run_configuration(args, settings, budget, *, skip_llm, dry_run):
         "Service-sync mode": settings.service_sync_mode,
         "Dry run": dry_run,
         "Publish enabled": not dry_run,
-        "Full device report": bool(getattr(args, "full", False)),
         "Save raw MCP results": bool(getattr(args, "save_mcp_results", False)),
     }
 

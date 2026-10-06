@@ -36,7 +36,7 @@ def test_classify_unknown_when_device_sync_timed_out():
     """NSO/API sync timeouts are verification gaps, not confirmed down."""
     sync = {"status": "success", "data": {"in_sync": True}}
     timeout = (
-        "error: HTTPSConnectionPool(host='192.168.11.246', port=443): "
+        "error: HTTPSConnectionPool(host='192.0.2.2', port=443): "
         "Read timed out. (read timeout=10)"
     )
     assert classify_instance(sync, ["in-sync", timeout, "in-sync"]) == "unknown"
@@ -227,7 +227,7 @@ def test_build_device_sync_map():
 def test_build_instance_record_timeout_is_unknown_not_down():
     """Sync timeout-only → unknown; counts bucket under unknown."""
     timeout = (
-        "error: HTTPSConnectionPool(host='192.168.11.246', port=443): "
+        "error: HTTPSConnectionPool(host='192.0.2.2', port=443): "
         "Read timed out. (read timeout=10)"
     )
     record = build_instance_record(

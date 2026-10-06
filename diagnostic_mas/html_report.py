@@ -73,6 +73,28 @@ def _body(md: str) -> str:
     return ''.join(parts)
 
 
+def _device_details(case: dict | None) -> dict[str, str]:
+    """Collapsed interface and hardware detail per device, built from the saved case."""
+    if not isinstance(case, dict):
+        return {}
+    from types import SimpleNamespace
+
+    from diagnostic_mas.device_health import device_detail_lines
+
+    view = SimpleNamespace(
+        evidence=case.get("evidence") or [],
+        device_names=case.get("device_names") or [],
+        focus_devices=case.get("focus_devices") or [],
+    )
+    details = device_detail_lines(view, live_verified=case.get("live_verified_devices"))
+    return {
+        name: '<details class="device-detail"><summary>Interfaces and hardware</summary><pre>'
+        + html.escape("\n".join(lines))
+        + "</pre></details>"
+        for name, lines in details.items()
+    }
+
+
 def notification_digest(report: str, run_id: str) -> str:
     lines = [f"# NSO diagnostic report — {run_id}"]
     for prefix in ("**Scope:**", "**Duration:**"):
@@ -101,6 +123,7 @@ def render_html_report(report: str, run_id: str, *, case: dict | None = None) ->
     topology = render_topology(case)
     from diagnostic_mas.service_topology import render_service_topology
     service_topology = render_service_topology(case)
+    device_details = _device_details(case)
     nav, blocks = [], []
     if service_topology:
         nav.append('<a href="#service-topology">Service topology</a>')
@@ -125,7 +148,8 @@ def render_html_report(report: str, run_id: str, *, case: dict | None = None) ->
             label = html.escape(name)
             badge = f'<span class="badge">{html.escape(result)}</span>' if result else ''
             record = (f'<details class="record" data-status="{status}" data-service="{str(title == "Services").lower()}">'
-                      f'<summary>{label}{badge}</summary>{_body(text)}</details>')
+                      f'<summary>{label}{badge}</summary>{_body(text)}'
+                      f'{device_details.get(name.strip(), "") if title == "Devices" else ""}</details>')
             records.append(({'down':0,'degraded':1,'unknown':2,'passed':3,'basic':4}[status],j,record))
         if title == 'Services':
             records.sort()
@@ -139,7 +163,8 @@ def render_html_report(report: str, run_id: str, *, case: dict | None = None) ->
 header{padding:24px 32px;background:#172536;color:white}header h1{margin:0;font-size:24px}
 nav{position:sticky;top:0;background:white;padding:12px 24px;border-bottom:1px solid #dce2e8;display:flex;gap:16px;flex-wrap:wrap;z-index:1}a{color:#155d98}
 main{max-width:1200px;margin:auto;padding:24px}.controls{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}input,select,button{font:inherit;padding:8px;border:1px solid #adb9c4;border-radius:4px}input{flex:1;min-width:220px}
-.section{background:white;border:1px solid #dce2e8;margin:16px 0;padding:16px}.section>summary{font-size:20px;font-weight:650;cursor:pointer}.record{border-top:1px solid #dce2e8;padding:12px 0}.record>summary{cursor:pointer;overflow-wrap:anywhere;font-weight:600}.badge{display:block;font-weight:400;font-size:13px;color:#526071}pre{overflow:auto;background:#f1f4f7;padding:12px}table{border-collapse:collapse;width:100%;font-size:14px}td,th{padding:6px 10px;border-bottom:1px solid #dce2e8;text-align:left}.status-definitions{margin:12px 0;font-size:14px}.status-definitions>summary{cursor:pointer;font-weight:600}code{overflow-wrap:anywhere}[hidden]{display:none!important}#count{color:#526071}
+.section{background:white;border:1px solid #dce2e8;margin:16px 0;padding:16px}.section>summary{font-size:20px;font-weight:650;cursor:pointer}.record{border-top:1px solid #dce2e8;padding:12px 0}.record>summary{cursor:pointer;overflow-wrap:anywhere;font-weight:600}
+.device-detail{margin-top:8px}.device-detail>summary{font-size:14px;font-weight:600;cursor:pointer}.badge{display:block;font-weight:400;font-size:13px;color:#526071}pre{overflow:auto;background:#f1f4f7;padding:12px}table{border-collapse:collapse;width:100%;font-size:14px}td,th{padding:6px 10px;border-bottom:1px solid #dce2e8;text-align:left}.status-definitions{margin:12px 0;font-size:14px}.status-definitions>summary{cursor:pointer;font-weight:600}code{overflow-wrap:anywhere}[hidden]{display:none!important}#count{color:#526071}
 </style></head><body><header><h1>NSO diagnostic report</h1><div>''' + html.escape(run_id) + '''</div></header><nav>''' + ''.join(nav) + '''</nav><main>''' + _body(sections[0]) + '''
 <div class="controls"><input id="search" aria-label="Search report details" placeholder="Search service ID, device, type or evidence">
 <select id="status" aria-label="Service status"><option value="all">All service statuses</option><option value="down">Down</option><option value="degraded">Degraded</option><option value="unknown">Unknown / incomplete</option><option value="passed">PE-readiness passed</option><option value="basic">Basic checks only</option></select>

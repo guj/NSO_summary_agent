@@ -569,7 +569,6 @@ async def _run_after_accounting(
     report = render_report(
         report_case,
         summary=narrative or None,
-        full=bool(getattr(args, "full", False)),
         services_detail=bool(
             getattr(args, "services_detail", False) or service_type or service_id
         ),
@@ -757,14 +756,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Force no Slack/email and no state write (default when DRY_RUN=1)",
-    )
-    parser.add_argument(
-        "--full",
-        action="store_true",
-        help=(
-            "Append Detailed Device Analysis as an appendix "
-            "(operator report is default)"
-        ),
     )
     parser.add_argument(
         "--services-detail",

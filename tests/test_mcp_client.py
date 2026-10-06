@@ -323,7 +323,7 @@ async def test_call_mcp_quarantines_device_after_timeout_error():
             data={
                 "status": "error",
                 "error_message": (
-                    "HTTPSConnectionPool(host='192.168.11.222', port=443): "
+                    "HTTPSConnectionPool(host='192.0.2.1', port=443): "
                     "Read timed out. (read timeout=20)"
                 ),
             },
@@ -435,7 +435,7 @@ def test_ingest_quarantined_devices_opens_issue(monkeypatch):
         "nso_facts.mcp_client.quarantined_devices",
         lambda: {
             "lbnl-data-sw": (
-                "HTTPSConnectionPool(host='192.168.11.246', port=443): "
+                "HTTPSConnectionPool(host='192.0.2.2', port=443): "
                 "Read timed out. (read timeout=20)"
             ),
         },
@@ -467,7 +467,7 @@ def test_live_mcp_failure_kind_timeout_vs_unreachable():
     )
 
     timeout = (
-        "exec_show: HTTPSConnectionPool(host='192.168.11.246', port=443): "
+        "exec_show: HTTPSConnectionPool(host='192.0.2.2', port=443): "
         "Read timed out. (read timeout=10)"
     )
     assert live_mcp_failure_kind(timeout) == "timeout"
@@ -478,7 +478,7 @@ def test_live_mcp_failure_kind_timeout_vs_unreachable():
 
     isis = (
         "exec_show (isis adjacency): HTTPSConnectionPool"
-        "(host='192.168.11.246', port=443): Read timed out. (read timeout=10)"
+        "(host='192.0.2.2', port=443): Read timed out. (read timeout=10)"
     )
     assert parse_live_mcp_failed_operation(isis) == "exec_show (isis adjacency)"
     assert parse_live_mcp_collection_phase(isis) == "IS-IS collection"

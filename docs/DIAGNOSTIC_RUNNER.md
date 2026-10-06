@@ -207,7 +207,7 @@ nso-diagnostic-run --publish
 
 Dry-run still contacts NSO and, unless skipped, the LLM. It does not save the
 normal case/report state or send Slack/email. `--publish` explicitly enables
-persistence and configured delivery. Use `--full` for detailed device analysis.
+persistence and configured delivery.
 `--save-mcp-results` opts into raw MCP evidence retention; outputs can contain
 sensitive device configuration, so do not commit them.
 
@@ -292,7 +292,9 @@ Saved reports live under `state/diagnostic_mas/runs/<run-id>/` by default:
 contains a collapsible circular routing topology with IS-IS/BGP toggles, curved
 parallel links, device selection and endpoint evidence. No extra queries or
 external assets are needed. Open HTML in a browser; mail clients may disable its
-scripts in attachment previews.
+scripts in attachment previews. Each device entry also has a collapsed **Interfaces and
+hardware** block with interface counts, hardware readings and exceptions; this detail
+appears only in the HTML report.
 
 The topology shows discovery evidence, not reconciled later drill conclusions.
 Amber dashed device rings mean protocol-specific collection failed; click for

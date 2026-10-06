@@ -112,7 +112,7 @@ def test_result_line_timeout_quarantine_lists_operation_and_counts():
             code="device_live_unreachable",
             message=(
                 f"exec_show (isis adjacency): "
-                f"HTTPSConnectionPool(host='192.168.11.246', port=443): "
+                f"HTTPSConnectionPool(host='192.0.2.2', port=443): "
                 f"Read timed out. (read timeout=10)"
             ),
             evidence_ids=[],
@@ -1095,23 +1095,19 @@ def test_report_summary_before_body():
     text = render_report(
         case,
         summary="Two services passed additional operational checks.",
-        full=True,
     )
     assert "## Summary" in text
     assert "Two services passed" in text
     assert "## Changes since previous run" in text
     assert text.index("## Summary") < text.index("## Changes since previous run")
     assert text.index("## Changes since previous run") < text.index("## Devices")
-    assert "## Appendix: Detailed Device Analysis" in text
 
 
-def test_report_omits_detailed_devices_by_default():
+def test_report_never_carries_the_detailed_device_appendix():
     case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
-    default = render_report(case)
-    assert "Detailed Device Analysis" not in default
-    assert "--full" not in default
-    full = render_report(case, full=True)
-    assert "Appendix: Detailed Device Analysis" in full
+    text = render_report(case)
+    assert "Detailed Device Analysis" not in text
+    assert "--full" not in text
 
 
 def test_result_and_followup_group_unknowns_by_endpoint():
