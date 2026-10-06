@@ -6,7 +6,10 @@ from agent.config import (
     _parse_ignore_service_types,
     _parse_report_sections,
 )
-from agent.collect import _is_ignored_service_type, _select_service_types
+from nso_facts.service_collect import (
+    is_ignored_service_type as _is_ignored_service_type,
+    select_service_types as _select_service_types,
+)
 
 
 def test_report_sections_default_when_unset():
@@ -75,26 +78,6 @@ def test_mcp_args_verify_default_and_lab_override(monkeypatch):
     args = _mcp_args()
     assert "--nso-verify" in args
     assert "--nso-ca-bundle=/tmp/ca.pem" in args
-
-
-def test_max_service_types_default_and_cli_help():
-    from agent.config import DEFAULT_MAX_SERVICE_TYPES
-    from agent.run import main
-    import io
-    from contextlib import redirect_stdout, redirect_stderr
-    from unittest.mock import patch
-
-    assert DEFAULT_MAX_SERVICE_TYPES == 10
-    buf = io.StringIO()
-    with patch("sys.argv", ["nso-summary-run", "--help"]):
-        with redirect_stdout(buf), redirect_stderr(buf):
-            try:
-                main()
-            except SystemExit as exc:
-                assert exc.code == 0
-    help_text = buf.getvalue()
-    assert "--max-service-types" in help_text
-    assert "MAX_SERVICE_TYPES" in help_text
 
 
 def test_select_service_types_filters_idipa():

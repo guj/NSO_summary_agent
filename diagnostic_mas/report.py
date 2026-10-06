@@ -508,6 +508,14 @@ def format_service_details(services: dict[str, Any]) -> list[str]:
     return lines
 
 
+_SUMMARY_SUB_BULLET_LABEL = re.compile(r"^([ \t]+[-*][ \t]+)(Cause|Next):", re.MULTILINE)
+
+
+def _bold_summary_labels(text: str) -> str:
+    """Bold the Cause/Next label that opens a Summary sub-bullet."""
+    return _SUMMARY_SUB_BULLET_LABEL.sub(r"\1**\2:**", text)
+
+
 def render_report(
     case: CaseFile,
     *,
@@ -562,7 +570,7 @@ def render_report(
             summary.strip(),
             flags=re.IGNORECASE,
         )
-        lines.append(scrub_internal_ids(summary_body))
+        lines.append(_bold_summary_labels(scrub_internal_ids(summary_body)))
         lines.append("")
 
     if include_changes_section:

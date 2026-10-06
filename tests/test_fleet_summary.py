@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from agent.fleet_summary_thresholds import (
+from nso_facts.fleet_summary_thresholds import (
     FleetSummaryThresholds,
     load_fleet_summary_thresholds,
 )

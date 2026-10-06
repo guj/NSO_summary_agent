@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from agent.mcp_client import (
+from nso_facts.mcp_client import (
     _tool_data,
     build_mcp_payload,
     call_mcp,

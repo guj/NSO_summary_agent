@@ -20,7 +20,11 @@ load_dotenv(_ROOT / ".env")
 import time  # noqa: E402
 
 from agent.config import load_settings, resolve_dry_run  # noqa: E402
-from agent.fabric_key import prepare_fabric_llm  # noqa: E402
+from agent.fabric_key import (  # noqa: E402
+    get_fabric_api_key_lifetime,
+    prepare_fabric_llm,
+    resolve_fabric_model,
+)
 from agent.publish import publish_all  # noqa: E402
 from diagnostic_mas.case import Budget, CaseFile  # noqa: E402
 from diagnostic_mas.coordinator import (  # noqa: E402
@@ -45,7 +49,12 @@ from diagnostic_mas.state_paths import (  # noqa: E402
     diagnostic_mas_state_dir,
     persist_case,
 )
-from nso_facts.mcp_client import call_mcp, mcp_session  # noqa: E402
+from nso_facts.mcp_client import (  # noqa: E402
+    call_mcp,
+    mcp_error_message,
+    mcp_is_error,
+    mcp_session,
+)
 from nso_facts.mcp_accounting import (  # noqa: E402
     print_mcp_accounting,
     set_mcp_stage,
@@ -125,9 +134,78 @@ def _refilter_service_evidence(
         break
 
 
+async def _check_nso(settings) -> bool:
+    """Report whether the MCP server starts and NSO answers."""
+    try:
+        async with mcp_session(settings) as client:
+            tools = await client.list_tools()
+            print(f"MCP server: OK ({len(tools)} tools)")
+            try:
+                result = await call_mcp(client, "list_devices")
+            except Exception as exc:  # noqa: BLE001
+                print(f"NSO: FAILED — {exc}", file=sys.stderr)
+                return False
+    except Exception as exc:  # noqa: BLE001
+        print(f"MCP server: FAILED — {exc}", file=sys.stderr)
+        return False
+    if mcp_is_error(result):
+        print(f"NSO: FAILED — {mcp_error_message(result)}", file=sys.stderr)
+        return False
+    devices = parse_device_names(result)
+    if not devices:
+        print("NSO: FAILED — no devices returned", file=sys.stderr)
+        return False
+    print(f"NSO: OK ({len(devices)} devices)")
+    return True
+
+
+def _check_llm(settings) -> bool:
+    """Report whether the configured LLM key and model work; an unset key is not a failure."""
+    if not settings.fabric_api_key:
+        print("LLM: not configured (scans need --skip-llm)")
+        return True
+    lifetime = get_fabric_api_key_lifetime(settings)
+    reason = (
+        "key invalid or revoked" if lifetime.auth_invalid
+        else "key expired" if lifetime.is_expired
+        else "spend budget exceeded" if lifetime.budget_exhausted
+        else None
+    )
+    if reason is None:
+        model = resolve_fabric_model(settings)
+        if model.resolved:
+            print(f"LLM: OK (model {model.resolved})")
+            for line in (
+                lifetime.format_line() if lifetime.expires_at else None,
+                lifetime.format_allowance_line(),
+            ):
+                if line:
+                    print(f"  {line}")
+            return True
+        reason = model.detail or "model check failed"
+    print(f"LLM: FAILED — {reason}", file=sys.stderr)
+    return False
+
+
+async def _check_connection(settings, *, check_llm: bool) -> int:
+    """Pre-flight for a scan: MCP server, NSO, and the LLM unless skipped. No scan or state."""
+    ok = await _check_nso(settings)
+    if check_llm:
+        ok = _check_llm(settings) and ok
+    return 0 if ok else 1
+
+
 async def _run(args: argparse.Namespace) -> int:
-    settings = load_settings()
-    _, force_skip_llm = prepare_fabric_llm(settings)
+    if getattr(args, "check_connection", False):
+        return await _check_connection(
+            load_settings(require_llm_key=False),
+            check_llm=not getattr(args, "skip_llm", False),
+        )
+    # --skip-llm needs no LLM key and makes no request to the LLM endpoint.
+    settings = load_settings(require_llm_key=not args.skip_llm)
+    force_skip_llm = False
+    if not args.skip_llm:
+        _, force_skip_llm = prepare_fabric_llm(settings)
     skip_llm = bool(args.skip_llm or force_skip_llm or not settings.fabric_api_key)
     dry_run = resolve_dry_run(
         settings=settings,
@@ -648,6 +726,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--save-mcp-results",
         action="store_true",
         help="Archive complete MCP responses locally, including during dry runs; no publishing",
+    )
+    parser.add_argument(
+        "--check-connection",
+        action="store_true",
+        help=(
+            "Check the MCP server, NSO, and (unless --skip-llm) the LLM key and model, "
+            "then exit; no scan or publishing"
+        ),
     )
     parser.add_argument(
         "--skip-llm",

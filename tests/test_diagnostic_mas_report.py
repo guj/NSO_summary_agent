@@ -1344,3 +1344,53 @@ def test_service_layers_keep_sync_independent_and_require_dig_evidence():
     for b in counts.values():
         assert sum(b[k] for k in ('sync_in', 'sync_out', 'sync_unknown')) == b['total']
         assert sum(b[k] for k in ('dp_up', 'dp_down', 'dp_degraded', 'dp_unknown', 'dp_not_checked')) == b['total']
+
+
+def test_scrub_internal_ids_keeps_sub_bullet_indentation():
+    raw = (
+        "- **l2bridge a** — dataplane=down\n"
+        "  - Cause: no receive  light\n"
+        "  - Next: check the fibre"
+    )
+    assert scrub_internal_ids(raw) == (
+        "- **l2bridge a** — dataplane=down\n"
+        "  - Cause: no receive light\n"
+        "  - Next: check the fibre"
+    )
+
+
+_SUMMARY_WITH_SUB_BULLETS = (
+    "Seven l2bridge services are down.\n\n"
+    "- Next: review collection failures\n"
+    "- **l2bridge a** — dataplane=down\n"
+    "  - Cause: no receive light\n"
+    "  - Next: check the fibre\n"
+)
+
+
+def test_summary_sub_bullet_labels_are_bold():
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    text = render_report(case, summary=_SUMMARY_WITH_SUB_BULLETS)
+    assert "  - **Cause:** no receive light" in text
+    assert "  - **Next:** check the fibre" in text
+    # Only sub-bullets are labelled; a top-level bullet is left as written.
+    assert "\n- Next: review collection failures" in text
+
+
+def test_summary_sub_bullet_labels_already_bold_are_unchanged():
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    summary = "- **l2bridge a** — dataplane=down\n  - **Cause:** no receive light\n"
+    text = render_report(case, summary=summary)
+    assert "  - **Cause:** no receive light" in text
+    assert "****" not in text
+
+
+def test_summary_sub_bullet_labels_are_bold_in_html_report():
+    from diagnostic_mas.html_report import render_html_report
+
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    doc = render_html_report(
+        render_report(case, summary=_SUMMARY_WITH_SUB_BULLETS), "run"
+    )
+    assert "<li><strong>Cause:</strong> no receive light</li>" in doc
+    assert "<li><strong>Next:</strong> check the fibre</li>" in doc

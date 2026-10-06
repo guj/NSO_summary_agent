@@ -1,6 +1,6 @@
 """Tests for IOS-XR interface name normalization."""
 
-from agent.topology.interfaces import (
+from nso_facts.topology.interfaces import (
     canonical_interface_name,
     expand_interface_name,
     interfaces_match,

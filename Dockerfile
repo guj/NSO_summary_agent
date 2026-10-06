@@ -10,27 +10,26 @@ RUN apt-get update \
 
 # FABRIC MCP sources via BuildKit additional context (not pip+git).
 # Build with:
-#   docker build -t nso-summary-agent \
+#   docker build -t nso-diagnostic-agent \
 #     --build-context mcp=/path/to/fabric-nso-mcp-server \
 #     .
 # See docs/DOCKER.md
 COPY --from=mcp pyproject.toml README.md LICENSE* /tmp/fabric-nso-mcp-server/
 COPY --from=mcp cisco_nso_mcp_server /tmp/fabric-nso-mcp-server/cisco_nso_mcp_server
 
-# Editable install keeps Path(__file__) under /app so prompts/ and config/ resolve.
+# Editable install keeps Path(__file__) under /app so config/ resolves.
 COPY pyproject.toml README.md ./
 COPY agent ./agent
 COPY nso_facts ./nso_facts
 COPY nso_report ./nso_report
 COPY multi_agent ./multi_agent
 COPY diagnostic_mas ./diagnostic_mas
-COPY prompts ./prompts
 COPY config ./config
 
 RUN pip install --no-cache-dir /tmp/fabric-nso-mcp-server \
     && pip install --no-cache-dir -e . \
     && which cisco-nso-mcp-server \
-    && which nso-summary-run \
+    && which nso-diagnostic-run \
     && rm -rf /tmp/fabric-nso-mcp-server
 
 # In-image MCP binary (override with --env-file if needed)
@@ -40,5 +39,5 @@ ENV MCP_SERVER_CMD=cisco-nso-mcp-server \
 
 RUN mkdir -p /app/state
 
-ENTRYPOINT ["nso-summary-run"]
+ENTRYPOINT ["nso-diagnostic-run"]
 CMD []

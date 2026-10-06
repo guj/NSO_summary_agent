@@ -1,7 +1,7 @@
 [project]
 name = "nso-summary-agent"
 version = "0.1.0"
-description = "Scheduled NSO health summary agent (MCP collect + FABRIC AI summarize)"
+description = "NSO service diagnostic agent (MCP collection, operational checks, optional LLM investigation)"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -12,8 +12,6 @@ dependencies = [
 ]
 
 [project.scripts]
-nso-summary-run = "agent.run:main"
-nso-multi-agent-run = "multi_agent.run:main"
 nso-diagnostic-run = "diagnostic_mas.run:main"
 nso-diagnostic-delta = "diagnostic_mas.delta_cli:main"
 
@@ -31,8 +29,7 @@ packages = ["agent", "nso_facts", "nso_report", "multi_agent", "diagnostic_mas"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
-# Root resources used by the legacy runner are included in wheel installs.
+# Root config files are included in wheel installs.
 [tool.hatch.build.targets.wheel.force-include]
-"prompts" = "prompts"
 "config/fleet_summary_thresholds.yaml" = "config/fleet_summary_thresholds.yaml"
 "config/interface-equivalences.example.json" = "config/interface-equivalences.example.json"

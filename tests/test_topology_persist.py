@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from agent.topology.persist import (
+from nso_facts.topology.persist import (
     build_static_document,
     load_static_file,
     merge_services_layer,

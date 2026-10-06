@@ -67,12 +67,34 @@ def _slack_boldify(text: str) -> str:
     return text
 
 
+def _list_html(items: list[tuple[int, str, str]]) -> list[str]:
+    """Render (indent, tag, text) items; deeper-indented items nest in the item above."""
+    out: list[str] = []
+    i = 0
+    while i < len(items):
+        indent, tag, _ = items[i]
+        out.append(f"<{tag}>")
+        while i < len(items) and items[i][:2] == (indent, tag):
+            end = i + 1
+            while end < len(items) and items[end][0] > indent:
+                end += 1
+            text = _inline_html(items[i][2])
+            if end > i + 1:
+                out.append(f"<li>{text}")
+                out.extend(_list_html(items[i + 1 : end]))
+                out.append("</li>")
+            else:
+                out.append(f"<li>{text}</li>")
+            i = end
+        out.append(f"</{tag}>")
+    return out
+
+
 def markdown_to_html(md: str) -> str:
     """Subset markdown → simple HTML document suitable for email clients."""
     body: list[str] = []
     paras: list[str] = []
-    list_items: list[str] = []
-    list_tag: str | None = None
+    list_items: list[tuple[int, str, str]] = []
     in_fence = False
     fence_lines: list[str] = []
 
@@ -83,14 +105,9 @@ def markdown_to_html(md: str) -> str:
             paras = []
 
     def flush_list() -> None:
-        nonlocal list_items, list_tag
-        if list_tag and list_items:
-            body.append(f"<{list_tag}>")
-            for item in list_items:
-                body.append(f"<li>{_inline_html(item)}</li>")
-            body.append(f"</{list_tag}>")
+        nonlocal list_items
+        body.extend(_list_html(list_items))
         list_items = []
-        list_tag = None
 
     def flush_fence() -> None:
         nonlocal fence_lines
@@ -139,19 +156,13 @@ def markdown_to_html(md: str) -> str:
         um = _UL.match(raw)
         if um:
             flush_para()
-            if list_tag != "ul":
-                flush_list()
-                list_tag = "ul"
-            list_items.append(um.group(3))
+            list_items.append((len(um.group(1).expandtabs(4)), "ul", um.group(3)))
             continue
 
         om = _OL.match(raw)
         if om:
             flush_para()
-            if list_tag != "ol":
-                flush_list()
-                list_tag = "ol"
-            list_items.append(om.group(3))
+            list_items.append((len(om.group(1).expandtabs(4)), "ol", om.group(3)))
             continue
 
         flush_list()

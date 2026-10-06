@@ -1,259 +1,194 @@
-# FAQ — NSO summary agent
+# FAQ — NSO diagnostic report
 
-Common questions about the Devices / topology sections of the ops summary.
+Common questions about reading the report from `nso-diagnostic-run`. To install and run the
+agent, see [DIAGNOSTIC_RUNNER.md](DIAGNOSTIC_RUNNER.md).
 
-## Topology basics
+## The report
 
-### What is a static edge vs an operational edge?
+### What sections does the report have?
 
-Two views of the **same** links (interfaces, IS-IS, BGP):
+In order: **Summary**, **Changes since previous run**, **Devices**, **Services**,
+**Recommended follow-up**, **Run configuration** and **Run details**. The Summary is written by
+the LLM and is omitted with `--skip-llm`. Findings from LLM investigations appear under the
+service they concern; the rest of the report is deterministic.
 
-| | **Static** | **Operational** |
-|---|------------|-----------------|
-| Meaning | What **config says** should exist | What is **true right now** |
-| Stored | `state/topology.static.json` (and copied into each snapshot as `topology.static`) | Inside each run snapshot only: `topology.operational` (not its own file) |
-| Content | Edge inventory: `id`, `local` / `remote` | Live `state` keyed by the same `id` |
-| Updated | When config / device inventory changes (or force rebuild). **Services** edges are also refreshed **every run** into the static file | Every `nso-summary-run` |
+The HTML report adds **Service topology** and **Routing topology**. Only Services and Recommended
+follow-up start expanded; open any other section by clicking its heading or its link in the
+navigation bar. The search box filters by service ID, device, type or evidence text.
 
-The Devices report **joins** them by edge `id`.
+### How do I see the topology?
 
-### Where do interface names like `HundredGigE0/0/0/9` come from?
-
-From **NSO device config (CDB)** via `explore_nso_path` / `get_device_config` — the long YANG/config form — not from `show interfaces summary`.
-
-Live status uses `show interfaces brief`, which prints short names (`Hu…`). The agent matches long ↔ short with deterministic prefix maps (`HundredGigE`↔`Hu`, `TwentyFiveGigE`↔`TF`, `BVI`↔`BV`, …).
-
----
-
-## Counts that look “wrong”
-
-### Why are fewer interfaces in the summary than on the device?
-
-**Different inventories.**
-
-| Source | What it counts |
-|--------|----------------|
-| Devices → `interfaces` | Interfaces present in **NSO config** (static physical edges) |
-| `show interfaces brief` / `summary` ALL TYPES | **Every** interface the router knows (config + platform defaults + tunnels, etc.) |
-
-Example on `uky-data-sw`: static had **43**; `show interfaces summary` reported **49**. Typical extras not in NSO config (or not discovered under the interface tree): `Null0`, `MgmtEth`, Bundle-Ether, SRTE tunnels, extra BVIs, subifs present only live, etc.
-
-The summary intentionally tracks **configured** interfaces so it stays aligned with NSO intent.
-
-### Why does BGP / IS-IS show 2 when `show` lists 3?
-
-The Devices rollup counts **peers between NSO-managed devices in this topology graph**, not every CLI neighbor.
-
-Live rows whose neighbor cannot be mapped to an NSO device are listed under **unmapped**, for example:
-
-```text
-  BGP peers: 2 (up 2)
-    - unmapped (1): 10.133.0.1
-  IS-IS adjacencies: 2 (up 2)
-    - unmapped (1): star-data-sw
-```
-
-So `2` = fabric peers; `unmapped` explains the rest of what you see on the box.
-
-### Why is `layers.services` edge count much smaller than service instance count?
-
-**Edges are endpoint pairs, not instances.**
-
-| Count | What it means |
-|-------|----------------|
-| `snapshot.services` / Service Summary | One row per **service instance** (health) |
-| `topology.*.layers.services.summary.total` | One edge per **device pair** on an instance (or one local-only edge if a single device) |
-
-Examples:
-
-- One l2ptp with devices `lbnl-data-sw` + `renc-data-sw` → **1** edge (`svc:l2ptp:…:lbnl-data-sw:renc-data-sw`)
-- One instance on three devices → **3** edges (all unique pairs)
-- Single-device service (e.g. some bridges) → **1** edge with `remote: null` (id ends in `_local`)
-- Instance with **no** devices extracted → **0** edges + low issue `service_no_devices`
-
-Also only **in-scope** types/instances appear (same filters as collect: `IGNORE_SERVICE_TYPES`, `MAX_SERVICE_TYPES`). Types never returned by `get_service_types` (e.g. some fabnet*) never show up.
-
-Operational `up` / `down` / … on the services layer count **edges**, so a 3-device `down` instance contributes **3** to `down`. Topology issues are still **one per instance** (`service_down`, etc.), keyed to the lex-smallest edge id.
-
-Health tables and Devices service lines still use `snapshot.services` — unchanged.
-
-### Why is a service `unknown` when it looks fine / in-sync?
-
-Instance overall status (`up` / `down` / `degraded` / `unknown`) comes from
-`nso_facts.health.classify_instance` (sync layer) combined with optional
-dataplane conclusions (`apply_dataplane_status`).
-
-**Rule:** a query failure describes the investigation; **Down** describes the
-service.
-
-| Status | When |
-|--------|------|
-| **Down** | Positive evidence a required path failed (required AC/XC/segment DN, missing required route in context, scoped traffic failure). May come from dataplane/live evidence even if root cause is unresolved. |
-| **Unknown** | Not enough evidence: NSO/device query timeout, tool error/unsupported/truncated, `in_sync=None`, LLM timeout before conclusion. Sync/device “unreachable” from NSO is also unknown for the *service*. |
-| **Degraded** | Config out-of-sync (drift), or one redundant path failed while another still carries the service. In-sync does **not** prove forwarding works. |
-
-`parse_in_sync` must accept several MCP shapes. In particular, some responses
-put the answer in **`data.sync_state`** (e.g. `"in-sync"`), not only
-`data.in_sync`. If the parser ignores `sync_state` and fleet sync was skipped,
-every instance can land on **unknown** even though NSO reports in-sync.
-
-Some pockets (including this lab) return `in_sync=null` / `outcome=unknown` for
-every `check_service_sync`. Set **`NSO_SERVICE_SYNC_MODE=skip`** to skip those
-MCP calls and classify system status from endpoint fleet sync instead (one note
-directly under the Services table). **SystemUp** starts from that fleet sync:
-no dig or an incomplete dig keeps SystemUp; dig-confirmed down or degraded
-demotes. Dataplane verification stays separate.
-Default remains **`check`** for deployments where service sync works.
-
-Lean `/nso-service type=…` still calls fleet sync for this reason, and the
-parser checks `in_sync` / `in-sync` / `sync_state` / `result` under `data` and
-`data.details`.
-
-### Why was an interface `unknown` (e.g. `FourHundredGigE0/0/0/34`)?
-
-`unknown` means: in static config, but **not matched** to a live `interfaces brief` row (detail often `not in interfaces brief`).
-
-Devices shows **NSO → box**:
-
-- `→ Hu0/0/0/32  [suggested]` — heuristic (same port address / breakout); not admin-approved
-- `→ (not on box)` — no live candidate (phantom / truly missing)
-- After admin confirms in `INTERFACE_EQUIVALENCES_FILE`, the edge uses the box name for status and leaves the `unknown` group (`[confirmed]` only appears when a confirmation failed)
-
-Common causes:
-
-1. **Speed / breakout drift** — NSO still has `FourHundredGigE…/32` while the box shows `Hu…/32` or `Te…/36/0–3`.
-2. **Stale / phantom config** — NSO lists a port the box doesn’t have.
-3. **Collection error** — `exec_show interfaces brief` failed for that device.
-
-Admin mappings live under `config/` by convention (any path works via env):
-
-- `config/to_confirm.interface-equivalence.json` — draft of **suggested** matches (rewritten each run). When present, Devices opens with **Action required:** *N* unconfirmed … — review that file
-- `config/interface-equivalences.json` — **confirmed** rows only; point `INTERFACE_EQUIVALENCES_FILE` here
-- `config/interface-equivalences.example.json` — schema example
-
-Do not set `INTERFACE_EQUIVALENCES_FILE` to the `to_confirm` draft until you have reviewed it (empty `box` rows are phantoms — fix NSO config, don’t confirm). After review, copy keepers into `interface-equivalences.json`.
+Open the HTML report and expand **Routing topology** (IS-IS and BGP relationships between devices)
+or **Service topology** (which devices each service attaches to, coloured by final status). The
+legend and limits are described under
+[Reports and topology](DIAGNOSTIC_RUNNER.md#reports-and-topology). There is no separate graph export.
 
 ---
 
-## Status interpretation
-
-### How is interface status determined?
-
-1. Inventory = static interface names for that device.
-2. Live = one `show interfaces brief` per device (Intf State + LineP State).
-3. Devices reports a **single Status/Protocol pair** per interface:
-
-| Label | Meaning |
-|-------|---------|
-| **up/up** | Admin up, protocol up (healthy) |
-| **up/down** | Admin up, protocol down (link problem) |
-| **down/down** | Admin down and protocol down |
-| **admin-down** | Administratively shut |
-| **unknown** | In NSO config, not found in brief |
-
-Example:
-
-```text
-  interfaces: 43 (up/up 20, up/down 5, down/down 10, admin-down 7, unknown 1)
-    - up/down (5)
-        ...
-    - down/down (10)
-        ...
-    - admin-down (7)
-        ...
-    - unknown (1)
-        ...
-```
-
-Only non-`up/up` interfaces are listed under the rollup. (`down/up` is rare but would appear if seen.)
-
-### How is BGP peer status determined?
-
-From `show bgp summary` (or `show bgp ipv4 unicast summary`). On IOS-XR, an up peer’s `St/PfxRcd` column is often a **prefix count** (`0`, `445667`), not the word `Established`. The parser treats a numeric last field as Established (Idle/Active/… words still mean down).
-
-`St/PfxRcd` = **State / Prefixes Received**: a number means up (+ how many prefixes received); a word means FSM state (not established).
-
-### Why might BGP have shown `down` while peers looked up?
-
-Before the numeric `St/PfxRcd` fix, established peers were parsed as `unknown`, and `unknown`+`unknown` was classified as **down**. Re-run after that fix so statuses refresh.
-
----
-
-## Report layout
-
-### What does `BGP peers: 2 (up 2)` mean?
-
-The first number is the **total** of NSO-mapped sessions/adjacencies for that device. The parentheses are a **status breakdown of that same total** (the parts sum to the first number).
-
-Examples:
-
-| Line | Meaning |
-|------|---------|
-| `BGP peers: 2 (up 2)` | 2 peers total; both up |
-| `BGP peers: 2 (up 1, down 1)` | 2 peers total; mixed status |
-| `interfaces: 43 (up 20, down 15, admin-down 3, unknown 5)` | 43 configured interfaces; status split |
-
-**Unmapped** live neighbors (outside the NSO inventory) are listed separately and are **not** included in that total.
+## Devices
 
 ### What does the Devices section show?
 
-The report is two parts when `executive` is in `REPORT_SECTIONS` (default):
-
-1. **Executive Summary** — Overall Status + Action Items (FABRIC), **Fleet Summary** (Python), Changes / Service Summary / Device Health, then **Operational Assessment** (FABRIC, one paragraph)  
-2. **Detailed Device Analysis** — ASCII banner, then per-device Status + Observations (and optional ignored types):
-
-CPU/memory alert thresholds for Fleet Summary → `config/fleet_summary_thresholds.yaml`.
-
-Fleet Summary **Infrastructure** also lists Temperature / Fan / Power Supply / Control Plane Drop alerts from MCP `get_hardware_health` (any non-normal sensor, failed fan/PSU, or Σ control-plane drops > 0, counted per device). In Detailed Device Analysis, each device has a **Hardware** block; categories with no usable data show `Unavailable`.
+One block per device:
 
 ```text
-=====================================================
-Detailed Device Analysis
-=====================================================
+### site-a-data-sw
+
+**NSO sync:** In sync
+**Health:** Interface and hardware checks reported healthy
+**Routing:** BGP 2/2 up · IS-IS 2/2 up
 ```
 
-Per device under that banner (sorted by name), a bannered device block with Status
-(Overall + Reason), Routing, Routes, Services, Interfaces summary, and Exceptions
-(inventory mismatch / operational down / unmapped peers / live-not-in-static —
-admin-down stays in the Interfaces summary only). Live interfaces not in static
-config appear under Exceptions only; they do **not** change Interface totals or
-Inventory Review health.
+An **Attention** line or list follows when something about that device needs a look. For the
+detailed per-device analysis, run with `--full`; it adds **Appendix: Detailed Device Analysis**.
 
-Sections in the full report are controlled by `REPORT_SECTIONS` (see README). FABRIC AI writes **Problems / Failures** when that section is enabled, and optionally **Infrastructure Health** if `system_health` is listed (usually omit — Fleet Summary covers CPU/memory alerts). Omit `problems` / `system_health` to skip those LLM calls. CPU/memory is still collected when `executive` is enabled (for Fleet Summary). Hardware health (`get_hardware_health`) is collected when `executive` or `devices` is enabled.
+### What do the NSO sync values mean?
 
-### Is topology data in Prometheus?
+| Value | Meaning |
+|-------|---------|
+| `In sync` | NSO reports the device configuration in sync |
+| `Unknown — sync verification failed (…)` | The sync check errored or gave no answer. This is not evidence of drift or of an outage |
+| `Not collected` | No sync result was gathered for this device in this run |
+| Anything else, such as `locked` or `out-of-sync` | NSO's own result, shown as returned |
 
-**Phase 1+ gauges are pushed** when `PROMETHEUS_PUSHGATEWAY_URL` is set (see `deploy/monitoring/`). Each successful non-dry-run posts rollups such as fleet sync/in-sync/out-of-sync, services, ISIS/BGP/physical, topology issues, infra/hardware alerts, inventory review, delta counts, plus run success/duration/timestamp. Every series is labeled `pipeline="agent"` or `pipeline="multi-agent"`. Unset URL → skip. Pushgateway down → warning only; the report still completes.
+### How do I read the Health line?
 
-Full topology graphs are **not** exported — only counts.
+`Interface and hardware checks reported healthy` means nothing was flagged. Otherwise the line lists
+what was observed, then two labels:
 
-### How do I get a topology graph image?
-
-Use Graphviz. From the repo root (install Graphviz first, e.g. `brew install graphviz`):
-
-```bash
-# Script writes DOT and renders
-python3 scripts/export_topology_dot.py -o topo.dot --render png
-
-# Same result in two steps
-python3 scripts/export_topology_dot.py -o topo.dot
-dot -Tpng topo.dot -o topo.png
+```text
+**Health:** NSO↔device interface mapping unconfirmed; control-plane drop counter=1,234 recorded. Labels: interfaces=Inventory Review; hardware=Review. Review is a triage flag from this run's checks — do not treat it as a confirmed hardware fault (use --full).
 ```
 
-Defaults to underlay + routing links. Add services pairs (and single-device self-loops):
+| Observation | Meaning |
+|-------------|---------|
+| `NSO↔device interface mapping unconfirmed` | At least one interface in NSO configuration could not be matched to a live interface on the device (label `interfaces=Inventory Review`) |
+| `interface admin/oper up/down observed` | At least one configured interface is administratively up with its line protocol down |
+| `control-plane drop counter=N recorded` | The device's control-plane drop counters add up to N (label `hardware=Review`) |
+| `temperature sensor not ok`, `fan status not ok`, `power supply status not ok` | The hardware-health query returned a non-normal reading |
 
-```bash
-python3 scripts/export_topology_dot.py -i state/topology.static.json \
-  --layers underlay,routing,services -o topo.dot --render png
+`hardware=Unavailable` means no usable hardware-health data was returned for the device.
+`Interface and hardware status not collected for this run` means neither was gathered.
+
+### Why do so many devices show `hardware=Review`?
+
+Any non-zero control-plane drop counter sets it, and those counters are cumulative: one old burst
+keeps the flag until the counters are cleared on the device. Treat it as a prompt to look, not as a
+fault. Historical drop counters alone are not urgent.
+
+### What does "interface mapping unconfirmed" mean, and how do I clear it?
+
+An interface exists in NSO configuration but was not found among the device's live interfaces.
+Common causes:
+
+1. **Speed or breakout drift.** NSO still has `FourHundredGigE…/32` while the device shows `Hu…/32`
+   or breakout members such as `Te…/36/0–3`.
+2. **Stale configuration.** NSO lists a port the device does not have.
+3. **Collection error.** The live interface query failed for that device.
+
+For case 1, an administrator can record the confirmed NSO-to-device name mapping in a JSON file
+and point `INTERFACE_EQUIVALENCES_FILE` at it. The schema is shown in
+`config/interface-equivalences.example.json`. For case 2, correct the NSO configuration instead.
+
+### Where do names like `HundredGigE0/0/0/9` and `Hu0/0/0/9` come from?
+
+The long form comes from NSO device configuration. The short form is what the device prints in live
+`show` output. The agent matches the two with fixed prefix maps (`HundredGigE`↔`Hu`,
+`TwentyFiveGigE`↔`TF`, `BVI`↔`BV`, and so on), so both forms can appear in evidence.
+
+### How are the BGP and IS-IS counts calculated?
+
+`BGP 2/2 up` means two sessions between this device and other devices in the NSO inventory, both
+up. Neighbors outside the NSO inventory are not counted, so the number can be lower than what
+`show bgp summary` lists on the device. Those neighbors appear under Attention instead:
+
+```text
+**Attention:** BGP neighbor could not be mapped to NSO inventory. site-a-data-sw 192.0.2.1: could not map neighbor address to NSO device
 ```
 
-See [README — Graphviz export](../README.md#graphviz-export-scriptsexport_topology_dotpy).
+`N/A` means no sessions to inventory devices were found for that protocol.
+
+### What does "(initial; peer live checks unavailable)" mean?
+
+```text
+**Routing:** BGP 2/2 up (initial; peer live checks unavailable) · IS-IS 2/2 up
+```
+
+The count comes from the first collection pass, but for at least one session the other end could
+not be checked live in this run, so the session was not verified from both sides. When a follow-up
+check confirms the session from the reachable side, a **Drill:** line says so. An unverified far
+end is a gap in evidence, not a sign that the session is down.
+
+### How is BGP peer state read from the device?
+
+From `show bgp summary`. On IOS-XR the `St/PfxRcd` column holds a prefix count for an established
+peer (for example `0` or `445667`) and a state word such as `Idle` or `Active` otherwise. A number
+is treated as Established.
+
+### What goes under Attention?
+
+- A BGP or IS-IS neighbor that could not be mapped to a device in the NSO inventory.
+- A device whose automated live queries timed out or failed. Further live queries to it are skipped
+  for the rest of the run. NSO configuration may still be present and manual access may still work,
+  so this is not proof that the device is down.
+
+---
+
+## Services
+
+### How do I read the Services table?
+
+```text
+| Service type | Total | OpUp | Down | Degraded | Unknown |
+```
+
+Each service is counted once, and the four status columns add up to Total.
+
+| Status | Meaning |
+|--------|---------|
+| **OpUp** | Required PE-side operational checks passed, by the basic checks or a supported LLM conclusion. Customer traffic delivery was not tested |
+| **Down** | A required service component or path is confirmed failed |
+| **Degraded** | Confirmed partial impairment |
+| **Unknown** | The sync prerequisite failed, or operational evidence is insufficient |
+
+In the HTML report, expand a count to see what produced it, for example a basic operational pass
+or an LLM conclusion. The "basic operational checks" lines under the table report the deterministic
+checks for each service type; they are separate from LLM dataplane investigation.
+
+### Why did only some services get an LLM investigation?
+
+Services whose endpoint devices are in sync and that pass the basic operational checks are not
+sent to the LLM; the report gives the number skipped. The remaining services are investigated
+within the limits set by `--max-dataplane-per-category` and `--max-dataplane-services`.
+Per-service sections appear only for services that were investigated or have a fault; add
+`--services-detail` to list every instance.
+
+### Why is a service Unknown when it looks fine?
+
+Unknown describes the investigation, not the service. It means there was not enough evidence:
+a query to NSO or the device timed out, a tool returned an error, a device was skipped after a
+failed live query, the sync check gave no answer, or the LLM stopped before reaching a conclusion.
+None of these alone proves an outage. Down requires positive evidence that a required component or
+path failed.
+
+Some NSO deployments return no usable answer from `check_service_sync` for every service. In that
+case set `NSO_SERVICE_SYNC_MODE=skip`: the per-service sync calls are skipped and configuration
+sync is taken from the endpoint devices' fleet sync instead. The default is `check`.
+
+---
+
+## Metrics
+
+### Is report data in Prometheus?
+
+When `PROMETHEUS_PUSHGATEWAY_URL` is set, each published run pushes count rollups to the
+Pushgateway, labelled `pipeline="diagnostic"`. Dry runs do not push, and `--skip-metrics` turns the
+push off for one run. Only counts are exported, not the topology itself. See `deploy/monitoring/`.
 
 ---
 
 ## Related docs
 
-- [Diagnostic runner guide](DIAGNOSTIC_RUNNER.md) — work done on 2026-07-13
-- [Diagnostic runner guide](DIAGNOSTIC_RUNNER.md) — services topology layer (Phase 3)
-- [Topology design](../nso_facts/topology/docs/DESIGN.md) — static vs operational design
-- [README.md](../README.md) — `REPORT_SECTIONS`, run instructions
+- [Diagnostic runner guide](DIAGNOSTIC_RUNNER.md) — install, run, and read the report
+- [Topology design](../nso_facts/topology/docs/DESIGN.md) — design notes for the topology facts layer
+- [README.md](../README.md) — setup, environment variables, delivery and scheduling

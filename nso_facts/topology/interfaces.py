@@ -1,7 +1,7 @@
 """Interface name normalization (IOS-XR show vs config naming).
 
 NSO/YANG config uses long names (HundredGigE…); show parsers return
-abbreviated CLI names (Hu…). See agent/topology/docs/DESIGN.md
+abbreviated CLI names (Hu…). See nso_facts/topology/docs/DESIGN.md
 #ios-xr-interface-names-nso-config-vs-show-output.
 """
 

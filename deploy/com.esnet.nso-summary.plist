@@ -6,7 +6,8 @@
     <string>net.esnet.nso-summary-agent</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/path/to/checkout/.venv/bin/nso-summary-run</string>
+        <string>/path/to/checkout/.venv/bin/nso-diagnostic-run</string>
+        <string>--publish</string>
     </array>
     <key>WorkingDirectory</key>
     <string>/path/to/checkout</string>

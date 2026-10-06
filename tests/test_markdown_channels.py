@@ -175,3 +175,66 @@ def test_publish_all_generates_html_when_empty():
 
     assert sent_html and sent_html[0]
     assert "<h1>" in sent_html[0]
+
+
+def _list_items(document: str) -> list[tuple[int, str]]:
+    """Return (nesting depth, own text) per <li>; reject a list nested outside an <li>."""
+    from html.parser import HTMLParser
+
+    class _Lists(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.open: list[str] = []
+            self.filling: list[list] = []
+            self.items: list[list] = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag in ("ul", "ol"):
+                assert not self.open or self.open[-1] == "li"
+                self.open.append(tag)
+            elif tag == "li":
+                item = [sum(t != "li" for t in self.open), ""]
+                self.items.append(item)
+                self.filling.append(item)
+                self.open.append(tag)
+
+        def handle_endtag(self, tag):
+            if tag in ("ul", "ol", "li"):
+                assert self.open.pop() == tag
+                if tag == "li":
+                    self.filling.pop()
+
+        def handle_data(self, data):
+            if self.filling:
+                self.filling[-1][1] += data
+
+    parser = _Lists()
+    parser.feed(document)
+    assert not parser.open
+    return [(depth, text.strip()) for depth, text in parser.items]
+
+
+def test_markdown_to_html_nests_indented_bullets():
+    md = (
+        "- **l2bridge a** — dataplane=down\n"
+        "  - Cause: no receive light\n"
+        "  - Next: check the fibre\n"
+        "- **l2bridge b** — dataplane=degraded\n"
+        "  - Cause: one AC down\n"
+    )
+    assert _list_items(markdown_to_html(md)) == [
+        (1, "l2bridge a — dataplane=down"),
+        (2, "Cause: no receive light"),
+        (2, "Next: check the fibre"),
+        (1, "l2bridge b — dataplane=degraded"),
+        (2, "Cause: one AC down"),
+    ]
+
+
+def test_markdown_to_html_nests_bullets_under_numbered_item():
+    md = "1. Fix the optic\n   - port Hu0/0/0/24\n2. Recheck the bridge\n"
+    assert _list_items(markdown_to_html(md)) == [
+        (1, "Fix the optic"),
+        (2, "port Hu0/0/0/24"),
+        (1, "Recheck the bridge"),
+    ]

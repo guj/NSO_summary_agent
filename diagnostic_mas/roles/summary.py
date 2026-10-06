@@ -32,7 +32,8 @@ def scrub_internal_ids(text: str) -> str:
     """Remove is_/ev_/ho_/hy_ citations from model prose."""
     cleaned = _GROUNDED_IN_IDS_RE.sub("", text)
     cleaned = _INTERNAL_ID_RE.sub("", cleaned)
-    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    # Collapse runs inside a line only; leading indentation marks sub-bullets.
+    cleaned = re.sub(r"(?<=\S)[ \t]{2,}", " ", cleaned)
     cleaned = re.sub(r" +\n", "\n", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()

@@ -1,6 +1,6 @@
 """Tests for per-instance health classification."""
 
-from agent.health import (
+from nso_facts.health import (
     build_device_sync_map,
     build_instance_record,
     classify_instance,

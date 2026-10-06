@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from agent.topology.iface_equiv import (
+from nso_facts.topology.iface_equiv import (
     build_suggested_equivalences_draft,
     compact_box_list,
     find_live_candidates,

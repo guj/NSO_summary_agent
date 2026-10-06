@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from agent.config import Settings
-from agent.metrics import (
+from nso_facts.metrics import (
     build_phase1_metrics,
     format_exposition,
     push_phase1_metrics,

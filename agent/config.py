@@ -175,13 +175,13 @@ def _parse_max_retries(raw: str | None) -> int:
     return value
 
 
-def load_settings() -> Settings:
+def load_settings(*, require_llm_key: bool = True) -> Settings:
     nso_password = os.environ.get("NSO_PASSWORD")
     if not nso_password:
         raise RuntimeError("NSO_PASSWORD is required")
 
-    fabric_key = os.environ.get("FABRIC_AI_API_KEY")
-    if not fabric_key:
+    fabric_key = os.environ.get("FABRIC_AI_API_KEY") or ""
+    if require_llm_key and not fabric_key:
         raise RuntimeError("FABRIC_AI_API_KEY is required")
 
     nso_address = os.environ.get("NSO_ADDRESS")

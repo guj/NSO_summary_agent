@@ -1,6 +1,6 @@
 """Tests for topology graph helpers."""
 
-from agent.topology.graph import (
+from nso_facts.topology.graph import (
     interface_edge_id,
     service_edge_id,
     summarize_issues,

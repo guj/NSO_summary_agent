@@ -3,7 +3,7 @@
 Optional **Pushgateway → Prometheus → Grafana** stack for NSO summary time-series metrics. The NSO agent runs on the **host** (cron/launchd); this compose file runs the metrics backends in Docker.
 
 ```
-nso-summary-run (host)  --POST-->  Pushgateway :9091
+nso-diagnostic-run (host)  --POST-->  Pushgateway :9091
                                          ^
 Prometheus :9090  ---------------- scrape
        |

@@ -1,6 +1,6 @@
 """Tests for services topology layer builders."""
 
-from agent.topology.services import (
+from nso_facts.topology.services import (
     build_operational_service_edges,
     build_operational_services_layer,
     build_static_service_edges,

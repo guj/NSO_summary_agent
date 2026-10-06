@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from agent.topology.physical import (
+from nso_facts.topology.physical import (
     parse_configured_interface_names,
     parse_interfaces_brief,
     parse_interfaces_summary,
@@ -218,7 +218,7 @@ async def test_collect_static_physical_builds_edges():
     )
 
     async def call_mcp(client_arg, tool, params=None):
-        from agent.mcp_client import _tool_data
+        from nso_facts.mcp_client import _tool_data
 
         result = await client_arg.call_tool(tool, {"params": params or {}})
         return _tool_data(result)
@@ -283,7 +283,7 @@ async def test_collect_operational_physical_marks_down_and_unexpected():
     client = FakeClient({("exec_show", "sw1"): brief})
 
     async def call_mcp(client_arg, tool, params=None):
-        from agent.mcp_client import _tool_data
+        from nso_facts.mcp_client import _tool_data
 
         result = await client_arg.call_tool(tool, {"params": params or {}})
         return _tool_data(result)
@@ -342,7 +342,7 @@ Hu0/0/0/32                     up         up                 ARPA   1514       1
     client = FakeClient({("exec_show", "renc"): brief})
 
     async def call_mcp(client_arg, tool, params=None):
-        from agent.mcp_client import _tool_data
+        from nso_facts.mcp_client import _tool_data
 
         result = await client_arg.call_tool(tool, {"params": params or {}})
         return _tool_data(result)
@@ -395,7 +395,7 @@ Hu0/0/0/32                     down       down               ARPA   1514       1
     }
 
     async def call_mcp(client_arg, tool, params=None):
-        from agent.mcp_client import _tool_data
+        from nso_facts.mcp_client import _tool_data
 
         result = await client_arg.call_tool(tool, {"params": params or {}})
         return _tool_data(result)

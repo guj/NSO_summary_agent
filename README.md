@@ -14,20 +14,18 @@ LLM settings use the env names `FABRIC_AI_API_KEY`, `FABRIC_AI_API_URL`, and
 `FABRIC_AI_API_URL` must speak the OpenAI chat API (`/v1/chat/completions`);
 Anthropic-only bases (for example `…/anthropic`) are not supported.
 
-See [docs/DIAGNOSTIC_RUNNER.md](docs/DIAGNOSTIC_RUNNER.md) for the current diagnostic workflow and report.
-
-**New here?** Start with [docs/TRY_ME_OUT.md](docs/TRY_ME_OUT.md) — install, smoke checks, and common ways to run the agent. Prefer containers? See [docs/DOCKER.md](docs/DOCKER.md).
+**Quick start:** follow [docs/DIAGNOSTIC_RUNNER.md](docs/DIAGNOSTIC_RUNNER.md) to install, configure, and run `nso-diagnostic-run`.
 
 ## Prerequisites
 
 - Python 3.12+
-- Running [fabric-nso-mcp-server](https://github.com/fabric-testbed/fabric-nso-mcp-server) (same binary as Cursor `myNso` MCP)
+- Running [fabric-nso-mcp-server](https://github.com/fabric-testbed/fabric-nso-mcp-server)
 - Optional LLM API access via `FABRIC_AI_API_KEY` / `FABRIC_AI_API_URL` / `FABRIC_AI_MODEL` (OpenAI-compatible). Run `nso-diagnostic-run --skip-llm` without a model. Free/institutional access depends on provider eligibility and quotas; paid endpoints also work. See [model choices and our trial experience](docs/DIAGNOSTIC_RUNNER.md#running-without-an-llm-and-choosing-a-model).
 
 ## Diagnostic runner: standalone checkout
 
 All diagnostic code, service prompts, operational checks and HTML topology assets
-are included here. No sibling NSO_summary_agent directory is required. Install
+are included here. No other checkout is required. Install
 and configure this checkout as below, then see [the diagnostic guide](docs/DIAGNOSTIC_RUNNER.md).
 The external Cisco NSO MCP server must be installed separately and reachable via
 `MCP_SERVER_CMD`; this repository does not vendor that server or credentials.
@@ -37,7 +35,7 @@ The external Cisco NSO MCP server must be installed separately and reachable via
 Prefer Docker (no local Python venv)? See [docs/DOCKER.md](docs/DOCKER.md).
 
 ```bash
-cd /path/to/NSO_summary_agent
+cd /path/to/checkout
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
@@ -163,8 +161,8 @@ If you run on a schedule (cron/launchd), ensure that job sources the same `.env`
 
 ```bash
 set -a && source .env && set +a
-nso-summary-run --dry-run
-# stderr should show the new expiry and the run should complete
+nso-diagnostic-run --dry-run
+# stderr shows the new expiry before collection starts
 ```
 
 **Clean up:** delete the old key in Credential Manager after the new key works, so you are not unsure which key is active.
@@ -174,23 +172,29 @@ nso-summary-run --dry-run
 ## Run
 
 ```bash
-# List MCP tools (connectivity check)
-nso-summary-run --list-tools
+# Check the MCP server, NSO login and LLM key before a scan
+nso-diagnostic-run --check-connection
 
-# Collect only — no LLM, no state update
-nso-summary-run --skip-llm --dry-run
+# Live collection and operational checks; no LLM, nothing saved or sent
+nso-diagnostic-run --skip-llm --dry-run
 
-# Full run: collect → delta → FABRIC summary → save state/
-nso-summary-run
+# LLM-assisted diagnosis, report to stdout only
+nso-diagnostic-run --dry-run
 
-# Print summary but do not write latest.json or Slack
-nso-summary-run --dry-run
+# One service (replace with its exact ID)
+nso-diagnostic-run --service-only --service-id SERVICE_ID --dry-run
+
+# Save the case and reports, and deliver to configured Slack/email
+nso-diagnostic-run --publish
 ```
 
-Or without install:
+Dry-run still contacts NSO and, unless skipped, the LLM. See [Diagnostic MAS CLI](#diagnostic-mas-cli)
+for flags and [docs/DIAGNOSTIC_RUNNER.md](docs/DIAGNOSTIC_RUNNER.md) for the full guide.
+
+Without the console script, from the checkout root:
 
 ```bash
-python -m agent.run --dry-run
+python -m diagnostic_mas.run --dry-run
 ```
 
 ## Local Prometheus + Grafana
@@ -208,83 +212,6 @@ See [deploy/monitoring/README.md](deploy/monitoring/README.md) for:
 - Connecting Grafana to Prometheus (auto + manual)
 - **Explore** walkthrough (where to type a query, **Run query**)
 - Agent Phase 1 push (`PROMETHEUS_PUSHGATEWAY_URL`) and troubleshooting
-
-## Report format
-
-### `nso-summary-run`
-
-Reports use a **fixed layout** every run. Python builds the structured sections deterministically; the LLM writes only the **Problems / Failures** narrative (`temperature=0`).
-
-**Delivery formats:**
-
-
-| Channel                | Format                                                   |
-| ---------------------- | -------------------------------------------------------- |
-| Terminal / `report.md` | Markdown (`**bold`** headers, pipe table for counts)     |
-| Slack                  | Incoming-webhook **mrkdwn** section blocks (from markdown / plain) |
-| Email                  | Multipart: plain text + HTML (tables / headings)         |
-
-
-Example (terminal / `report.md`):
-
-```
-**NSO Ops Snapshot — {run_id}**
-
-**Problems / Failures**
-{LLM narrative, or "None reported."}
-
-**Service Counts (by type)**
-| Type | Total | Up | Down | Degraded | Unknown |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| l2ptp | 2 | 2 | 0 | 0 | 0 |
-...
-
-**Delta since last run**
-No delta to report
-
-**Fleet sync**
-...
-```
-
-Example (Slack / email plain part):
-
-```
-NSO Ops Snapshot — {run_id}
-========================================
-
-Problems / Failures
---------------------
-...
-
-Service Counts (by type)
---------------------
-Type            Total   Up  Down  Degr  Unkn
---------------------------------------------
-l2ptp               2    2     0     0     0
-...
-```
-
-- **Service counts** — one row per service type, sorted alphabetically (`agent/report_format.py`).
-- **Delta since last run** — `No delta to report` when counts and status are unchanged; `First run — no previous snapshot to compare.` on the first successful run.
-- **Devices** — per-device rollups for interfaces / BGP peers / IS-IS adjacencies; lists only non-`up` exceptions; unmapped CLI neighbors called out (`agent/report_devices.py`). See [FAQ](docs/FAQ.md).
-- **Ignored types** — listed when `IGNORE_SERVICE_TYPES` is set and `ignored_types` is included in `REPORT_SECTIONS`.
-
-### Report sections (`REPORT_SECTIONS`)
-
-Comma-separated allowlist controlling which blocks appear (and in what order) for markdown, Slack plain text, and email HTML/plain.
-
-| Name | Heading | Source |
-|------|---------|--------|
-| `executive` | Executive Summary | FABRIC status/actions/assessment + Python Fleet Summary/tables |
-| `problems` | Problems / Failures | FABRIC AI (optional; omitted from default) |
-| `counts` | Service Counts (by type) | Snapshot counts (optional; in exec by default) |
-| `delta` | Delta since last run | Delta vs previous (optional; Changes in exec) |
-| `fleet_sync` | Fleet sync (legacy one-liner) | Opt-in; Exec **Fleet Summary** is default |
-| `system_health` | Infrastructure Health | Opt-in FABRIC narrative (CPU/memory); default uses Fleet Summary alerts |
-| `devices` | Detailed Device Analysis / Devices | Operational topology |
-| `ignored_types` | Ignored service types | Configured ignore list |
-
-Default when unset: `executive,devices,ignored_types`.
 
 ## Environment variables
 
@@ -307,7 +234,6 @@ Default when unset: `executive,devices,ignored_types`.
 | `IGNORE_SERVICE_TYPES`        | no       | Comma-separated types to skip (default `idipa`; set empty to include all) |
 | `NSO_SERVICE_SYNC_MODE`       | no       | `check` (default) calls `check_service_sync` per instance; `skip` uses endpoint fleet sync only (this lab). Overall status combines sync and dataplane; the diagnostic table counts endpoint sync and dataplane independently |
 | `MAX_SERVICE_TYPES`           | no       | Cap on service types queried per run (default `10`; also `--max-service-types`) |
-| `REPORT_SECTIONS`             | no       | Ordered section allowlist (includes `system_health`, `devices`; see above) |
 | `INTERFACE_EQUIVALENCES_FILE` | no       | JSON of admin NSO↔box interface mappings (see `config/interface-equivalences.example.json`) |
 | `SLACK_WEBHOOK_URL`           | no       | Post report after successful run                                          |
 | `SMTP_HOST`                   | no*      | SMTP server for email delivery                                            |
@@ -326,7 +252,9 @@ Required together when `EMAIL_TO` is set.
 
 ## Automatic Slack / email delivery
 
-Yes — each successful `nso-summary-run` (not `--dry-run`) sends the report automatically when configured.
+Each successful `nso-diagnostic-run --publish` run (or `DRY_RUN=0`) delivers to every configured channel.
+Slack and email receive a compact digest. Email also carries the full HTML report as an attachment; a Slack
+webhook cannot attach files (see [Compact diagnostic notifications and HTML reports](#compact-diagnostic-notifications-and-html-reports)).
 
 ### Slack (incoming webhook)
 
@@ -359,13 +287,13 @@ curl -sS -X POST -H 'Content-type: application/json' \
 | Empty `SLACK_WEBHOOK_URL`                 | `.env` not loaded; run `source .env` first           |
 
 
-Or run a full report (also posts to Slack):
+Or publish a real run (also posts to Slack):
 
 ```bash
-nso-summary-run
+nso-diagnostic-run --publish
 ```
 
-Do **not** use `--dry-run` — dry-run skips Slack. On success, stderr shows `Delivered via: slack`.
+Dry-run skips Slack. On success, stderr lists the channels after `Published to:`.
 
 Treat the webhook URL like a password; anyone with it can post to that channel.
 
@@ -392,13 +320,8 @@ EMAIL_TO=ops@example.com,netops@example.com
 | `EMAIL_TO`   | **Recipients** of the report (can differ from `SMTP_USER`)                     |
 
 
-Test delivery:
-
-```bash
-nso-summary-run --test-email
-```
-
-On each normal run, email settings are validated early when `EMAIL_TO` is set (before MCP collection).
+Email settings are checked when the report is published, after collection. Setting `EMAIL_TO` without
+`SMTP_HOST` and `EMAIL_FROM` makes publication fail.
 
 #### Gmail (`smtp.gmail.com`)
 
@@ -418,28 +341,28 @@ EMAIL_FROM=yourname@gmail.com      # same Gmail address
 EMAIL_TO=recipient@example.com     # where reports are delivered
 ```
 
-Use `--test-email` after updating `.env`. For org mail, ask IT for `SMTP_HOST` and allowed sender addresses instead of Gmail.
+For org mail, ask IT for `SMTP_HOST` and allowed sender addresses instead of Gmail.
 
 You can enable **both** Slack and email; the agent sends to all configured channels.
 
 Test report without sending:
 
 ```bash
-nso-summary-run --dry-run
+nso-diagnostic-run --dry-run
 ```
 
 ## Scheduled reports (3× daily)
 
-Run the summary automatically at fixed times. **Pick one scheduler** — cron **or** macOS launchd, not both (otherwise the job runs twice).
+Run the diagnostic scan automatically at fixed times. **Pick one scheduler** — cron **or** macOS launchd, not both (otherwise the job runs twice).
 
 ### Before scheduling
 
-1. Confirm a manual run works (no `--dry-run` if you want email/Slack delivery):
+1. Confirm a manual published run works:
 
 ```bash
 cd /path/to/checkout
 source .venv/bin/activate
-nso-summary-run
+nso-diagnostic-run --publish
 ```
 
 1. Create a log directory:
@@ -463,7 +386,7 @@ crontab -e
 **Step 2 — paste this single line** (adjust path if your install differs):
 
 ```cron
-0 8,14,20 * * * cd /path/to/checkout && . .venv/bin/activate && set -a && source .env && set +a && nso-summary-run >> logs/run.log 2>> logs/run.err
+0 8,14,20 * * * cd /path/to/checkout && . .venv/bin/activate && set -a && source .env && set +a && nso-diagnostic-run --publish >> logs/run.log 2>> logs/run.err
 ```
 
 **Step 3 — save and quit** the editor (`:wq` in vim, or Ctrl+O then Ctrl+X in nano).
@@ -516,11 +439,11 @@ Launchd does **not** require a crontab entry. `.env` in the project directory is
 
 ### What each scheduled run does
 
-1. MCP collect from NSO
-2. Delta vs `state/latest.json`
-3. FABRIC AI summary (Problems section; table and delta are fixed format)
-4. Email and/or Slack if configured
-5. Updates `state/latest.json` for the next run
+1. Collects inventory and endpoint sync from NSO through MCP, then runs the deterministic operational checks
+2. Investigates eligible services with the LLM (skipped with `--skip-llm`)
+3. Compares the result with the last published case
+4. Saves `case.json`, `report.md` and `report.html` under `state/diagnostic_mas/runs/<run-id>/`
+5. Sends the digest to email and/or Slack if configured
 
 ## Service health status
 
@@ -587,165 +510,17 @@ Notes:
 - **degraded** means intent/config drift — not necessarily a hard outage.
 - In-sync does not prove forwarding works (that is the dataplane dig).
 
-### Snapshot fields
-
-Per instance (`snapshot.services["{type}/{name}"]`):
-
-```json
-{
-  "service_type": "l2ptp",
-  "name": "fabric-l2ptp-test",
-  "devices": ["renc-data-sw", "uky-data-sw"],
-  "in_sync": true,
-  "device_sync": {"renc-data-sw": "in-sync", "uky-data-sw": "in-sync"},
-  "system_status": "up",
-  "dataplane_status": "not_checked",
-  "status": "up"
-}
-```
-
-When status is **unknown**, also check:
-
-- `sync_error` — `check_service_sync` failed (mode=`check`)
-- `sync_raw` — unparsed sync payload for debugging
-- `system_status_basis` — e.g. `endpoint_fleet_sync` when mode=`skip`
-
-Inspect with:
-
-```bash
-nso-summary-run --skip-llm --dry-run 2>/dev/null | python3 -c "
-import json, sys
-s = json.load(sys.stdin)['snapshot']
-for k, v in sorted(s['services'].items()):
-    print(k, v.get('status'), v.get('in_sync'), v.get('sync_error'))
-"
-```
-
-### Not included yet
-
-These are on the [Diagnostic runner guide](docs/DIAGNOSTIC_RUNNER.md) or only partly used for service up/down today (topology design: [Topology design](nso_facts/topology/docs/DESIGN.md)):
-
-- Broader live ops via dedicated MCP helpers (e.g. `get_live_status`) where not already covered by topology `exec_show` paths
-- Ping / reachability checks beyond device sync errors from `get_fleet_sync_summary` (and any optional investigate deep-checks)
-
-**Already implemented:** IS-IS and BGP **bidirectional** validation in `agent/topology/` (underlay + routing layers) — asymmetric/down sessions become operational status + `topology.operational.issues`, and show under Devices. Service instance sync status is separate from dataplane digs; see [Network topology](#network-topology) below.
-
 Types listed in `IGNORE_SERVICE_TYPES` (default: `idipa`) are skipped entirely — no health checks or counts.
 
 ## Network topology
 
-Layered topology is **implemented** for **physical**, **underlay (IS-IS)**, **routing (BGP)**, and **services** (endpoint pairs from collect). Each run embeds `topology.static` + `topology.operational` in the snapshot; canonical static file: `state/topology.static.json`.
+The HTML report contains two collapsible topology views built from the run's evidence, with no extra queries:
+a routing view (IS-IS and BGP relationships between devices) and a service view (which devices each service
+attaches to, coloured by its final status). See [Reports and topology](docs/DIAGNOSTIC_RUNNER.md#reports-and-topology)
+and [Service topology in HTML reports](docs/DIAGNOSTIC_RUNNER.md#service-topology-in-html-reports).
 
-**Bidirectional checks:** IS-IS adjacencies and BGP sessions are paired both ways (A↔B). Asymmetric or down links show as operational status (`up` / `down` / `unidirectional` or `degraded`) and as entries in `topology.operational.issues`, and in the Devices report exceptions.
-
-Documentation:
-
-| Doc | Purpose |
-|-----|---------|
-| [Diagnostic runner guide](docs/DIAGNOSTIC_RUNNER.md) | Changelog notes for 2026-07-13 Devices/topology work |
-| [Diagnostic runner guide](docs/DIAGNOSTIC_RUNNER.md) | Services topology layer (Phase 3) |
-| [docs/FAQ.md](docs/FAQ.md) | Operator FAQ (counts vs CLI, unknown, unmapped peers, services edges, …) |
-| [Topology design](nso_facts/topology/docs/DESIGN.md) | Package overview |
-| [Topology design](nso_facts/topology/docs/DESIGN.md) | Full design: JSON shape, MCP mapping, static vs operational |
-
-**Pitfall:** IOS-XR **config** uses long interface names (`HundredGigE…`) while **`show`** returns abbreviations (`Hu…`). Matching uses `agent/topology/interfaces.py`. Interface **status** comes from `show interfaces brief` (not `interfaces summary` on these XR boxes).
-
-- **Static** — config-derived graph; `state/topology.static.json`; rebuilt on config change or force update
-- **Operational** — live status every run inside the snapshot (no separate `topology.operational.json`)
-- **Devices report** — rollups + exceptions; BGP peers / IS-IS adjacencies count NSO-mapped neighbors and list **unmapped** CLI neighbors
-
-### Viewing topology
-
-Read `state/latest.json` → `topology`, or `state/runs/<run-id>/snapshot.json` / `report.md`. Details: [Topology design](nso_facts/topology/docs/DESIGN.md).
-
-| Goal | Where |
-|------|--------|
-| Read summary (issues, layers) | `state/runs/<run-id>/report.md` — path in `state/latest.meta.json` |
-| Latest static + operational JSON | `state/latest.json` → `.topology` |
-| Config-only graph | `state/topology.static.json` |
-| Historical run | `state/runs/<run-id>/snapshot.json` → `.topology` |
-| Static graph image (Graphviz) | `scripts/export_topology_dot.py` → `.dot` / `.png` / `.svg` |
-
-```bash
-cd /path/to/checkout
-
-# Latest report path
-cat state/latest.meta.json
-
-# Quick topology summary from last run
-python3 -c "
-import json
-t = json.load(open('state/latest.json'))['topology']
-print('static_source:', t.get('static_source'))
-issues = t.get('operational', {}).get('issues', [])
-print('issues:', len(issues))
-for layer in ('underlay', 'routing', 'services'):
-    s = t.get('operational', {}).get('layers', {}).get(layer, {}).get('summary', {})
-    if s: print(layer, s)
-"
-
-# Pretty-print configured graph
-python3 -m json.tool state/topology.static.json | less
-```
-
-#### Graphviz export (`scripts/export_topology_dot.py`)
-
-Renders device↔device links from static topology (default layers: **underlay** + **routing**). Physical inventory edges usually have `remote: null` and are omitted unless you ask for them.
-
-Install Graphviz once (for rendering images):
-
-```bash
-# macOS
-brew install graphviz
-# Debian/Ubuntu
-# sudo apt-get install graphviz
-```
-
-**Option A — script writes DOT and runs `dot` for you**
-
-```bash
-# PNG (also writes topo.dot)
-python3 scripts/export_topology_dot.py -o topo.dot --render png
-
-# SVG or PDF
-python3 scripts/export_topology_dot.py -o topo.dot --render svg
-python3 scripts/export_topology_dot.py -o topo.dot --render pdf
-
-# Other inputs / layers
-python3 scripts/export_topology_dot.py -i state/latest.json -o topo.dot --render png
-python3 scripts/export_topology_dot.py --layers underlay,routing,physical --include-unlinked -o all.dot --render png
-```
-
-**Option B — script writes DOT only; you run `dot` yourself**
-
-```bash
-python3 scripts/export_topology_dot.py -o topo.dot
-
-dot -Tpng topo.dot -o topo.png
-dot -Tsvg topo.dot -o topo.svg
-dot -Tpdf topo.dot -o topo.pdf
-
-# Preview on macOS
-open topo.png
-```
-
-`--render` on the script is equivalent to calling `dot -T<format>` on the same `.dot` file.
-
-There is **no interactive map UI in v1** — use JSON, `report.md`, or the Graphviz export above. For live NSO exploration today, use Cursor + the Cisco NSO MCP server.
-
-## Multi-agent CLI
-
-Sibling pipeline for IS-IS + BGP + device investigation: **`nso-multi-agent-run`**.
-
-- Docs: [`multi_agent/README.md`](multi_agent/README.md)
-- Design: [Diagnostic runner guide](docs/DIAGNOSTIC_RUNNER.md)
-- Own state under `state/multi_agent/` (does not overwrite summary-run `state/latest.json`)
-- Default is dry-run; use `--publish` to Slack/email and persist artifacts
-
-```bash
-nso-multi-agent-run --spine-only
-nso-multi-agent-run --publish
-```
+Design notes for the topology facts layer are in [nso_facts/topology/docs/DESIGN.md](nso_facts/topology/docs/DESIGN.md).
+Operator questions about counts and unmapped neighbors are in [docs/FAQ.md](docs/FAQ.md).
 
 ## Diagnostic MAS CLI
 
@@ -754,7 +529,6 @@ Blackboard coordinator with ISIS / BGP / Service / Device roles: **`nso-diagnost
 - Design: [Diagnostic runner guide](docs/DIAGNOSTIC_RUNNER.md)
 - Evidence / diagnoses only from MCP + attributed conclusions; state under `state/diagnostic_mas/` (skipped in dry-run)
 - Default is dry-run; use `--publish` (or `DRY_RUN=0`) for Slack/email + artifacts
-- Does not replace `nso-multi-agent-run`
 
 ### Operator report (default)
 
@@ -776,7 +550,7 @@ Stdout / `report.md` use a concise operator layout (not the older Issues/Budget 
 
 `--full` appends **Appendix: Detailed Device Analysis** (legacy per-device dump).
 
-**Publish:** Slack gets mrkdwn blocks; email gets HTML + plain (`agent/markdown_channels.py`). Raw markdown is not left unrendered on those channels.
+**Publish:** Slack and email receive a compact digest; email attaches the self-contained HTML report (see [Compact diagnostic notifications and HTML reports](#compact-diagnostic-notifications-and-html-reports)).
 
 ### Useful flags
 
@@ -819,33 +593,23 @@ nso-diagnostic-delta state/diagnostic_mas/runs/<older> state/diagnostic_mas/runs
 ## Project layout
 
 ```
-nso_facts/        # MCP, topology, health, delta, metrics, fact_pack (no LLM)
-nso_report/       # deterministic executive/device formatters (no LLM)
-agent/            # CLI, Fabric summarize, publish, config (+ shims to facts/report)
-  topology/       # shim → nso_facts.topology
-multi_agent/      # nso-multi-agent-run (IS-IS/BGP/device workers)
-diagnostic_mas/   # nso-diagnostic-run (operator report + dataplane/drill)
-experiments/
-  multi_agent/    # deprecation shim → multi_agent.run
+nso_facts/        # MCP collection, normalization, topology, health, metrics (no LLM)
+nso_report/       # deterministic device/executive formatters (no LLM)
+diagnostic_mas/   # nso-diagnostic-run: coordinator, operational checks, dataplane digs, drills, reports
+  prompts/        # runtime prompts, including service-specific dataplane prompts
+agent/            # shared config, LLM client, Slack/email publishing, markdown rendering
+multi_agent/      # shared spine collection, deep checks and tool gating
 docs/
-  TRY_ME_OUT.md   # install + common ways to run
-  DOCKER.md       # build/run via Docker
-  FAQ.md          # operator FAQ (Devices / topology counts)
-  NOTES-*.md      # dated work notes
-state/            # gitignored — snapshots; topology.static.json
+  DIAGNOSTIC_RUNNER.md  # install, configure, run, read the report
+  DOCKER.md             # build and run in a container
+  FAQ.md                # operator FAQ
+state/            # gitignored; diagnostic_mas/runs/<run-id>/ holds case.json, report.md, report.html
 deploy/
-  com.esnet.nso-summary.plist
-  monitoring/     # docker compose + prometheus.yml + grafana dashboards
-WORK_PLAN.md
+  com.esnet.nso-summary.plist   # example launchd schedule
+  monitoring/                   # docker compose, Prometheus and Grafana dashboards
 ```
 
-## Next steps (from work plan)
-
-- Prometheus metrics export from `nso-summary-run` (**Phase 1 done** — set `PROMETHEUS_PUSHGATEWAY_URL`)
-- Services topology layer
-- Grafana dashboards for service / topology trends (starter dashboard in `deploy/monitoring/grafana/`)
-
-
+## Diagnostic report details
 
 ### Diagnostic fault history and follow-up
 
@@ -903,13 +667,13 @@ Published `nso-diagnostic-run` runs now save `report.html` alongside `report.md`
 and `case.json`. Email and Slack receive a bounded digest instead of the full
 report. Email includes the self-contained HTML as an attachment: download it
 and open it in a browser for search, service-status filters, expandable details,
-and section navigation. No additional LLM calls are used. Terminal Markdown and
-legacy summary/multi-agent publishing remain unchanged. Dry runs do not publish
-or save the HTML report.
+and section navigation. No additional LLM calls are used. Terminal Markdown is
+unchanged. Dry runs do not publish or save the HTML report.
 
 Slack file attachments require `SLACK_BOT_TOKEN` with `files:write` and
 `SLACK_CHANNEL_ID`; invite the bot to that channel. The upload uses Slack's
-getUploadURLExternal → upload → completeUploadExternal flow. Existing webhook-only
+getUploadURLExternal → upload → completeUploadExternal flow. This bot-token upload
+has not been verified against a live Slack workspace; only the webhook path has. Existing webhook-only
 setups still receive a compact digest, but cannot attach the HTML. Optionally set
 `DIAGNOSTIC_REPORT_BASE_URL` to an existing internal HTTPS location serving the
 contents of the diagnostic `runs/` directory; webhook posts will link to

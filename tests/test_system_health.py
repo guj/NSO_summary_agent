@@ -1,4 +1,4 @@
-from agent.system_health import parse_memory_summary, parse_processes_cpu
+from nso_facts.system_health import parse_memory_summary, parse_processes_cpu
 
 CPU_SAMPLE = """
 ---- node0_RP0_CPU0 ----

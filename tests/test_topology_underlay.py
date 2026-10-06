@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 
-from agent.topology.graph import isis_edge_id
-from agent.topology.underlay import (
+from nso_facts.topology.graph import isis_edge_id
+from nso_facts.topology.underlay import (
     AdjacencyObservation,
     collect_operational_underlay,
     collect_static_underlay,
@@ -273,7 +273,7 @@ async def test_collect_static_underlay_matches_abbreviated_live_interfaces():
     )
 
     async def call_mcp(client_arg, tool, params=None):
-        from agent.mcp_client import _tool_data
+        from nso_facts.mcp_client import _tool_data
 
         result = await client_arg.call_tool(tool, {"params": params or {}})
         return _tool_data(result)
@@ -309,7 +309,7 @@ async def test_collect_static_and_operational_underlay():
     )
 
     async def call_mcp(client_arg, tool, params=None):
-        from agent.mcp_client import _tool_data
+        from nso_facts.mcp_client import _tool_data
 
         result = await client_arg.call_tool(tool, {"params": params or {}})
         return _tool_data(result)

@@ -7,7 +7,7 @@ Use Python 3.12 or newer. From the checkout root:
 ```sh
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install -e '.[dev]'
+python -m pip install -e .
 cp .env.example .env
 nso-diagnostic-run --help
 ```
@@ -114,7 +114,8 @@ Edit `.env` before a live run. Do not commit it.
 For diagnostic HTML uploads, set both `SLACK_BOT_TOKEN` and `SLACK_CHANNEL_ID`;
 the bot needs `files:write` permission and membership in the destination channel.
 When both bot settings are available, they take precedence over the webhook for
-reports with attachments. `DIAGNOSTIC_REPORT_BASE_URL` optionally adds a hosted
+reports with attachments. The bot upload has not been verified against a live Slack
+workspace; only the webhook path has. `DIAGNOSTIC_REPORT_BASE_URL` optionally adds a hosted
 report link; it does not upload or host files itself.
 
 ### Email: SMTP host is required
@@ -192,6 +193,8 @@ limits in the report's configuration section.
 ## Running
 
 ```sh
+# Check the MCP server, NSO login and LLM key before a scan
+nso-diagnostic-run --check-connection
 # Live collection without LLM or publication
 nso-diagnostic-run --skip-llm --dry-run
 # LLM-assisted scan with conservative concurrency
@@ -207,6 +210,50 @@ normal case/report state or send Slack/email. `--publish` explicitly enables
 persistence and configured delivery. Use `--full` for detailed device analysis.
 `--save-mcp-results` opts into raw MCP evidence retention; outputs can contain
 sensitive device configuration, so do not commit them.
+
+`--check-connection` starts the MCP server, asks NSO for its device list and, unless
+`--skip-llm` is given, checks the LLM key and model with a one-token request. It prints one
+line per check and exits with a non-zero status if any check fails; nothing is scanned,
+saved or published. A blank `FABRIC_AI_API_KEY` is reported as not configured, not as a
+failure.
+
+### Example: our usual full scan with logging and publication
+
+This is the command used for our larger scans, not the default configuration or
+an optimal setting for every NSO deployment. Run it in Bash or Zsh after activating
+your environment and configuring NSO, LLM, and publication settings:
+
+```bash
+mkdir -p log
+{ time nso-diagnostic-run \
+    --spine-concurrent-devices 6 \
+    --dataplane-concurrent_works 2 \
+    --max-dataplane-per-category 30 \
+    --max-dataplane-tools 40 \
+    --max-drill-issues 2 \
+    --publish; } > "log/test.txt" 2>&1
+```
+
+- `--spine-concurrent-devices 6`: up to six concurrent operational device calls,
+  with per-device locking. This does not parallelize every spine stage.
+- `--dataplane-concurrent_works 2`: up to two service digs at once, subject to
+  device-conflict scheduling.
+- `--max-dataplane-per-category 30`: select up to 30 eligible services per service
+  type for dataplane investigation. Operational passes still skip routine digs;
+  this does not request 30 investigations if fewer services are eligible.
+- `--max-dataplane-tools 40`: at most 40 MCP tool calls per dataplane dig, not 40
+  calls for the whole scan.
+- `--max-drill-issues 2`: up to two issue-drill investigations, separate from the
+  service dataplane selection and its tool budget.
+- `--publish`: save the case and reports and deliver through configured channels.
+- `{ time ...; } > "log/test.txt" 2>&1`: capture standard output, standard error,
+  and shell timing in one file. `>` overwrites an existing `log/test.txt`; use a
+  different filename for each scan if you want to retain earlier logs. The HTML
+  report is saved separately under the configured state directory.
+
+Watch progress from another terminal with `tail -f log/test.txt`. Logs may contain
+network details; keep them outside version control. These limits are ceilings,
+not targets, and higher concurrency does not guarantee proportional speedup.
 
 ## Workflow and concurrency
 
@@ -261,12 +308,17 @@ verification gaps must be interpreted separately from recovery or regression.
 
 ## Offline validation
 
+The tests need the optional `dev` extra (pytest). It is not required to run the
+agent. Keep the quotes; zsh otherwise treats the brackets as a pattern.
+
 ```sh
+python -m pip install -e '.[dev]'
 python -m pytest tests/test_topology_report.py tests/test_bgp_partial_evidence.py tests/test_spine_concurrency.py tests/test_dataplane_scheduler.py
 python -m pytest
 ```
 
-Do not run a live scan as an installation smoke test. `--help`, imports and the
+Do not run a live scan as an installation smoke test; once credentials are configured, use
+`--check-connection`. `--help`, imports and the
 offline tests are sufficient without NSO credentials. Monitoring and container
 instructions remain in `deploy/monitoring/README.md` and `docs/DOCKER.md`.
 

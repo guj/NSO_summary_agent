@@ -1,6 +1,6 @@
 """Tests for device inventory parsing."""
 
-from agent.topology.devices import parse_device_names
+from nso_facts.topology.devices import parse_device_names
 
 
 def test_parse_device_names_from_mcp_success_wrapper():

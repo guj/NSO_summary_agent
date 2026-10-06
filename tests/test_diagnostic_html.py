@@ -91,3 +91,20 @@ def test_grouped_service_headers():
     assert 'colspan="5" scope="colgroup">Dataplane (PE readiness)' in doc
     assert 'rowspan="2" scope="col">Total' in doc
     assert '<th scope="col">Not checked</th>' in doc
+
+
+def test_summary_sub_bullets_are_indented_under_their_service():
+    from test_markdown_channels import _list_items
+
+    report = (
+        "# NSO Diagnostic Report\n"
+        "## Summary\n"
+        "- **l2bridge a** — dataplane=down\n"
+        "  - Cause: no receive light\n"
+        "  - Next: check the fibre\n"
+    )
+    assert _list_items(render_html_report(report, "run")) == [
+        (1, "l2bridge a — dataplane=down"),
+        (2, "Cause: no receive light"),
+        (2, "Next: check the fibre"),
+    ]

@@ -1,4 +1,4 @@
-from agent.topology.route_summary import (
+from nso_facts.topology.route_summary import (
     format_route_summary_line,
     format_route_summary_lines,
     parse_route_summary,

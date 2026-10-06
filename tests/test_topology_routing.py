@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 
-from agent.topology.graph import bgp_edge_id
-from agent.topology.routing import (
+from nso_facts.topology.graph import bgp_edge_id
+from nso_facts.topology.routing import (
     BgpNeighborConfig,
     BgpSessionObservation,
     collect_operational_routing,
@@ -251,7 +251,7 @@ async def test_collect_static_and_operational_routing():
     )
 
     async def call_mcp(client_arg, tool, params=None):
-        from agent.mcp_client import _tool_data
+        from nso_facts.mcp_client import _tool_data
 
         result = await client_arg.call_tool(tool, {"params": params or {}})
         return _tool_data(result)
@@ -296,7 +296,7 @@ async def test_collect_static_lbnl_uky_from_config_and_live():
     )
 
     async def call_mcp(client_arg, tool, params=None):
-        from agent.mcp_client import _tool_data
+        from nso_facts.mcp_client import _tool_data
 
         result = await client_arg.call_tool(tool, {"params": params or {}})
         return _tool_data(result)
@@ -325,7 +325,7 @@ async def test_collect_static_lbnl_uky_from_config_and_live():
 
 
 def test_exec_show_plain_string_response_parses():
-    from agent.topology.routing import _exec_show_text, parse_bgp_summary_text
+    from nso_facts.topology.routing import _exec_show_text, parse_bgp_summary_text
 
     text = _exec_show_text(BGP_SUMMARY_LBNL)
     observations = parse_bgp_summary_text("lbnl-data-sw", text)
@@ -351,7 +351,7 @@ async def test_exec_show_mcp_returns_bare_string():
     )
 
     async def call_mcp(client_arg, tool, params=None):
-        from agent.mcp_client import _tool_data
+        from nso_facts.mcp_client import _tool_data
 
         result = await client_arg.call_tool(tool, {"params": params or {}})
         return _tool_data(result)
