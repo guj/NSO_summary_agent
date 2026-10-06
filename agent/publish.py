@@ -152,8 +152,14 @@ def publish_all(
     *,
     attachment_path: Path | None = None,
     report_url: str | None = None,
+    failures: list[tuple[str, str]] | None = None,
 ) -> list[str]:
-    """Deliver to configured channels. Returns list of channels used."""
+    """Deliver to configured channels. Returns list of channels used.
+
+    Each channel is attempted on its own. With ``failures`` given, a channel that fails is
+    recorded there as ``(channel, reason)`` and the others still run; without it, the
+    first failure is raised.
+    """
     from agent.markdown_channels import (
         markdown_to_html,
         markdown_to_plain,
@@ -172,25 +178,32 @@ def publish_all(
         plain = report.plain or markdown_to_plain(md)
         html_body = (report.html or "").strip() or markdown_to_html(md)
 
+    def deliver(channel: str, send) -> None:
+        try:
+            send()
+        except Exception as exc:  # noqa: BLE001
+            if failures is None:
+                raise
+            failures.append((channel, str(exc)))
+        else:
+            sent.append(channel)
+
     if attachment_path is not None:
         if s.slack_bot_token and s.slack_channel_id:
-            publish_slack_file(attachment_path, md, s)
-            sent.append("slack")
+            deliver("slack", lambda: publish_slack_file(attachment_path, md, s))
         elif s.slack_webhook_url:
             location = (f"Full HTML report: {report_url}" if report_url else
                         "Full HTML report is saved with the run artifacts; this Slack webhook cannot attach files.")
-            publish_slack(md + "\n\n" + location, s)
-            sent.append("slack")
+            deliver("slack", lambda: publish_slack(md + "\n\n" + location, s))
     elif s.slack_webhook_url:
-        publish_slack(md or plain, s)
-        sent.append("slack")
+        deliver("slack", lambda: publish_slack(md or plain, s))
     if s.email_to:
         if attachment_path is not None:
-            publish_email(plain + "\n\nFull HTML report attached; download and open in a browser.",
-                          run_id, s, attachment_path=attachment_path)
+            deliver("email", lambda: publish_email(
+                plain + "\n\nFull HTML report attached; download and open in a browser.",
+                run_id, s, attachment_path=attachment_path))
         else:
-            publish_email(plain, run_id, s, report_html=html_body)
-        sent.append("email")
+            deliver("email", lambda: publish_email(plain, run_id, s, report_html=html_body))
     return sent
 
 
@@ -225,3 +238,85 @@ def publish_slack_file(path: Path, summary: str, settings: Settings) -> None:
         "channel_id": settings.slack_channel_id,
         "initial_comment": summary,
     })
+
+
+def _slack_api(token: str, method: str, fields: dict[str, Any]) -> dict[str, Any]:
+    """Call one Slack Web API method; a transport failure is returned as an error result."""
+    import urllib.parse
+
+    request = urllib.request.Request(
+        "https://slack.com/api/" + method,
+        data=urllib.parse.urlencode(fields).encode(),
+        headers={"Authorization": f"Bearer {token}",
+                 "Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            result = json.loads(response.read())
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return {"ok": False, "error": f"request failed ({exc})"}
+    return result if isinstance(result, dict) else {"ok": False, "error": "unexpected response"}
+
+
+def check_slack_bot(settings: Settings) -> tuple[bool, str]:
+    """Verify the bot token and, when its scopes allow, that the bot is in the channel.
+
+    Sends nothing to the channel. Reading membership needs ``channels:read``
+    (``groups:read`` for a private channel); without it only the token is verified.
+    """
+    token = str(settings.slack_bot_token or "")
+    auth = _slack_api(token, "auth.test", {})
+    if not auth.get("ok"):
+        return False, str(auth.get("error") or "unknown error")
+    info = _slack_api(token, "conversations.info", {"channel": settings.slack_channel_id})
+    if info.get("ok"):
+        channel = info.get("channel") if isinstance(info.get("channel"), dict) else {}
+        if channel.get("is_member"):
+            return True, "token valid; bot is in the channel"
+        return False, "bot is not in the channel; invite it with /invite @your-app-name"
+    error = str(info.get("error") or "unknown error")
+    if error == "missing_scope":
+        return True, "token valid; channel membership not checked, the bot lacks the channels:read scope"
+    if error == "channel_not_found":
+        error += " (wrong SLACK_CHANNEL_ID, or a private channel the bot is not in)"
+    return False, error
+
+
+def check_email(settings: Settings) -> tuple[bool, str]:
+    """Verify email settings and the SMTP connection, TLS and login. Sends no message."""
+    try:
+        validate_email_settings(settings)
+    except ValueError as exc:
+        problems = [line[2:] for line in str(exc).splitlines() if line.startswith("- ")]
+        return False, "; ".join(problems) or str(exc)
+    login = bool(settings.smtp_user and settings.smtp_password)
+    try:
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as smtp:
+            if settings.smtp_use_tls:
+                smtp.ehlo()
+                smtp.starttls(context=ssl.create_default_context())
+                smtp.ehlo()
+            if login:
+                smtp.login(settings.smtp_user, settings.smtp_password)
+            else:
+                smtp.noop()
+    except (smtplib.SMTPException, OSError) as exc:
+        return False, str(exc)
+    return True, f"{settings.smtp_host}:{settings.smtp_port}; " + (
+        "login accepted" if login else "server reachable, no login configured"
+    )
+
+
+def delivery_checks(settings: Settings) -> list[tuple[str, bool, str]]:
+    """One ``(channel, ok, detail)`` per configured delivery method; nothing is sent."""
+    results: list[tuple[str, bool, str]] = []
+    if settings.slack_bot_token and settings.slack_channel_id:
+        results.append(("Slack bot", *check_slack_bot(settings)))
+    elif settings.slack_bot_token or settings.slack_channel_id:
+        results.append(("Slack bot", False, "set both SLACK_BOT_TOKEN and SLACK_CHANNEL_ID"))
+    if settings.slack_webhook_url:
+        results.append(
+            ("Slack webhook", True, "configured (cannot be verified without posting a message)")
+        )
+    if email_configured(settings):
+        results.append(("Email", *check_email(settings)))
+    return results

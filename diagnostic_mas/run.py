@@ -187,11 +187,31 @@ def _check_llm(settings) -> bool:
     return False
 
 
+def _check_delivery(settings) -> bool:
+    """Report whether each configured delivery channel is usable; nothing is sent."""
+    from agent.publish import delivery_checks
+
+    results = delivery_checks(settings)
+    if not results:
+        print("Delivery: none configured (published reports are saved only)")
+        return True
+    for channel, ok, detail in results:
+        if ok:
+            print(f"{channel}: {detail}" if detail.startswith("configured") else f"{channel}: OK ({detail})")
+        else:
+            print(f"{channel}: FAILED — {detail}", file=sys.stderr)
+    return all(ok for _, ok, _ in results)
+
+
 async def _check_connection(settings, *, check_llm: bool) -> int:
-    """Pre-flight for a scan: MCP server, NSO, and the LLM unless skipped. No scan or state."""
+    """Pre-flight for a scan: MCP server, NSO, the LLM unless skipped, and delivery.
+
+    No scan is run, nothing is saved and nothing is published.
+    """
     ok = await _check_nso(settings)
     if check_llm:
         ok = _check_llm(settings) and ok
+    ok = _check_delivery(settings) and ok
     return 0 if ok else 1
 
 
@@ -581,6 +601,8 @@ async def _run_after_accounting(
     )
     print(report)
 
+    # A channel that cannot deliver must not stop the others, the saved report or metrics.
+    delivery_failures: list[tuple[str, str]] = []
     if not dry_run:
         out = persist_case(
             state_dir,
@@ -601,15 +623,18 @@ async def _run_after_accounting(
             settings,
             attachment_path=out.parent / "report.html",
             report_url=report_url,
+            failures=delivery_failures,
         )
         print(f"\nWrote case/report under {out.parent}", file=sys.stderr)
         if channels:
             print(f"Published to: {', '.join(channels)}", file=sys.stderr)
-        else:
+        elif not delivery_failures:
             print(
                 "No Slack/email configured (artifacts saved only)",
                 file=sys.stderr,
             )
+        for channel, reason in delivery_failures:
+            print(f"Delivery failed: {channel} — {reason}", file=sys.stderr)
         if not bool(getattr(args, "skip_metrics", False)):
             duration = time.monotonic() - t0
             snapshot = metrics_snapshot_from_case(case)
@@ -634,7 +659,7 @@ async def _run_after_accounting(
                if getattr(args, "save_mcp_results", False) else ""),
             file=sys.stderr,
         )
-    return 0
+    return 1 if delivery_failures else 0
 
 
 def _positive_worker_count(value: str) -> int:
@@ -730,8 +755,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--check-connection",
         action="store_true",
         help=(
-            "Check the MCP server, NSO, and (unless --skip-llm) the LLM key and model, "
-            "then exit; no scan or publishing"
+            "Check the MCP server, NSO, (unless --skip-llm) the LLM key and model, and the "
+            "configured Slack/email delivery, then exit; no scan or publishing"
         ),
     )
     parser.add_argument(

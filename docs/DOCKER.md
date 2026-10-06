@@ -52,7 +52,7 @@ Arguments after the image name go to `nso-diagnostic-run`.
 # Show options
 docker run --rm nso-diagnostic-agent --help
 
-# Check the MCP server, NSO login and LLM key before a scan
+# Check the MCP server, NSO login, LLM key and delivery settings before a scan
 docker run --rm --env-file /path/to/nso-diagnostic.env \
   nso-diagnostic-agent --check-connection
 

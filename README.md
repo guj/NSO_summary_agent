@@ -172,7 +172,7 @@ nso-diagnostic-run --dry-run
 ## Run
 
 ```bash
-# Check the MCP server, NSO login and LLM key before a scan
+# Check the MCP server, NSO login, LLM key and delivery settings before a scan
 nso-diagnostic-run --check-connection
 
 # Live collection and operational checks; no LLM, nothing saved or sent
@@ -253,8 +253,9 @@ Required together when `EMAIL_TO` is set.
 ## Automatic Slack / email delivery
 
 Each successful `nso-diagnostic-run --publish` run (or `DRY_RUN=0`) delivers to every configured channel.
-Slack and email receive a compact digest. Email also carries the full HTML report as an attachment; a Slack
-webhook cannot attach files (see [Compact diagnostic notifications and HTML reports](#compact-diagnostic-notifications-and-html-reports)).
+Slack and email receive a compact digest. Email also carries the full HTML report as an attachment. On Slack,
+a webhook cannot attach files; with a bot token the HTML report is uploaded to the channel
+(see [Compact diagnostic notifications and HTML reports](#compact-diagnostic-notifications-and-html-reports)).
 
 ### Slack (incoming webhook)
 
@@ -667,9 +668,10 @@ and section navigation. No additional LLM calls are used. Terminal Markdown is
 unchanged. Dry runs do not publish or save the HTML report.
 
 Slack file attachments require `SLACK_BOT_TOKEN` with `files:write` and
-`SLACK_CHANNEL_ID`; invite the bot to that channel. The upload uses Slack's
-getUploadURLExternal → upload → completeUploadExternal flow. This bot-token upload
-has not been verified against a live Slack workspace; only the webhook path has. Existing webhook-only
+`SLACK_CHANNEL_ID`. The bot must be a member of that channel: invite it with
+`/invite @your-app-name`. The upload uses Slack's
+getUploadURLExternal → upload → completeUploadExternal flow. If the upload fails with
+`not_in_channel`, the bot has not been invited to that channel. Existing webhook-only
 setups still receive a compact digest, but cannot attach the HTML. Optionally set
 `DIAGNOSTIC_REPORT_BASE_URL` to an existing internal HTTPS location serving the
 contents of the diagnostic `runs/` directory; webhook posts will link to

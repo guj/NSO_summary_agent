@@ -107,15 +107,27 @@ Edit `.env` before a live run. Do not commit it.
   path when installing the package and running outside the checkout.
 - **Delivery:** optional. Use `--publish` (or `DRY_RUN=0`) to save and deliver reports.
   Dry-run does not save normal report state or deliver notifications.
+  Each channel is delivered on its own: if Slack fails, email is still sent and the reports
+  are still saved. The run then prints a `Delivery failed:` line naming the channel and
+  ends with a non-zero exit status.
 
 ### Slack: choose notification or HTML attachment
 
 `SLACK_WEBHOOK_URL` sends a short notification. It cannot upload the HTML file.
-For diagnostic HTML uploads, set both `SLACK_BOT_TOKEN` and `SLACK_CHANNEL_ID`;
-the bot needs `files:write` permission and membership in the destination channel.
-When both bot settings are available, they take precedence over the webhook for
-reports with attachments. The bot upload has not been verified against a live Slack
-workspace; only the webhook path has. `DIAGNOSTIC_REPORT_BASE_URL` optionally adds a hosted
+
+To upload the HTML report to Slack, use a bot instead:
+
+1. Create a Slack app for your workspace, give it the bot scope `files:write`, install it,
+   and copy its bot token (it starts with `xoxb-`) into `SLACK_BOT_TOKEN`. Optionally add
+   `channels:read` (`groups:read` for a private channel) so that `--check-connection` can
+   confirm the bot is in the channel.
+2. Put the destination channel's ID (for example `C0123ABCD`, not the channel name) into
+   `SLACK_CHANNEL_ID`.
+3. Invite the bot to that channel with `/invite @your-app-name`. **The bot must be a member
+   of the channel**; otherwise the upload fails with `not_in_channel`.
+
+Both settings are required. When both are set they take precedence over the webhook for
+reports with attachments; with only one of them, the webhook is used. `DIAGNOSTIC_REPORT_BASE_URL` optionally adds a hosted
 report link; it does not upload or host files itself.
 
 ### Email: SMTP host is required
@@ -193,7 +205,7 @@ limits in the report's configuration section.
 ## Running
 
 ```sh
-# Check the MCP server, NSO login and LLM key before a scan
+# Check the MCP server, NSO login, LLM key and delivery settings before a scan
 nso-diagnostic-run --check-connection
 # Live collection without LLM or publication
 nso-diagnostic-run --skip-llm --dry-run
@@ -216,6 +228,11 @@ sensitive device configuration, so do not commit them.
 line per check and exits with a non-zero status if any check fails; nothing is scanned,
 saved or published. A blank `FABRIC_AI_API_KEY` is reported as not configured, not as a
 failure.
+
+It also checks the delivery channels you have configured, without sending anything: the
+Slack bot token (and, if the bot also has the `channels:read` scope, that the bot is in the
+channel), and the SMTP connection and login for email. A Slack webhook cannot be verified
+without posting to it, so it is only reported as configured.
 
 ### Example: our usual full scan with logging and publication
 
