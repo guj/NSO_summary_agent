@@ -208,9 +208,39 @@ def build_phase1_metrics(
         g("nso_delta_removed", float(dcounts["removed"])),
     ]
 
-    lines.append("# TYPE nso_services_up gauge")
-    lines.append("# TYPE nso_services_down gauge")
+    lines += _attempt_lines(ts, success=success, nso_unreachable=False, pipeline=pipeline)
+
+    not_covered = snapshot.get("devices_not_covered")
+    if not_covered is not None:
+        lines.append("# TYPE nso_fleet_devices_not_covered gauge")
+        lines.append(g("nso_fleet_devices_not_covered", float(_intish(not_covered))))
+
+    scan = snapshot.get("scan")
+    if isinstance(scan, dict) and scan.get("run_id"):
+        # One series per scan: lets a dashboard show and link the latest report.
+        lines.append("# TYPE nso_scan_info gauge")
+        lines.append(g("nso_scan_info", 1.0, {
+            "run_id": str(scan["run_id"]), "report_url": str(scan.get("report_url") or "")}))
+
+    service_status = snapshot.get("service_status")
+    if isinstance(service_status, dict):
+        # The report's final status, one series per status; replaces the
+        # older up/down pair, which lumped Degraded and Unknown into "down".
+        lines.append("# TYPE nso_services gauge")
+        for service_type, bucket in sorted(service_status.items()):
+            for status in ("up", "down", "degraded", "unknown"):
+                lines.append(g("nso_services", float(_intish(bucket.get(status))),
+                               {"service_type": str(service_type), "status": status}))
+        lines.append("# TYPE nso_service_faults gauge")
+        for row in snapshot.get("service_faults") or []:
+            lines.append(g("nso_service_faults", float(_intish(row.get("count"))), {
+                "device": str(row.get("device")), "service_type": str(row.get("service_type")),
+                "status": str(row.get("status"))}))
+        counts = None
+
     if isinstance(counts, dict):
+        lines.append("# TYPE nso_services_up gauge")
+        lines.append("# TYPE nso_services_down gauge")
         for service_type, bucket in sorted(counts.items()):
             if not isinstance(bucket, dict):
                 continue
@@ -248,6 +278,70 @@ def pushgateway_url(settings: MetricsSettings) -> str | None:
     return f"{base}/metrics/job/{job}/instance/{instance}"
 
 
+def _attempt_lines(
+    timestamp_seconds: float, *, success: bool, nso_unreachable: bool, pipeline: str
+) -> list[str]:
+    """How the latest scan attempt ended, whether or not it produced a report."""
+    return [
+        "# TYPE nso_scan_last_attempt_timestamp_seconds gauge",
+        _gauge("nso_scan_last_attempt_timestamp_seconds", float(timestamp_seconds),
+               pipeline=pipeline),
+        "# TYPE nso_scan_last_attempt_success gauge",
+        _gauge("nso_scan_last_attempt_success", 1.0 if success else 0.0, pipeline=pipeline),
+        "# TYPE nso_scan_last_attempt_nso_unreachable gauge",
+        _gauge("nso_scan_last_attempt_nso_unreachable", 1.0 if nso_unreachable else 0.0,
+               pipeline=pipeline),
+    ]
+
+
+def _send(url: str, body: bytes, *, method: str) -> bool:
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "text/plain; version=0.0.4; charset=utf-8"},
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            resp.read()
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", errors="replace").strip()
+        except OSError:
+            pass
+        msg = f"warning: Prometheus Pushgateway push failed: {exc}"
+        if detail:
+            msg = f"{msg} — {detail}"
+        print(msg, file=sys.stderr)
+        return False
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        print(f"warning: Prometheus Pushgateway push failed: {exc}", file=sys.stderr)
+        return False
+    return True
+
+
+def push_scan_attempt_failed(
+    settings: MetricsSettings,
+    *,
+    reason: str,
+    pipeline: str,
+    timestamp_seconds: float | None = None,
+) -> bool:
+    """Tell the Pushgateway a scan ended without a report. True if pushed.
+
+    Sent with POST, which replaces only these three metrics: the last good
+    scan's values stay, so a dashboard shows them together with the failure.
+    """
+    url = pushgateway_url(settings)
+    if not url:
+        return False
+    ts = timestamp_seconds if timestamp_seconds is not None else time.time()
+    body = format_exposition(_attempt_lines(
+        ts, success=False, nso_unreachable=reason == "nso_unreachable", pipeline=pipeline))
+    return _send(url, body.encode("utf-8"), method="POST")
+
+
 def push_phase1_metrics(
     snapshot: dict[str, Any],
     settings: MetricsSettings,
@@ -277,27 +371,4 @@ def push_phase1_metrics(
         )
     ).encode("utf-8")
 
-    req = urllib.request.Request(
-        url,
-        data=body,
-        headers={"Content-Type": "text/plain; version=0.0.4; charset=utf-8"},
-        method="PUT",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            resp.read()
-    except urllib.error.HTTPError as exc:
-        detail = ""
-        try:
-            detail = exc.read().decode("utf-8", errors="replace").strip()
-        except OSError:
-            pass
-        msg = f"warning: Prometheus Pushgateway push failed: {exc}"
-        if detail:
-            msg = f"{msg} — {detail}"
-        print(msg, file=sys.stderr)
-        return False
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        print(f"warning: Prometheus Pushgateway push failed: {exc}", file=sys.stderr)
-        return False
-    return True
+    return _send(url, body, method="PUT")

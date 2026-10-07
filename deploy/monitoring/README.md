@@ -39,6 +39,27 @@ docker compose ps
 
 Grafana provisions the **Prometheus** datasource and loads dashboard **NSO Summary** (folder **NSO**).
 
+## Which folder the stack reads from
+
+The stack reads its configuration from the folder it was started in. `docker-compose.yml` shares `./grafana/provisioning`, `./grafana/dashboards` and `./prometheus/prometheus.yml` into the containers, read-only, and `./` is the folder that holds the compose file you started.
+
+Grafana rescans the dashboards folder about every 10 seconds, so a dashboard file added there appears without a restart. A file added to a different checkout does not appear.
+
+To see which folder a running stack uses:
+
+```bash
+docker inspect nso-grafana --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}'
+```
+
+To switch to another checkout, stop the stack where it was started and start it in the new one:
+
+```bash
+docker compose -f /path/to/old/checkout/deploy/monitoring/docker-compose.yml down
+docker compose -f /path/to/new/checkout/deploy/monitoring/docker-compose.yml up -d
+```
+
+Prometheus history and Grafana settings are kept across the switch: they live in Docker volumes named after the compose project (`nso-monitoring`), not in the folder. The Pushgateway keeps nothing across a restart, so its values return with the next scan. Do not add `-v` to `down`; that deletes the volumes.
+
 ## Connect Grafana to Prometheus
 
 With **`docker compose up -d`** from this directory, connection is **automatic**:
@@ -202,6 +223,20 @@ After each successful **non-dry-run**, the agent PUTs gauges to:
 Phase 1+ names include: `nso_summary_run_success`, `nso_summary_last_run_timestamp_seconds`, `nso_summary_run_duration_seconds`, `nso_fleet_devices_total`, `nso_fleet_devices_in_sync`, `nso_fleet_devices_out_of_sync`, `nso_fleet_devices_sync_error`, `nso_services_up` / `nso_services_down` (`service_type` label), `nso_isis_adjacencies_up` / `_down`, `nso_bgp_sessions_up` / `_down`, `nso_physical_links_up` / `_down`, `nso_infra_cpu_alerts` / `nso_infra_memory_alerts`, `nso_hardware_*_alerts`, `nso_inventory_review_devices`, `nso_delta_*`, `nso_topology_issues` (`layer` label). Every series includes `pipeline="agent"` or `pipeline="multi-agent"`.
 
 Unset `PROMETHEUS_PUSHGATEWAY_URL` to skip. If Pushgateway is down, the agent logs a warning and still finishes the report.
+
+The diagnostic runner also pushes:
+
+| Metric | Meaning |
+|---|---|
+| `nso_services{service_type,status}` | The report's final status per service type: `up`, `down`, `degraded`, `unknown` |
+| `nso_service_faults{device,service_type,status}` | Services that are not OpUp, by the device their failed check points to |
+| `nso_fleet_devices_not_covered` | Devices dropped or not collected in the scan |
+| `nso_scan_info{run_id,report_url}` | The scan the values come from; the link needs `DIAGNOSTIC_REPORT_BASE_URL` |
+| `nso_scan_last_attempt_success`, `nso_scan_last_attempt_nso_unreachable`, `nso_scan_last_attempt_timestamp_seconds` | How the most recent attempt ended |
+
+A scan that ends without a report (for example NSO became unreachable) posts only the last three, with success 0. The last good scan's values stay in the Pushgateway, so compare `nso_summary_last_run_timestamp_seconds` with the current time to see how old they are.
+
+Dashboard **NSO Diagnostic** (folder **NSO**, file `grafana/dashboards/nso-diagnostic.json`) charts these: scanner health, final status, services not OpUp by device, and the latest report.
 
 ## Stop / remove
 

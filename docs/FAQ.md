@@ -176,6 +176,12 @@ failed live query, the sync check gave no answer, or the LLM stopped before reac
 None of these alone proves an outage. Down requires positive evidence that a required component or
 path failed.
 
+A service type the agent has no checks for is also Unknown. For those it only looks at the
+interfaces the service names: if one is down the service is reported Down; if all are up it stays
+Unknown with the reason "Interfaces up — service logic not checked", because working ports say
+nothing about whether the service itself works. Types with their own checks are l2ptp, l2bridge,
+l2sts, l3rt and port-mirror.
+
 Some NSO deployments return no usable answer from `check_service_sync` for every service. In that
 case set `NSO_SERVICE_SYNC_MODE=skip`: the per-service sync calls are skipped and configuration
 sync is taken from the endpoint devices' fleet sync instead. The default is `check`.
@@ -189,6 +195,12 @@ sync is taken from the endpoint devices' fleet sync instead. The default is `che
 When `PROMETHEUS_PUSHGATEWAY_URL` is set, each published run pushes count rollups to the
 Pushgateway, labelled `pipeline="diagnostic"`. Dry runs do not push, and `--skip-metrics` turns the
 push off for one run. Only counts are exported, not the topology itself. See `deploy/monitoring/`.
+
+The counts include the report's final status per service type (`nso_services`), services that are
+not OpUp per device (`nso_service_faults`), and how many devices could not be covered. A scan that
+ends without a report, for example because NSO became unreachable, pushes only a failed-attempt
+signal (`nso_scan_last_attempt_success` 0) and leaves the last good scan's values in place. The
+**NSO Diagnostic** Grafana dashboard charts these.
 
 ---
 

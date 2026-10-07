@@ -129,9 +129,10 @@ async def collect_service_health(
             rec["operational_status"] = basic["status"]
             if basic["status"] in {"down", "unknown"}:
                 rec["status"] = basic["status"]
-        from diagnostic_mas.operational_checks.runner import CHECKS, evaluate as evaluate_other
+        from diagnostic_mas.operational_checks.runner import evaluate as evaluate_other
         cache = ProbeCache()
-        jobs = [(services[f"{t}/{n}"], inst) for t, inst, _, n in planned if t in CHECKS]
+        # Every other type: its own module, or the interface-only check when it has none.
+        jobs = [(services[f"{t}/{n}"], inst) for t, inst, _, n in planned if t != "l2ptp"]
         async def evaluate_job(job):
             rec, instance = job
             basic = await evaluate_other(rec, instance, client, calls, cache, force=force)

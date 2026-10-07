@@ -33,6 +33,18 @@ read-only evidence; no device configuration is changed.
   and all configured border routers. External services include default routes.
   Missing family/role/VRF identity or unsupported direct-routed variants remain
   Unknown. No customer address, BVI or VRF is invented.
+- `port_mirror.py`: one `monitor-session status` read per device, shared by its
+  services. The session is matched by the service's destination interface in
+  the device's answer, never by a name built from the service ID. Pass needs the
+  session, every intended source operational in the intended direction, and the
+  destination and source interfaces up. A session missing from the answer is
+  Unknown, not Down: the service may simply be gone. The status layout follows
+  Cisco's documentation and has not yet been sampled from a live device.
+- `generic.py`: every other service type. It reads the state of each interface
+  the instance names (the shared `type`/`id` shape). An interface down is Down;
+  otherwise the result is Unknown with "only its interfaces were examined". It
+  never reports Up, and such types are not sent to the LLM because they have
+  no prompt of their own.
 - `probe.py`, `bridge.py`: conservative IOS-XR output adapters and bounded collection.
   Other output formats fail closed to Unknown. Device commands are sequential by default;
   identical queries (including errors) reuse a run-local cache. No automatic retry

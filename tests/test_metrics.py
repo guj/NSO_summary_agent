@@ -269,3 +269,66 @@ def test_push_http_error_appends_response_body(capsys, monkeypatch):
     err = capsys.readouterr().err
     assert "HTTP Error 400" in err
     assert "text format parsing error in line 3" in err
+
+
+def _capture_requests(monkeypatch) -> list:
+    calls: list = []
+
+    class _Resp:
+        def read(self):
+            return b""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(req, timeout=15):
+        calls.append(req)
+        return _Resp()
+
+    monkeypatch.setattr("nso_facts.metrics.urllib.request.urlopen", fake_urlopen)
+    return calls
+
+
+def test_failed_attempt_is_added_to_the_group_without_replacing_the_last_good_scan(monkeypatch):
+    from nso_facts.metrics import push_scan_attempt_failed
+
+    calls = _capture_requests(monkeypatch)
+
+    ok = push_scan_attempt_failed(
+        _settings(), reason="nso_unreachable", pipeline="diagnostic", timestamp_seconds=5.0)
+
+    assert ok is True
+    request = calls[0]
+    # POST replaces only the metrics it names; PUT would wipe the last good scan's values.
+    assert request.get_method() == "POST"
+    assert request.full_url.endswith("/metrics/job/nso-summary/instance/laptop")
+    body = request.data.decode("utf-8")
+    assert 'nso_scan_last_attempt_success{pipeline="diagnostic"} 0.0' in body
+    assert 'nso_scan_last_attempt_nso_unreachable{pipeline="diagnostic"} 1.0' in body
+    assert 'nso_scan_last_attempt_timestamp_seconds{pipeline="diagnostic"} 5.0' in body
+    assert "nso_services" not in body and "nso_summary_last_run_timestamp_seconds" not in body
+
+
+def test_failed_attempt_for_another_reason_is_not_marked_nso_unreachable(monkeypatch):
+    from nso_facts.metrics import push_scan_attempt_failed
+
+    calls = _capture_requests(monkeypatch)
+
+    push_scan_attempt_failed(_settings(), reason="error", pipeline="diagnostic")
+
+    body = calls[0].data.decode("utf-8")
+    assert 'nso_scan_last_attempt_success{pipeline="diagnostic"} 0.0' in body
+    assert 'nso_scan_last_attempt_nso_unreachable{pipeline="diagnostic"} 0.0' in body
+
+
+def test_failed_attempt_is_not_pushed_when_no_pushgateway_is_configured(monkeypatch):
+    from nso_facts.metrics import push_scan_attempt_failed
+
+    calls = _capture_requests(monkeypatch)
+
+    assert push_scan_attempt_failed(
+        _settings(prometheus_pushgateway_url=None), reason="error", pipeline="diagnostic") is False
+    assert calls == []

@@ -63,7 +63,7 @@ from nso_facts.mcp_accounting import (  # noqa: E402
     start_mcp_accounting,
     stop_mcp_accounting,
 )
-from nso_facts.metrics import push_phase1_metrics  # noqa: E402
+from nso_facts.metrics import push_phase1_metrics, push_scan_attempt_failed  # noqa: E402
 from nso_facts.topology.devices import parse_device_names  # noqa: E402
 
 
@@ -288,8 +288,15 @@ async def _run(args: argparse.Namespace) -> int:
     with archive_mcp_results(archive_dir, run_id) as archive_path:
         if archive_path:
             print(f"[mcp archive] Full results: {archive_path}", file=sys.stderr)
+        def report_failed_attempt(reason: str) -> None:
+            """Let monitoring see a scan that ended without a report (never on a dry run)."""
+            if dry_run or bool(getattr(args, "skip_metrics", False)):
+                return
+            if push_scan_attempt_failed(settings, reason=reason, pipeline="diagnostic"):
+                print("Pushed scan-failed signal to Pushgateway", file=sys.stderr)
+
         try:
-            return await _stop_if_nso_unreachable(_run_after_accounting(
+            code = await _stop_if_nso_unreachable(_run_after_accounting(
                 args,
                 settings=settings,
                 skip_llm=skip_llm,
@@ -306,6 +313,13 @@ async def _run(args: argparse.Namespace) -> int:
                 t0=t0,
                 lean_service=lean_service,
             ))
+        except Exception:
+            report_failed_attempt("error")
+            raise
+        else:
+            if code == NSO_UNREACHABLE_EXIT:
+                report_failed_attempt("nso_unreachable")
+            return code
         finally:
             print_mcp_accounting(stop_mcp_accounting())
 
@@ -678,7 +692,7 @@ async def _run_after_accounting(
             print(f"Delivery failed: {channel} — {reason}", file=sys.stderr)
         if not bool(getattr(args, "skip_metrics", False)):
             duration = time.monotonic() - t0
-            snapshot = metrics_snapshot_from_case(case)
+            snapshot = metrics_snapshot_from_case(case, run_id=run_id, report_url=report_url)
             if push_phase1_metrics(
                 snapshot,
                 settings,

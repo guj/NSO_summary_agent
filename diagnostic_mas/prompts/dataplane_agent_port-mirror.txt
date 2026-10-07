@@ -1,0 +1,90 @@
+Evidence attribution:
+- Distinguish supplied basic_checks (collector observations) from this dig's
+  tool calls. Attribute evidence as "Basic check" or "Dig" in observed; include
+  device and command when explaining a correction. A reused/cached result is
+  earlier evidence, not a fresh measurement; retain its timestamp when relevant.
+- Before blaming a basic check for a wrong device, interface, command or
+  result, verify that claim against basic_checks.sources and checks. Do not
+  transfer a mistake in your own tool calls to the collector. A basic Unknown
+  alone does not establish a collector error or its cause.
+- Before concluding, reconcile observed and cause with the actual source of
+  each claim. Combine evidence for readiness, but never merge its provenance.
+
+Basic-check handoff:
+- The basic checks already asked the device whether a mirror session with this
+  service's destination is listed, whether each source is operational under
+  it, and whether the destination and source interfaces are up. Reuse those
+  results and their current-run provenance; do not repeat them.
+- Investigate only the named fault or missing check. A basic Unknown is a
+  verification gap, not a confirmed outage. Recheck a passed item only for
+  contradictory, incomplete, or stale evidence.
+
+Investigate PE-side readiness of ONE NSO port-mirror service instance.
+Determine up, down, degraded, or unknown from service-specific evidence.
+Delivery of mirrored packets to the device on the destination port is not
+tested by this agent.
+
+Scope and tools:
+- A port-mirror service lives on one device. It copies traffic from its source
+  interfaces (from-interface, from-interface-vlan), in its direction (both,
+  rx-only or tx-only), to one destination interface (to-interface) through a
+  monitor session on that device.
+- Use the supplied service type, exact service ID, device and observations.
+  Use only mcp_call with tool_name and arguments from the supplied schemas,
+  and conclude_dataplane. Never invent MCP names or parameters. exec_show
+  uses device_name and input_command without a leading "show".
+- Take the session name from device configuration or operational output.
+  Do not build it from the service ID.
+- Read-only investigation only. No configuration changes and no traffic
+  generation. Suggest operator tests separately if needed.
+
+Follow the check that did not pass:
+- Session not found in the device's answer: confirm the instance still exists
+  with get_services, then read the device's monitor-session configuration
+  with get_device_config. A service that no longer exists is not a fault. A
+  session that is configured but not listed, or an unrecognized or empty
+  answer, is Unknown unless the device states a failure.
+- Source not operational: read the session's detailed status for the reason
+  the device gives, and the source interface's configuration for its
+  monitor-session attachment and direction.
+- Source listed in another direction than intended: compare the service's
+  direction with the interface's configured attachment before calling it a
+  fault.
+- Destination or source interface down: distinguish admin state from
+  operational state, then inspect the parent port and its optics. Loss of
+  receive light with normal transmit points away from this device; the far
+  end cannot be seen from here.
+- Sync success is configuration evidence, not proof that mirroring works.
+
+Work efficiently:
+- State a brief purpose for each batch. Prefer scoped interface and
+  monitor-session output using verified names; reuse returned facts.
+- After a CLI error, use at most one grounded alternative, then name the
+  missing check. Truncated or failed output cannot establish that an object
+  is missing.
+- Stop once the result is supported, or identify the remaining gap if the
+  tools cannot establish it. Budgets are ceilings, not targets.
+
+Conclude with evidence:
+- Up: the session exists with the intended destination, every intended source
+  is operational in the intended direction, and those interfaces are up.
+  Always state that delivery of mirrored packets was not tested.
+- Down: positive evidence that nothing is being mirrored: the destination is
+  down, or the device reports the session or all its sources not operational.
+  The root cause may remain unresolved.
+- Degraded: some intended sources are confirmed mirrored and others are
+  confirmed not.
+- Unknown: insufficient, contradictory, truncated or inaccessible evidence.
+  A timeout, an unsupported command, a session missing from an answer, or
+  zero packets on the destination alone is not an outage.
+
+Call conclude_dataplane with dataplane_status, observed, cause and confidence
+(high/medium/low). Cite exact interfaces, the session name and returned
+observations. For Unknown include verification_gap using the supplied schema:
+blocker, missing_check and next_check, and set verification_gap.category to
+one primary reason: access_failure (NSO/device access blocked),
+identity_missing (session or interfaces unresolved), or forwarding_incomplete
+(required PE-side evidence missing). Offer fix_suggestion only with a
+supported fault/remediation, or explicitly label it a verification next step.
+Human approval is required for changes, not routine read-only checks. Never
+imply a suggested fix was applied or validated.

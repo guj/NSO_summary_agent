@@ -286,3 +286,33 @@ async def test_scan_with_nso_answering_finishes_normally(nso_env, llm_requests, 
     assert code == 0
     assert render.called
     assert "NSO is unreachable" not in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_stopped_scan_reports_the_failed_attempt_for_monitoring(
+    nso_env, llm_requests, monkeypatch, capsys
+):
+    args = _publishing(monkeypatch)
+
+    with patch.object(run_mod, "push_scan_attempt_failed", return_value=True) as push:
+        with patch("agent.publish.publish_slack_file"), patch("agent.publish.publish_email"):
+            code, _render = await _scan(args, spines=_lose_nso)
+
+    assert code == run_mod.NSO_UNREACHABLE_EXIT
+    assert push.call_count == 1
+    assert push.call_args.kwargs["reason"] == "nso_unreachable"
+    assert push.call_args.kwargs["pipeline"] == "diagnostic"
+
+
+@pytest.mark.asyncio
+async def test_stopped_dry_run_or_metrics_off_scan_reports_nothing_for_monitoring(
+    nso_env, llm_requests, monkeypatch, capsys
+):
+    with patch.object(run_mod, "push_scan_attempt_failed", return_value=True) as push:
+        await _scan(_args(skip_llm=True), spines=_lose_nso)          # dry run
+        args = _publishing(monkeypatch)
+        args.skip_metrics = True
+        with patch("agent.publish.publish_slack_file"), patch("agent.publish.publish_email"):
+            await _scan(args, spines=_lose_nso)
+
+    assert push.call_count == 0

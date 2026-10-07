@@ -38,6 +38,10 @@ def assessment(service, dig=None):
     if operational == "up" and not dig:
         return operational, "Basic operational pass"
     suffix = "LLM incomplete; retained" if dig else "not investigated"
+    if operational == "unknown" and basic.get("coverage") == "interfaces_only" and not dig:
+        states = [c.get("status") for c in basic.get("checks") or [] if c.get("check") == "interface"]
+        seen = "Interfaces up" if states and all(s == "pass" for s in states) else "Interface state incomplete"
+        return "unknown", seen + " — service logic not checked"
     if not basic and not service.get("operational_status"):
         return "unknown", "Operational evidence unavailable — " + suffix
     return operational, f"Operational {label} — {suffix}"
