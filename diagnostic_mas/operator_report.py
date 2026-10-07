@@ -1191,11 +1191,16 @@ def _incomplete_dig_next_action(dx: dict[str, Any]) -> str:
 
 def _incomplete_dig_followup(name: str, dx: dict[str, Any]) -> str:
     from diagnostic_mas.unknown_breakdown import next_step, pending_gate_review, category_for
+
+    def named(text: str) -> str:
+        # These texts are written about one service without always naming it.
+        return text if name in text else f"For `{name}`: {text}"
+
     if pending_gate_review(dx) or category_for(dx) == "gate_contradiction":
-        return next_step(dx)
+        return named(next_step(dx))
     structured = dx.get("verification_gap")
     if isinstance(structured, dict) and structured.get("next_check"):
-        return scrub_internal_ids(str(structured["next_check"]))
+        return named(scrub_internal_ids(str(structured["next_check"])))
     if isinstance(dx.get("verification_gap"), dict):
         return f"Finish verification for `{name}`: {_incomplete_dig_next_action(dx)}"
     kind = _incomplete_dig_stop_kind(dx)
@@ -1376,8 +1381,7 @@ def format_services_operator(
             body = _live_l2_body(rec)
             basic = rec.get("basic_checks")
             if isinstance(basic, dict):
-                body += ["Basic check " + str(c.get("check")) + " (" + str(c.get("status")) + "): " + str(c.get("observation"))
-                         for c in basic.get("checks", [])]
+                body += _basic_check_lines(basic)
             if body:
                 lines.append("")
                 lines.append("**Collector detail:**")
@@ -1389,7 +1393,7 @@ def format_services_operator(
                 lines.append(f"**Next check:** {_incomplete_dig_next_action(dx)}")
             elif complete is not False and fix:
                 next_line = f"**Next action:** {fix}"
-                if status in {"down", "degraded"}:
+                if status in {"down", "degraded"} and not _mentions_human_approval(fix):
                     next_line += " (human must approve any config change)."
                 lines.append(next_line)
             elif complete is False:
@@ -1432,8 +1436,7 @@ def format_services_operator(
             body = _live_l2_body(rec)
             basic = rec.get("basic_checks")
             if isinstance(basic, dict):
-                body += ["Basic check " + str(c.get("check")) + " (" + str(c.get("status")) + "): " + str(c.get("observation"))
-                         for c in basic.get("checks", [])]
+                body += _basic_check_lines(basic)
             for line in body:
                 lines.append(line)
             if body:
@@ -1488,6 +1491,28 @@ def _site_label(device: str) -> str:
             d = d[: -len(suf)]
             break
     return d.upper() if d else str(device or "").strip()
+
+
+def _observation_text(value: Any) -> str:
+    """A basic-check observation as plain text; structured ones as ``key=value`` pairs."""
+    if isinstance(value, dict):
+        return "; ".join(f"{key}={_observation_text(item)}" for key, item in value.items())
+    if isinstance(value, (list, tuple, set)):
+        return ",".join(_observation_text(item) for item in value)
+    return str(value)
+
+
+def _basic_check_lines(basic: dict[str, Any]) -> list[str]:
+    return [
+        f"Basic check {c.get('check')} ({c.get('status')}): "
+        f"{_observation_text(c.get('observation'))}"
+        for c in basic.get("checks", [])
+    ]
+
+
+def _mentions_human_approval(text: str) -> bool:
+    lowered = text.lower()
+    return "human" in lowered and "approv" in lowered
 
 
 def _fault_location(record: dict[str, Any]) -> tuple[tuple[str, ...], bool]:

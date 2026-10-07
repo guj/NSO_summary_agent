@@ -226,6 +226,36 @@ def _template_narrative(case: CaseFile, *, skip_llm: bool) -> str:
     return " ".join(lines)
 
 
+def _collection_gap_devices(case: CaseFile) -> dict[str, dict[str, Any]]:
+    """Per device with a collection gap: services on it and their final status."""
+    from diagnostic_mas.service_final_status import final_service_assessments
+
+    managed = set(case.device_names or [])
+    devices: set[str] = set()
+    for issue in case.issues:
+        code = str(issue.get("code") or "")
+        if code == "device_live_unreachable":
+            devices.update(str(d) for d in issue.get("devices") or [] if d)
+        elif code == "collection_error":
+            # Collector messages start with the exact device name.
+            device = str(issue.get("message") or "").partition(":")[0].strip()
+            if device in managed:
+                devices.add(device)
+    if not devices:
+        return {}
+    counts: dict[str, dict[str, int]] = {device: {} for device in devices}
+    for _kind, _name, service, status, _reason in final_service_assessments(case):
+        for device in devices.intersection(str(d) for d in service.get("devices") or []):
+            counts[device][status] = counts[device].get(status, 0) + 1
+    out: dict[str, dict[str, Any]] = {}
+    for device in sorted(devices):
+        row: dict[str, Any] = {"services": sum(counts[device].values())}
+        if counts[device]:
+            row["final_status"] = dict(sorted(counts[device].items()))
+        out[device] = row
+    return out
+
+
 def _compact_case_for_llm(
     case: CaseFile,
     *,
@@ -398,6 +428,16 @@ def _compact_case_for_llm(
         "max_dataplane_tools": per_dig_cap,
         "max_tools_per_drill": case.budget.max_tools_per_drill,
     }
+    gap_devices = _collection_gap_devices(case)
+    if gap_devices:
+        out["collection_gap_devices"] = {
+            "devices": gap_devices,
+            "note": (
+                "Services with an endpoint on each device whose collection "
+                "failed or that was dropped this run, with their final status. "
+                "A device with 0 services leaves no service unchecked."
+            ),
+        }
     if case_delta is not None:
         out["changes_since_previous"] = case_delta
         if previous_run_id:

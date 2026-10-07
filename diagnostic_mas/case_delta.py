@@ -109,6 +109,52 @@ def coverage_map(case: dict[str, Any]) -> dict[str, str]:
     return {str(k): str(v) for k, v in raw.items()}
 
 
+def _service_inventory(case: dict[str, Any]) -> dict[str, str]:
+    """Service name -> service type, from the run's service inventory."""
+    out: dict[str, str] = {}
+    for ev in case.get("evidence") or []:
+        if not isinstance(ev, dict) or ev.get("kind") != "spine" or ev.get("role") != "service":
+            continue
+        extra = (ev.get("payload") or {}).get("extra") or {}
+        for key, record in (extra.get("services") or {}).items():
+            if not isinstance(record, dict):
+                continue
+            name = str(record.get("name") or str(key).split("/", 1)[-1]).strip()
+            kind = str(record.get("service_type") or str(key).split("/", 1)[0]).strip()
+            if name:
+                out[name] = kind
+    return out
+
+
+def _full_service_scope(case: dict[str, Any]) -> bool:
+    """True when the run recorded that it listed every service, unfiltered."""
+    config = case.get("run_configuration")
+    if not isinstance(config, dict) or case.get("focus_devices"):
+        return False
+    if any(config.get(key) != "All"
+           for key in ("Device filter", "Service type filter", "Service ID filter")):
+        return False
+    return str(config.get("Scope flags") or "") == "Default"
+
+
+def _services_no_longer_present(older: dict[str, Any], newer: dict[str, Any]) -> dict[str, str]:
+    """Services in the older inventory that a full newer scan no longer lists.
+
+    Owners delete services routinely, so this is neither a fault nor a gap.
+    Only claimed when the newer run was unfiltered and still collected that
+    service type; otherwise absence may just be a narrower scan.
+    """
+    if not _full_service_scope(newer):
+        return {}
+    now = _service_inventory(newer)
+    collected_types = set(now.values())
+    return {
+        name: kind
+        for name, kind in _service_inventory(older).items()
+        if name not in now and kind in collected_types
+    }
+
+
 def _issue_subject(issue: dict[str, Any]) -> str:
     edge = issue.get("edge_id")
     if isinstance(edge, str) and edge.strip():
@@ -393,10 +439,17 @@ def compute_case_delta(
         else:
             recovered.append(issue)
 
+    gone = _services_no_longer_present(older, newer)
     coverage_changes: list[dict[str, str]] = []
     newly_missing_evidence: list[dict[str, str]] = []
     for name, old_label in old_cov.items():
-        if name not in new_cov:
+        if name not in new_cov and name in gone:
+            # No longer in NSO, not left unchecked: no evidence is missing.
+            coverage_changes.append(
+                {"service": name, "from": old_label, "to": "no longer present",
+                 "kind": "no_longer_present"}
+            )
+        elif name not in new_cov:
             row = {
                 "service": name,
                 "from": old_label,
@@ -563,6 +616,11 @@ def compute_case_delta(
         "last_known_service_faults": history,
         "recovered_devices": recovered_devices,
         "newly_missing_evidence": newly_missing_evidence,
+        "services_no_longer_present": [
+            {"service": name, "service_type": kind,
+             "previous_coverage": old_cov.get(name, "")}
+            for name, kind in sorted(gone.items())
+        ],
         "notes": notes,
     }
 
@@ -576,6 +634,8 @@ def delta_has_operational_changes(delta: dict[str, Any]) -> bool:
     if delta.get("recovered_devices"):
         return True
     if delta.get("newly_missing_evidence"):
+        return True
+    if delta.get("services_no_longer_present"):
         return True
     if delta.get("persistent"):
         return True
@@ -647,6 +707,13 @@ def format_case_delta(
         list(delta.get("newly_missing_evidence") or []),
         "None",
     )
+    if delta.get("services_no_longer_present"):
+        _section(
+            "Services no longer present",
+            [f"{row['service_type']}/{row['service']}"
+             for row in delta["services_no_longer_present"]],
+            "None",
+        )
     _section(
         "New problems",
         list(delta.get("new_problems") or []),
@@ -772,6 +839,16 @@ def format_changes_since_previous(
             lines.append(f"- `{subj}` — {detail} ({kind})")
     lines.append("")
 
+    gone = list(delta.get("services_no_longer_present") or [])
+    if gone:
+        lines.append("**Services no longer present since the previous run:**")
+        for row in gone[:persistent_limit]:
+            lines.append(f"- `{row['service_type']}/{row['service']}`")
+        extra = len(gone) - persistent_limit
+        if extra > 0:
+            lines.append(f"- …and {extra} more")
+        lines.append("")
+
     lines.append("**Persistent problems:**")
     if not persistent:
         lines.append("- None")
@@ -825,7 +902,14 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
             )
         return out
 
+    gone = [row["service"] for row in delta.get("services_no_longer_present") or []]
     return {
+        **({"services_no_longer_present": {
+            "count": len(gone),
+            "services": gone[:20],
+            "note": ("Not present in NSO any more since the previous run. "
+                     "Routine; not a coverage gap, a fault or a recovery."),
+        }} if gone else {}),
         "newly_failed_services": list(delta.get("newly_failed_services") or [])[:20],
         "recovered_devices": list(delta.get("recovered_devices") or [])[:20],
         "newly_missing_evidence": list(delta.get("newly_missing_evidence") or [])[

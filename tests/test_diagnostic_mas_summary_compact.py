@@ -213,3 +213,52 @@ def test_compact_keeps_all_dataplane_diagnoses_beyond_20():
     assert compact["dataplane_tally"]["incomplete_or_unresolved_by_type"]["l2sts"][
         "count"
     ] == 10
+
+
+def _case_with_collection_gaps() -> CaseFile:
+    case = CaseFile(
+        budget=Budget(max_deep_checks=0, max_handoffs=0),
+        device_names=["cape-data-sw", "cien-data-sw", "mich-data-sw", "scm-data-sw"],
+    )
+    services = {
+        "l3rt/on-cien": {"name": "on-cien", "service_type": "l3rt", "devices": ["cien-data-sw"],
+                         "device_sync": {"cien-data-sw": "in-sync"}, "operational_status": "up"},
+        "l2bridge/on-mich": {"name": "on-mich", "service_type": "l2bridge",
+                             "devices": ["mich-data-sw"],
+                             "device_sync": {"mich-data-sw": "in-sync"},
+                             "operational_status": "up"},
+    }
+    eid = add_evidence(
+        case,
+        {"kind": "spine", "role": "service", "layer": "services",
+         "payload": {"extra": {"services": services}}},
+    )
+    for device, layer in (("cape-data-sw", "routing"), ("cien-data-sw", "routing"),
+                          ("cien-data-sw", "underlay")):
+        open_issue(
+            case, code="collection_error", layer=layer, evidence_ids=[eid],
+            message=f"{device}: BGP summary collection failed: exec action unavailable",
+        )
+    open_issue(
+        case, code="device_live_unreachable", layer="device", evidence_ids=[eid],
+        message="scm-data-sw: automated NSO live-MCP collection timed out on exec_show",
+        devices=["scm-data-sw"],
+    )
+    return case
+
+
+def test_compact_case_says_how_many_services_sit_on_each_device_with_a_collection_gap():
+    compact = _compact_case_for_llm(_case_with_collection_gaps())
+
+    assert compact["collection_gap_devices"]["devices"] == {
+        "cape-data-sw": {"services": 0},
+        "cien-data-sw": {"services": 1, "final_status": {"up": 1}},
+        "scm-data-sw": {"services": 0},
+    }
+    assert "note" in compact["collection_gap_devices"]
+
+
+def test_compact_case_omits_collection_gap_devices_when_collection_was_complete():
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0), device_names=["pe1"])
+
+    assert "collection_gap_devices" not in _compact_case_for_llm(case)

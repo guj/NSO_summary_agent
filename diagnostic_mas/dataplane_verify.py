@@ -2128,11 +2128,13 @@ async def _llm_dataplane_verify_one(
         from nso_facts.mcp_client import quarantined_devices
 
         q = quarantined_devices() or {}
-        if q:
-            brief["unavailable_devices"] = sorted(q.keys())
-            brief["available_devices"] = sorted(
-                d for d in (record.get("devices") or []) if d and d not in q
-            )
+        endpoints = [d for d in (record.get("devices") or []) if d]
+        # Only this service's own endpoints: a device dropped elsewhere in the
+        # run is no part of this service, and calls to it are refused anyway.
+        unavailable = sorted(d for d in endpoints if d in q)
+        if unavailable:
+            brief["unavailable_devices"] = unavailable
+            brief["available_devices"] = sorted(d for d in endpoints if d not in q)
     except Exception:  # noqa: BLE001
         pass
 
@@ -2142,7 +2144,8 @@ async def _llm_dataplane_verify_one(
         f"Check the dataplane status of this "
         f"{record.get('service_type') or 'NSO'} service.",
         f"At most {remaining} mcp_call tools; conclude by round {max_rounds_hint}.",
-        "Do not call MCP on unavailable_devices; prefer available_devices.",
+        *(["Do not call MCP on unavailable_devices; prefer available_devices."]
+          if "unavailable_devices" in brief else []),
         "check_service_sync needs service_type + service_name; "
         "never ping via exec_show.",
         "",

@@ -222,6 +222,104 @@ def test_follow_up_groups_by_the_device_whose_basic_check_failed():
     assert items[0].endswith("Services: `s1`, `s2`.")
 
 
+def _service_section(*, fix: str, observation) -> str:
+    """Rendered section of one faulted service with a single basic check."""
+    from diagnostic_mas.operator_report import format_services_operator
+
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    record = {
+        "name": "s1", "service_type": "l2sts", "devices": ["fiu-data-sw"],
+        "basic_checks": {"status": "down", "checks": [
+            {"check": "effective_evpn", "device": "fiu-data-sw", "status": "pass",
+             "observation": observation},
+        ]},
+    }
+    add_evidence(
+        case,
+        {"kind": "spine", "role": "service", "layer": "services",
+         "payload": {"extra": {"services": {"l2sts/s1": record}}}},
+    )
+    add_diagnosis(
+        case, kind="dataplane", source="llm", status="down",
+        subject={"name": "s1", "service_type": "l2sts"},
+        observed="attachment circuit down", cause="no receive light", fix_suggestion=fix,
+    )
+    return "\n".join(format_services_operator(case, services_detail=False))
+
+
+def test_collector_detail_prints_a_structured_observation_as_plain_pairs():
+    text = _service_section(
+        fix="Inspect the optic.",
+        observation={"imports": ["398900:9001"], "exports": ["398900:9001"],
+                     "peer": "10.141.0.1", "label": 24120, "evi": "9001"},
+    )
+
+    assert (
+        "Basic check effective_evpn (pass): imports=398900:9001; exports=398900:9001; "
+        "peer=10.141.0.1; label=24120; evi=9001"
+    ) in text
+    assert "{'" not in text
+
+
+def test_collector_detail_keeps_a_plain_text_observation_as_it_is():
+    text = _service_section(fix="Inspect the optic.", observation="Hu0/0/0/24/0.0")
+
+    assert "Basic check effective_evpn (pass): Hu0/0/0/24/0.0" in text
+
+
+def test_next_action_adds_the_approval_reminder_when_the_text_lacks_one():
+    text = _service_section(fix="Inspect the optic on Hu0/0/0/24/0.", observation="x")
+
+    assert (
+        "**Next action:** Inspect the optic on Hu0/0/0/24/0. "
+        "(human must approve any config change)."
+    ) in text
+
+
+def test_next_action_does_not_repeat_an_approval_reminder_already_in_the_text():
+    fix = "Re-address one gateway; remediation requires human approval."
+
+    text = _service_section(fix=fix, observation="x")
+
+    assert f"**Next action:** {fix}\n" in text + "\n"
+    assert "(human must approve any config change)" not in text
+
+
+def _inconclusive_case(name: str, next_check: str) -> CaseFile:
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    add_evidence(
+        case,
+        {"kind": "spine", "role": "service", "layer": "services",
+         "payload": {"extra": {"services": {
+             f"l2bridge/{name}": {"name": name, "service_type": "l2bridge",
+                                  "devices": ["cien-data-sw"]}}}}},
+    )
+    add_diagnosis(
+        case, kind="dataplane", source="llm", status="unknown",
+        subject={"name": name, "service_type": "l2bridge"},
+        observed="operational access failed", cause="exec unavailable",
+        extra={"complete": False, "verification_gap": {"next_check": next_check}},
+    )
+    return case
+
+
+def test_follow_up_for_an_inconclusive_investigation_names_its_service():
+    case = _inconclusive_case("dp-84934141", "After restoring access, read the state of this FD.")
+
+    text = "\n".join(format_followup_operator(case))
+
+    assert "For `dp-84934141`: After restoring access, read the state of this FD." in text
+
+
+def test_follow_up_does_not_name_the_service_twice():
+    case = _inconclusive_case("dp-84934141", "Re-read the FD for `dp-84934141` on port 14.")
+
+    text = "\n".join(format_followup_operator(case))
+
+    assert "Re-read the FD for `dp-84934141` on port 14." in text
+    assert "For `dp-84934141`:" not in text
+
+
 def test_follow_up_names_a_lone_faulted_service_directly():
     case = _faulted_case({
         "b1": ("l2bridge", ["mich-data-sw"]),

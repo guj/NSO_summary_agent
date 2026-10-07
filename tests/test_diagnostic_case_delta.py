@@ -360,3 +360,82 @@ def test_unchecked_device_is_not_recovered_from_inventory_or_scope():
     assert issue in delta["recovered"]
     current["issues"] = [issue]
     assert compute_case_delta(old, current)["recovered_devices"] == []
+
+
+FULL_SCOPE = {"Device filter": "All", "Service type filter": "All",
+              "Service ID filter": "All", "Scope flags": "Default"}
+
+
+def _scan(services: dict[str, str], *, coverage: dict[str, str] | None = None,
+          scope: dict | None = FULL_SCOPE, focus: list[str] | None = None) -> dict:
+    """A saved case holding a service inventory (name -> service type)."""
+    records = {f"{kind}/{name}": {"name": name, "service_type": kind, "devices": ["pe1"]}
+               for name, kind in services.items()}
+    case = {
+        "evidence": [{"kind": "spine", "role": "service", "layer": "services",
+                      "payload": {"extra": {"services": records}}}],
+        "issues": [], "diagnoses": [],
+        "service_coverage": coverage if coverage is not None else {n: "basic_passed" for n in services},
+        "focus_devices": focus or [],
+    }
+    if scope is not None:
+        case["run_configuration"] = dict(scope)
+    return case
+
+
+def test_service_gone_from_a_full_scan_is_reported_no_longer_present_not_as_missing_evidence():
+    older = _scan({"keep": "l2bridge", "gone": "l2bridge"},
+                  coverage={"keep": "basic_passed", "gone": "category_peer_skipped"})
+    newer = _scan({"keep": "l2bridge"})
+
+    delta = compute_case_delta(older, newer)
+
+    assert delta["services_no_longer_present"] == [
+        {"service": "gone", "service_type": "l2bridge",
+         "previous_coverage": "category_peer_skipped"}
+    ]
+    assert delta["newly_missing_evidence"] == []
+
+
+def test_service_outside_a_narrower_scan_is_still_missing_evidence_not_reported_gone():
+    older = _scan({"keep": "l2bridge", "other": "l2bridge"},
+                  coverage={"keep": "basic_passed", "other": "category_peer_skipped"})
+    narrower = _scan({"keep": "l2bridge"}, scope={**FULL_SCOPE, "Service ID filter": "keep"})
+
+    delta = compute_case_delta(older, narrower)
+
+    assert delta["services_no_longer_present"] == []
+    assert [row["subject"] for row in delta["newly_missing_evidence"]] == ["other"]
+
+
+def test_service_is_not_reported_gone_when_its_type_was_not_collected_or_scope_is_unknown():
+    older = _scan({"keep": "l2bridge", "other": "l3rt"},
+                  coverage={"keep": "basic_passed", "other": "category_peer_skipped"})
+
+    type_not_collected = compute_case_delta(older, _scan({"keep": "l2bridge"}))
+    scope_unknown = compute_case_delta(
+        _scan({"keep": "l2bridge", "other": "l2bridge"},
+              coverage={"keep": "basic_passed", "other": "category_peer_skipped"}),
+        _scan({"keep": "l2bridge"}, scope=None),
+    )
+
+    assert type_not_collected["services_no_longer_present"] == []
+    assert scope_unknown["services_no_longer_present"] == []
+
+
+def test_changes_section_lists_services_no_longer_present_apart_from_missing_evidence():
+    from diagnostic_mas.case_delta import compact_delta_for_llm, format_changes_since_previous
+
+    older = _scan({"keep": "l2bridge", "gone": "l2bridge"},
+                  coverage={"keep": "basic_passed", "gone": "category_peer_skipped"})
+    delta = compute_case_delta(older, _scan({"keep": "l2bridge"}))
+
+    text = "\n".join(format_changes_since_previous(delta, previous_run_id="run-1"))
+
+    assert "**Services no longer present since the previous run:**" in text
+    assert "intent is unknown" not in text and "owners" not in text
+    assert "- `l2bridge/gone`" in text
+    assert "not_checked" not in text and "coverage_gap" not in text
+    for_summary = compact_delta_for_llm(delta)
+    assert for_summary["services_no_longer_present"]["services"] == ["gone"]
+    assert for_summary["newly_missing_evidence"] == []
