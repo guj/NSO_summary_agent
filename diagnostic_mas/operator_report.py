@@ -566,6 +566,25 @@ def _verification_unknown_involvement_by_device(case: CaseFile) -> Counter[str]:
     return counts
 
 
+def _final_unknown_services_by_endpoint(case: CaseFile) -> Counter[str]:
+    """Services whose final status is Unknown, counted once per endpoint device.
+
+    Unlike the sync-verification grouping above, this includes services left
+    Unknown for any reason, such as queries skipped after a device was dropped.
+    Counts overlap across devices and must not be summed.
+    """
+    from diagnostic_mas.service_final_status import final_service_assessments
+
+    counts: Counter[str] = Counter()
+    for _kind, _name, service, status, _reason in final_service_assessments(case):
+        if status != "unknown":
+            continue
+        endpoints = {str(d) for d in service.get("devices") or [] if d}
+        endpoints.update(str(d) for d in service.get("device_sync") or {} if d)
+        counts.update(endpoints)
+    return counts
+
+
 def _verification_unknown_service_names(case: CaseFile) -> set[str]:
     """Service names included in endpoint-sync unknown grouping."""
     names: set[str] = set()
@@ -1471,6 +1490,19 @@ def _site_label(device: str) -> str:
     return d.upper() if d else str(device or "").strip()
 
 
+def _fault_location(record: dict[str, Any]) -> tuple[tuple[str, ...], bool]:
+    """Devices where a basic check failed, else all endpoints; and which it was."""
+    checks = (record.get("basic_checks") or {}).get("checks") or []
+    failed = {
+        str(c["device"])
+        for c in checks
+        if isinstance(c, dict) and c.get("status") == "fault" and c.get("device")
+    }
+    if failed:
+        return tuple(sorted(failed)), True
+    return tuple(sorted({str(d) for d in record.get("devices") or [] if d})), False
+
+
 def format_followup_operator(case: CaseFile) -> list[str]:
     """Ordered operator actions: service faults → collection → gaps → inventory.
 
@@ -1481,15 +1513,36 @@ def format_followup_operator(case: CaseFile) -> list[str]:
     items: list[str] = []
     fault_names: set[str] = set()
     dp_findings = _dataplane_by_name(case)
+    # Faults of one service type at the same place usually share one cause,
+    # so they are one action; the grouping itself asserts no diagnosis.
+    records = dict(_iter_service_records(case))
+    fault_groups: dict[tuple[Any, ...], list[str]] = {}
     for name, dx in dp_findings.items():
         status = str(dx.get("dataplane_status") or "").lower()
         if dx.get("complete") is not False and status in {"down", "degraded"}:
             fault_names.add(name)
+            kind = str(dx.get("service_type") or "").split(":")[-1].strip()
+            devices, check_failed = _fault_location(records.get(name) or {})
+            key = ((status, kind, devices, check_failed) if kind and devices
+                   else (status, name))
+            fault_groups.setdefault(key, []).append(name)
+    for (status, *where), names in fault_groups.items():
+        if len(names) == 1:
             items.append(
-                f"Prioritize dataplane {status} on `{name}`: review the "
+                f"Prioritize dataplane {status} on `{names[0]}`: review the "
                 "service evidence and supported next steps before remediation "
                 "(human must approve any configuration/state change)."
             )
+            continue
+        kind, devices, check_failed = where
+        place = "with failed basic checks on" if check_failed else "on"
+        items.append(
+            f"Prioritize dataplane {status} on {len(names)} {kind} services "
+            f"{place} {_format_endpoint_group_label(devices)}: review each "
+            "service's evidence and supported next steps before remediation "
+            "(human must approve any configuration/state change). Services: "
+            + ", ".join(f"`{n}`" for n in names) + "."
+        )
     for issue in case.issues:
         name = str(issue.get("edge_id") or "").strip()
         if (name and name not in fault_names and name not in dp_findings
@@ -1828,6 +1881,8 @@ def format_result_line(case: CaseFile) -> str:
         and str(d.get("dataplane_status") or "").lower() in {"up", "ok"}
     ]
     parts: list[str] = []
+    # Service status leads; device collection gaps follow it.
+    collection_gaps: list[str] = []
     if quarantined_n:
         from nso_facts.mcp_client import (
             live_mcp_failure_kind,
@@ -1839,7 +1894,7 @@ def format_result_line(case: CaseFile) -> str:
             live_mcp_failure_kind(str(i.get("message") or ""))
             for i in quarantined_issues
         }
-        involvement = _verification_unknown_involvement_by_device(case)
+        involvement = _final_unknown_services_by_endpoint(case)
         if kinds == {"timeout"}:
             ops = {
                 parse_live_mcp_failed_operation(str(i.get("message") or ""))
@@ -1875,7 +1930,7 @@ def format_result_line(case: CaseFile) -> str:
             device_list = ", ".join(device_bits) if device_bits else (
                 f"{quarantined_n} device{'s' if quarantined_n != 1 else ''}"
             )
-            parts.append(
+            collection_gaps.append(
                 f"{quarantined_n} device"
                 f"{'s' if quarantined_n != 1 else ''} hit automated "
                 f"{op} timeout{timeout_bit}: {device_list} "
@@ -1883,13 +1938,13 @@ def format_result_line(case: CaseFile) -> str:
                 "succeed — not proof devices are down)."
             )
         elif kinds == {"unreachable"}:
-            parts.append(
+            collection_gaps.append(
                 f"{quarantined_n} device"
                 f"{'s' if quarantined_n != 1 else ''} live-unreachable "
                 "(further live MCP skipped)."
             )
         else:
-            parts.append(
+            collection_gaps.append(
                 f"{quarantined_n} device"
                 f"{'s' if quarantined_n != 1 else ''} live-query-failed "
                 "(further live MCP skipped)."
@@ -1942,6 +1997,7 @@ def format_result_line(case: CaseFile) -> str:
                 )
             else:
                 parts.append("No dataplane investigations recorded.")
+    parts.extend(collection_gaps)
     if mapping_n:
         parts.append(
             f"{mapping_n} inventory mapping observation"

@@ -110,11 +110,25 @@ def notification_digest(report: str, run_id: str) -> str:
     section = re.search(r'^## Recommended follow-up\s*\n(.*?)(?=^## |\Z)', report, re.M | re.S)
     if section:
         items = re.findall(r'^\d+\. .+', section.group(1), re.M)
-        lines.extend(['', '**Priority follow-up:**'] + [l[:260] for l in items[:5]])
+        lines.extend(['', '**Priority follow-up:**'] + [_clip(l, 260) for l in items[:5]])
         if len(items) > 5:
             lines.append(f"{len(items)-5} more follow-up items in the full report.")
     lines += ['', 'Full findings and evidence are in the HTML report. Customer traffic delivery was not tested by this agent.']
     return '\n'.join(lines)
+
+
+def _clip(line: str, limit: int) -> str:
+    """Shorten a line between words, never inside a `code` span."""
+    if len(line) <= limit:
+        return line
+    cut = line[:limit - 2].rsplit(' ', 1)[0]
+    if cut.count('`') % 2:
+        cut = cut[:cut.rfind('`')]
+    cut = cut.rstrip(' ,;')
+    if cut.endswith(':') and '. ' in cut:
+        # A list label whose entries were all cut says nothing; end the sentence before it.
+        cut = cut[:cut.rfind('. ') + 1]
+    return cut.rstrip(' ,;:') + ' …'
 
 
 def render_html_report(report: str, run_id: str, *, case: dict | None = None) -> str:
@@ -154,7 +168,7 @@ def render_html_report(report: str, run_id: str, *, case: dict | None = None) ->
         if title == 'Services':
             records.sort()
         parts.extend(r[2] for r in records)
-        opened = ' open' if title in ('Services', 'Recommended follow-up') else ''
+        opened = ' open' if title in ('Summary', 'Services', 'Recommended follow-up') else ''
         blocks.append(f'<details class="section" id="{ident}"{opened}><summary>{html.escape(title)}</summary>{"".join(parts)}</details>')
     return '''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

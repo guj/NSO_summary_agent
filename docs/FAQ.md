@@ -12,9 +12,9 @@ In order: **Summary**, **Changes since previous run**, **Devices**, **Services**
 the LLM and is omitted with `--skip-llm`. Findings from LLM investigations appear under the
 service they concern; the rest of the report is deterministic.
 
-The HTML report adds **Service topology** and **Routing topology**. Only Services and Recommended
-follow-up start expanded; open any other section by clicking its heading or its link in the
-navigation bar. The search box filters by service ID, device, type or evidence text.
+The HTML report adds **Service topology** and **Routing topology**. Only Summary, Services and
+Recommended follow-up start expanded; open any other section by clicking its heading or its link
+in the navigation bar. The search box filters by service ID, device, type or evidence text.
 
 ### How do I see the topology?
 
@@ -133,7 +133,9 @@ is treated as Established.
 - A BGP or IS-IS neighbor that could not be mapped to a device in the NSO inventory.
 - A device whose automated live queries timed out or failed. Further live queries to it are skipped
   for the rest of the run. NSO configuration may still be present and manual access may still work,
-  so this is not proof that the device is down.
+  so this is not proof that the device is down. If NSO itself stopped answering, the scan stops
+  instead and produces no report; see
+  [When NSO stops answering during a scan](DIAGNOSTIC_RUNNER.md#when-nso-stops-answering-during-a-scan).
 
 ---
 

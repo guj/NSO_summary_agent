@@ -54,6 +54,8 @@ from nso_facts.mcp_client import (  # noqa: E402
     mcp_error_message,
     mcp_is_error,
     mcp_session,
+    nso_unreachable_reason,
+    nso_watch,
 )
 from nso_facts.mcp_accounting import (  # noqa: E402
     print_mcp_accounting,
@@ -287,7 +289,7 @@ async def _run(args: argparse.Namespace) -> int:
         if archive_path:
             print(f"[mcp archive] Full results: {archive_path}", file=sys.stderr)
         try:
-            return await _run_after_accounting(
+            return await _stop_if_nso_unreachable(_run_after_accounting(
                 args,
                 settings=settings,
                 skip_llm=skip_llm,
@@ -303,9 +305,42 @@ async def _run(args: argparse.Namespace) -> int:
                 run_id=run_id,
                 t0=t0,
                 lean_service=lean_service,
-            )
+            ))
         finally:
             print_mcp_accounting(stop_mcp_accounting())
+
+
+# Exit status when the scan was abandoned because NSO stopped answering.
+NSO_UNREACHABLE_EXIT = 3
+
+
+async def _stop_if_nso_unreachable(scan) -> int:
+    """Run the scan, abandoning it as soon as NSO itself stops answering.
+
+    A scan without NSO can only collect timeouts, so nothing is reported,
+    saved or published from it.
+    """
+    with nso_watch() as watch:
+        work = asyncio.ensure_future(scan)
+        stopped = asyncio.ensure_future(watch.stopped.wait())
+        try:
+            await asyncio.wait({work, stopped}, return_when=asyncio.FIRST_COMPLETED)
+            if not work.done():
+                work.cancel()
+                await asyncio.gather(work, return_exceptions=True)
+        finally:
+            for task in (work, stopped):
+                task.cancel()
+            await asyncio.gather(work, stopped, return_exceptions=True)
+        if watch.reason:
+            print(
+                f"NSO is unreachable; scan stopped. NSO's device list request "
+                f"failed: {watch.reason}\n"
+                "No report was saved or published.",
+                file=sys.stderr,
+            )
+            return NSO_UNREACHABLE_EXIT
+        return work.result()
 
 
 async def _run_after_accounting(
@@ -330,12 +365,14 @@ async def _run_after_accounting(
         # lean_service already computed above (also used after MCP session)
 
         set_mcp_stage("focus")
+        list_result = await call_mcp(client, "list_devices")
+        if nso_unreachable_reason():
+            return NSO_UNREACHABLE_EXIT
+        all_names = parse_device_names(list_result)
         if lean_service and not devices_arg:
             # Service-type/id focus: still list devices so drill mcp_call
             # (exec_show / health) is gated against real names. Lean collect
             # skips HW/physical; inventory is for allowlisting only.
-            list_result = await call_mcp(client, "list_devices")
-            all_names = parse_device_names(list_result)
             focus = []
             spine_devices = list(all_names)
             filter_services_to_devices = False
@@ -345,8 +382,6 @@ async def _run_after_accounting(
                 file=sys.stderr,
             )
         else:
-            list_result = await call_mcp(client, "list_devices")
-            all_names = parse_device_names(list_result)
             focus = (
                 filter_device_names(all_names, devices_arg) if devices_arg else []
             )
@@ -399,6 +434,8 @@ async def _run_after_accounting(
             filter_services_to_devices=filter_services_to_devices,
             spine_concurrent_devices=getattr(args, "spine_concurrent_devices", 1),
         )
+        if nso_unreachable_reason():
+            return NSO_UNREACHABLE_EXIT
         if lean_service:
             matched = services_from_case(case)
             if not matched:
@@ -523,6 +560,10 @@ async def _run_after_accounting(
 
         case.live_verified_devices = successful_live_devices()
         set_mcp_stage(None)
+
+    # Collection that lost NSO is not evidence about the network: report nothing.
+    if nso_unreachable_reason():
+        return NSO_UNREACHABLE_EXIT
 
     from diagnostic_mas.ingest import ingest_quarantined_devices
 

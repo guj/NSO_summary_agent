@@ -72,6 +72,168 @@ def test_scrub_internal_ids_from_remedies():
     assert "Check optics on renc" in cleaned
 
 
+def _case_with_dropped_devices(monkeypatch, services: dict, dropped: dict[str, str]) -> CaseFile:
+    """A case whose device issues are written the way a real run writes them."""
+    from diagnostic_mas.ingest import ingest_quarantined_devices
+
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    add_evidence(
+        case,
+        {
+            "kind": "spine",
+            "role": "service",
+            "layer": "services",
+            "payload": {"extra": {"services": services}},
+        },
+    )
+    monkeypatch.setattr("nso_facts.mcp_client.quarantined_devices", lambda: dropped)
+    ingest_quarantined_devices(case)
+    return case
+
+
+def test_result_line_counts_unknown_services_on_a_dropped_device_whose_sync_succeeded(
+    monkeypatch,
+):
+    from diagnostic_mas.operator_report import format_result_line
+
+    def service(name: str, devices: list[str], **fields) -> dict:
+        return {"name": name, "service_type": "l3rt", "devices": devices,
+                "device_sync": {d: "in-sync" for d in devices}, **fields}
+
+    # Sync was verified before the devices were dropped; later queries were skipped.
+    services = {
+        "l3rt/a": service("a", ["gpn-data-sw"], status="unknown"),
+        "l3rt/b": service("b", ["gpn-data-sw", "kans-data-sw"], status="unknown",
+                          operational_status="unknown"),
+        "l3rt/c": service("c", ["kans-data-sw"], status="up", operational_status="up"),
+    }
+    timeout = ("exec_show (interfaces BVI6203): Request timed out after 30s: "
+               "https://192.0.2.1:443/restconf/data/tailf-ncs:devices")
+    case = _case_with_dropped_devices(
+        monkeypatch, services,
+        {"gpn-data-sw": timeout, "kans-data-sw": timeout, "scm-data-sw": timeout},
+    )
+
+    result = format_result_line(case)
+
+    assert "1 OpUp, 0 Down, 0 Degraded, 2 Unknown" in result
+    assert "`gpn-data-sw` (2 unknown services)" in result
+    assert "`kans-data-sw` (1 unknown service)" in result
+    assert "`scm-data-sw` (0 unknown services)" in result
+
+
+def test_result_line_names_the_failed_operation_for_a_single_dropped_device(monkeypatch):
+    from diagnostic_mas.operator_report import format_result_line
+
+    refused = (
+        "check_isis_adjacencies: RESTCONF 500 at https://192.0.2.1:443/restconf/data/x: "
+        "Failed to connect to device scm-data-sw: connection refused: NEDCOM CONNECT: "
+        "Connect timed out in new state"
+    )
+    case = _case_with_dropped_devices(monkeypatch, {}, {"scm-data-sw": refused})
+
+    result = format_result_line(case)
+
+    assert "1 device hit automated check_isis_adjacencies timeout: `scm-data-sw`" in result
+    assert "automated scm-data-sw timeout" not in result
+
+
+def test_result_line_states_service_status_before_dropped_devices(monkeypatch):
+    from diagnostic_mas.operator_report import format_result_line
+
+    services = {
+        "l3rt/a": {"name": "a", "service_type": "l3rt", "devices": ["gpn-data-sw"],
+                   "device_sync": {"gpn-data-sw": "in-sync"}, "status": "up",
+                   "operational_status": "up"},
+    }
+    timeout = "check_isis_adjacencies: Request timed out after 30s: https://192.0.2.1:443/x"
+    case = _case_with_dropped_devices(monkeypatch, services, {"scm-data-sw": timeout})
+
+    result = format_result_line(case)
+
+    assert result.startswith("Final service status: 1 OpUp, 0 Down, 0 Degraded, 0 Unknown.")
+    assert "1 device hit automated check_isis_adjacencies timeout" in result
+
+
+def _faulted_case(
+    services: dict[str, tuple[str, list[str]]], *, failed_check_on: str | None = None
+) -> CaseFile:
+    """Services (name -> type, endpoints), each with a completed dataplane-down finding."""
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    records = {
+        f"{kind}/{name}": {"name": name, "service_type": kind, "devices": devices}
+        for name, (kind, devices) in services.items()
+    }
+    if failed_check_on:
+        for record in records.values():
+            record["basic_checks"] = {"status": "down", "checks": [
+                {"check": "attachment", "device": device, "observation": "Hu0/0/0/1.0",
+                 "status": "fault" if device == failed_check_on else "pass"}
+                for device in record["devices"]
+            ]}
+    add_evidence(
+        case,
+        {"kind": "spine", "role": "service", "layer": "services",
+         "payload": {"extra": {"services": records}}},
+    )
+    for name, (kind, _devices) in services.items():
+        add_diagnosis(
+            case, kind="dataplane", source="llm", status="down",
+            subject={"name": name, "service_type": kind},
+            observed="attachment circuit down", cause="no receive light",
+        )
+    return case
+
+
+def test_follow_up_groups_faulted_services_sharing_type_and_endpoints():
+    case = _faulted_case({
+        "b1": ("l2bridge", ["mich-data-sw"]),
+        "s1": ("l2sts", ["rutg-data-sw", "fiu-data-sw"]),
+        "b2": ("l2bridge", ["mich-data-sw"]),
+        "b3": ("l2bridge", ["mich-data-sw"]),
+        "s2": ("l2sts", ["rutg-data-sw", "fiu-data-sw"]),
+    })
+
+    items = [line for line in format_followup_operator(case) if "Prioritize dataplane" in line]
+
+    assert len(items) == 2
+    assert "Prioritize dataplane down on 3 l2bridge services on `mich-data-sw`" in items[0]
+    assert items[0].endswith("Services: `b1`, `b2`, `b3`.")
+    assert "Prioritize dataplane down on 2 l2sts services on `fiu-data-sw` + `rutg-data-sw`" in items[1]
+    assert items[1].endswith("Services: `s1`, `s2`.")
+
+
+def test_follow_up_groups_by_the_device_whose_basic_check_failed():
+    case = _faulted_case(
+        {
+            "s1": ("l2sts", ["rutg-data-sw", "fiu-data-sw"]),
+            "s2": ("l2sts", ["mass-data-sw", "fiu-data-sw"]),
+        },
+        failed_check_on="fiu-data-sw",
+    )
+
+    items = [line for line in format_followup_operator(case) if "Prioritize dataplane" in line]
+
+    assert len(items) == 1
+    assert (
+        "Prioritize dataplane down on 2 l2sts services with failed basic checks on "
+        "`fiu-data-sw`"
+    ) in items[0]
+    assert items[0].endswith("Services: `s1`, `s2`.")
+
+
+def test_follow_up_names_a_lone_faulted_service_directly():
+    case = _faulted_case({
+        "b1": ("l2bridge", ["mich-data-sw"]),
+        "r1": ("l3rt", ["mich-data-sw"]),
+    })
+
+    text = "\n".join(format_followup_operator(case))
+
+    assert "Prioritize dataplane down on `b1`: review the service evidence" in text
+    assert "Prioritize dataplane down on `r1`: review the service evidence" in text
+
+
 def test_result_line_timeout_quarantine_lists_operation_and_counts():
     from diagnostic_mas.operator_report import format_result_line
 

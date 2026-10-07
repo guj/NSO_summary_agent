@@ -234,6 +234,15 @@ Slack bot token (and, if the bot also has the `channels:read` scope, that the bo
 channel), and the SMTP connection and login for email. A Slack webhook cannot be verified
 without posting to it, so it is only reported as configured.
 
+### When NSO stops answering during a scan
+
+When a query times out, or the connection to NSO fails, the runner asks NSO once for its
+device list, a request that contacts no device. If NSO answers, a timeout is recorded
+against the device that was queried, and that device is skipped for the rest of the run. If
+NSO does not answer, for example because the VPN dropped, the scan stops at once with
+`NSO is unreachable; scan stopped` and exit status 3. No report is printed, saved or
+published, and nothing is retried: run the scan again when NSO is reachable.
+
 ### Example: our usual full scan with logging and publication
 
 This is the command used for our larger scans, not the default configuration or

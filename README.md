@@ -544,9 +544,10 @@ Stdout / `report.md` use a concise operator layout (not the older Issues/Budget 
    (`--services-detail` for every instance). Dig `dataplane=up` renders as
    "Passed PE-side readiness checks. Customer traffic delivery was not
    tested." (no idle-customer / outside-scope inference).  
-5. **Recommended follow-up** — one action per device (overlapping involvement
-   counts; do not sum), then reassess distinct unknowns; endpoint combinations
-   stay under Services  
+5. **Recommended follow-up** — confirmed service faults first, one action per group
+   of faulted services that share a service type and location; then one action per
+   device (overlapping involvement counts; do not sum), then reassess distinct
+   unknowns; endpoint combinations stay under Services  
 6. **Run details** — evidence counts, budgets, dry-run / reporting notes  
 
 In the HTML report, each device also has a collapsed **Interfaces and hardware** block (interface counts, hardware readings, exceptions). It is not part of the terminal or Slack text.

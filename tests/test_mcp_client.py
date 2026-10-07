@@ -494,6 +494,28 @@ def test_live_mcp_failure_kind_timeout_vs_unreachable():
     assert "live unreachable" in format_live_mcp_quarantine_prose("star-data-sw", strong)
 
 
+@pytest.mark.parametrize(
+    ("reason", "operation"),
+    [
+        ("exec_show (isis adjacency): Read timed out. (read timeout=10)",
+         "exec_show (isis adjacency)"),
+        ("check_isis_adjacencies: RESTCONF 500: Connect timed out in new state",
+         "check_isis_adjacencies"),
+        ("Request timed out after 30s: https://192.0.2.1:443/restconf/data/x",
+         "NSO RESTCONF live-MCP"),
+    ],
+)
+def test_failed_operation_is_read_from_issue_text_not_taken_to_be_the_device(reason, operation):
+    from nso_facts.mcp_client import (
+        format_live_mcp_quarantine_prose,
+        parse_live_mcp_failed_operation,
+    )
+
+    issue_text = format_live_mcp_quarantine_prose("scm-data-sw", reason)
+
+    assert parse_live_mcp_failed_operation(issue_text) == operation
+
+
 @pytest.mark.asyncio
 async def test_call_mcp_without_cache_always_wires():
     ok = SimpleNamespace(

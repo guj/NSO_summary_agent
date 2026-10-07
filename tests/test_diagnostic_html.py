@@ -2,6 +2,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 import json
+import re
 import pytest
 from diagnostic_mas.html_report import render_html_report, notification_digest
 from test_diagnostic_mas_publish import _settings
@@ -108,3 +109,48 @@ def test_summary_sub_bullets_are_indented_under_their_service():
         (2, "Cause: no receive light"),
         (2, "Next: check the fibre"),
     ]
+
+
+def test_summary_starts_open_with_services_and_follow_up():
+    report = (
+        "# NSO Diagnostic Report\n"
+        "## Summary\nNo new faults.\n"
+        "## Devices\nNone.\n"
+        "## Services\nNone.\n"
+        "## Recommended follow-up\n1. Nothing.\n"
+        "## Run details\nNone.\n"
+    )
+
+    doc = render_html_report(report, "run")
+
+    opened = re.findall(r'<details class="section" id="[^"]*" open><summary>([^<]*)</summary>', doc)
+    assert opened == ["Summary", "Services", "Recommended follow-up"]
+
+
+def test_digest_cuts_a_long_follow_up_item_between_words_and_code_spans():
+    ids = ", ".join(f"`svc-{i:02d}-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`" for i in range(12))
+    item = f"1. Prioritize dataplane down on 12 l2bridge services on `pe1`: review each. Services: {ids}"
+    report = REPORT.replace("1. Investigate bad.", item)
+
+    digest = notification_digest(report, "run")
+
+    shown = next(line for line in digest.splitlines() if line.startswith("1. "))
+    assert len(shown) <= 260
+    assert shown.endswith("…")
+    assert shown.count("`") % 2 == 0
+    assert "`svc-00-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`" in shown
+
+
+def test_digest_drops_a_list_label_when_none_of_its_entries_fit():
+    ids = ", ".join(f"`svc-{i:02d}-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`" for i in range(8))
+    item = (
+        "1. Prioritize dataplane down on 8 l2bridge services with failed basic checks on "
+        "`mich-data-sw`: review each service's evidence and supported next steps before "
+        f"remediation (human must approve any configuration/state change). Services: {ids}."
+    )
+    report = REPORT.replace("1. Investigate bad.", item)
+
+    digest = notification_digest(report, "run")
+
+    shown = next(line for line in digest.splitlines() if line.startswith("1. "))
+    assert shown.endswith("(human must approve any configuration/state change). …")

@@ -43,7 +43,8 @@ def assessment(service, dig=None):
     return operational, f"Operational {label} — {suffix}"
 
 
-def final_service_counts(case):
+def final_service_assessments(case):
+    """Yield (service_type, name, service, final status, reason) for each present service."""
     services = services_from_case(case)
     names = Counter(str(r.get("name") or k.split("/", 1)[-1]) for k,r in services.items())
     digs = {}
@@ -55,7 +56,6 @@ def final_service_counts(case):
         kind = subject.get("service_type")
         if kind or names.get(name) == 1:
             digs[kind, name] = dig
-    rows = {}
     from diagnostic_mas.service_presence import disappeared
     for key, service in services.items():
         if disappeared(service):
@@ -64,6 +64,12 @@ def final_service_counts(case):
         name = str(service.get("name") or key.split("/", 1)[-1])
         dig = digs.get((kind,name), digs.get((None,name)))
         status, reason = assessment(service, dig)
+        yield kind, name, service, status, reason
+
+
+def final_service_counts(case):
+    rows = {}
+    for kind, _name, _service, status, reason in final_service_assessments(case):
         row = rows.setdefault(kind, {"total": 0, **{s: 0 for s in STATUSES}, "sources": {s: {} for s in STATUSES}})
         row["total"] += 1
         row[status] += 1

@@ -6,9 +6,9 @@ import asyncio
 import json
 import re
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
-from typing import Any, AsyncIterator, Protocol
+from typing import Any, AsyncIterator, Iterator, Protocol
 
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
@@ -42,6 +42,42 @@ _mcp_tool_definitions: ContextVar[list[Any] | None] = ContextVar(
 _mcp_quarantine: ContextVar[dict[str, str] | None] = ContextVar(
     "mcp_device_quarantine", default=None
 )
+
+# Reads NSO's own inventory and contacts no device, so it answers whenever NSO does.
+_NSO_CHECK_TOOL = "list_devices"
+
+
+class NsoWatch:
+    """Whether NSO itself stopped answering during a run (see ``nso_watch``)."""
+
+    def __init__(self) -> None:
+        self.reason: str | None = None
+        self.stopped = asyncio.Event()
+        self.lock = asyncio.Lock()
+
+
+_nso_watch: ContextVar[NsoWatch | None] = ContextVar("nso_watch", default=None)
+
+
+@contextmanager
+def nso_watch() -> Iterator[NsoWatch]:
+    """While active, a timed-out call makes ``call_mcp`` check NSO itself once.
+
+    When NSO does not answer, the watch records why, sets ``stopped`` and no
+    further request is sent; the timeout is then not held against a device.
+    """
+    watch = NsoWatch()
+    token = _nso_watch.set(watch)
+    try:
+        yield watch
+    finally:
+        _nso_watch.reset(token)
+
+
+def nso_unreachable_reason() -> str | None:
+    """Why NSO was found unreachable in the watched run, else ``None``."""
+    watch = _nso_watch.get()
+    return watch.reason if watch else None
 
 
 async def discover_mcp_tools(client: Client) -> list[Any]:
@@ -235,6 +271,26 @@ def _looks_live_unreachable(message: str) -> bool:
     )
 
 
+def _looks_nso_connection_failure(message: str) -> bool:
+    """True when the MCP server could not open or keep a connection to NSO.
+
+    Unlike a timeout, such a failure says nothing about a device, so it never
+    quarantines one; it only prompts the check of NSO itself.
+    """
+    lowered = message.lower()
+    return any(
+        token in lowered
+        for token in (
+            "max retries exceeded",
+            "failed to establish a new connection",
+            "failed to resolve",
+            "no route to host",
+            "connection aborted",
+            "connection reset",
+        )
+    )
+
+
 def is_strong_device_unreachability(message: str) -> bool:
     """True only with explicit unreachability — not NSO HTTP/read timeouts.
 
@@ -274,6 +330,13 @@ _READ_TIMEOUT_RE = re.compile(
     r"read\s+timeout\s*=\s*(\d+(?:\.\d+)?)", re.IGNORECASE
 )
 _TOOL_PREFIX_RE = re.compile(r"^([A-Za-z_][\w.-]*)\s*:\s+")
+# Issue text from ``format_live_mcp_quarantine_prose`` starts with the device,
+# so the operation is read from after this phrase, not from the first word.
+_QUARANTINE_TIMEOUT_HEAD = "automated NSO live-MCP collection timed out on"
+_QUARANTINE_TIMEOUT_OP_RE = re.compile(
+    re.escape(_QUARANTINE_TIMEOUT_HEAD)
+    + r" (.+?)(?: \(read timeout=[^)]*\))?(?= \[|\. |$)"
+)
 
 
 def parse_live_mcp_read_timeout_sec(message: str) -> str | None:
@@ -294,6 +357,9 @@ def parse_live_mcp_read_timeout_sec(message: str) -> str | None:
 def parse_live_mcp_failed_operation(message: str) -> str:
     """Best-effort name of the failing automated collection operation."""
     raw = (message or "").strip()
+    quarantine_text = _QUARANTINE_TIMEOUT_OP_RE.search(raw)
+    if quarantine_text:
+        return quarantine_text.group(1).strip()
     # Preferred: "exec_show (isis adjacency): …"
     paren = re.match(
         r"^([A-Za-z_][\w.-]*)\s*\(([^)]+)\)\s*:",
@@ -351,10 +417,7 @@ def format_live_mcp_quarantine_prose(
         op = parse_live_mcp_failed_operation(detail)
         timeout = parse_live_mcp_read_timeout_sec(detail)
         timeout_bit = f" (read timeout={timeout}s)" if timeout else ""
-        head = (
-            f"{device}: automated NSO live-MCP collection timed out on "
-            f"{op}{timeout_bit}"
-        )
+        head = f"{device}: {_QUARANTINE_TIMEOUT_HEAD} {op}{timeout_bit}"
         action = (
             "manual NSO connectivity may still succeed — this does not prove "
             "the device is down; investigate the automated collection path; "
@@ -445,6 +508,68 @@ def _maybe_quarantine_from_failure(
     else:
         detail = err
     _quarantine_device(device, detail)
+
+
+def _nso_unreachable_result(reason: str) -> dict[str, str]:
+    return {
+        "status": "error",
+        "error_message": (
+            f"NSO is unreachable ({reason}); no request was sent. "
+            "This is not evidence about any device or service"
+        ),
+    }
+
+
+async def _nso_check_error(client: Client) -> str | None:
+    """Ask NSO once for its device list; ``None`` when it answers."""
+    record_mcp_call(_NSO_CHECK_TOOL, None, cached=False)
+    try:
+        wrap = await _tool_wraps_params(client, _NSO_CHECK_TOOL)
+        result = await client.call_tool(
+            _NSO_CHECK_TOOL, build_mcp_payload(None, wrap_params=wrap)
+        )
+        data = _tool_data(result)
+    except Exception as exc:  # noqa: BLE001
+        error = str(exc) or type(exc).__name__
+        record_mcp_result(_NSO_CHECK_TOOL, None, source="nso_check", error=error)
+        return error
+    record_mcp_result(_NSO_CHECK_TOOL, None, source="nso_check", response=data,
+                      raw_response=result)
+    if mcp_is_error(data):
+        return str(mcp_error_message(data) or "error with no message")
+    return None
+
+
+async def _handle_live_failure(
+    client: Client,
+    params: dict[str, Any] | None,
+    message: str,
+    *,
+    tool: str,
+) -> None:
+    """Quarantine the device, unless the watched NSO itself is not answering."""
+    watch = _nso_watch.get()
+    if watch is None or not (
+        _looks_live_unreachable(message) or _looks_nso_connection_failure(message)
+    ):
+        _maybe_quarantine_from_failure(params, message, tool=tool)
+        return
+    device = _device_name_from_params(params)
+    async with watch.lock:
+        if watch.reason or (device and is_device_quarantined(device)):
+            return
+        # A failed device list is already NSO's own answer; do not ask twice.
+        error = message if tool == _NSO_CHECK_TOOL else await _nso_check_error(client)
+        if error is None:
+            _maybe_quarantine_from_failure(params, message, tool=tool)
+            return
+        watch.reason = error
+        watch.stopped.set()
+        print(
+            f"[mcp] NSO did not answer {_NSO_CHECK_TOOL} after tool={tool}"
+            f"{f' device={device}' if device else ''} failed: {error}",
+            file=sys.stderr,
+        )
 
 
 def tool_schema_uses_params_wrapper(schema: Any) -> bool:
@@ -582,6 +707,9 @@ async def call_mcp(
     successful response (errors are not cached). After a device-scoped live
     unreachable / timeout failure, further wire calls for that ``device_name``
     are skipped for the rest of the run (cached successes still apply).
+
+    Under ``nso_watch``, such a failure first checks NSO itself. If NSO does
+    not answer, no device is quarantined and no further wire call is made.
     """
     cache = _mcp_cache.get()
     key = _cache_key(tool, params)
@@ -590,9 +718,17 @@ async def call_mcp(
         record_mcp_result(tool, params, source="cache", response=cache[key])
         return cache[key]
 
+    nso_down = nso_unreachable_reason()
+    if nso_down:
+        skipped = _nso_unreachable_result(nso_down)
+        record_mcp_result(tool, params, source="nso_unreachable_skip", response=skipped)
+        return skipped
+
     # Cached evidence needs no device reservation. Guard only uncached calls,
     # before recording wire activity; the proxy also guards direct tool calls.
     from diagnostic_mas.dataplane_scheduler import ReservedClient
+    # The NSO check is not part of any dig, so it bypasses the reservation proxy.
+    wire_client = client.client if isinstance(client, ReservedClient) else client
     if isinstance(client, ReservedClient):
         client.reserve_call(tool, params or {})
 
@@ -618,7 +754,8 @@ async def call_mcp(
             record_mcp_result(tool, params, source="wire", response=data,
                               raw_response=result, attempt=attempt + 1)
             if mcp_is_error(data):
-                _maybe_quarantine_from_failure(
+                await _handle_live_failure(
+                    wire_client,
                     params,
                     str(mcp_error_message(data) or ""),
                     tool=tool,
@@ -643,5 +780,5 @@ async def call_mcp(
             )
             await asyncio.sleep(delay)
     assert last_exc is not None
-    _maybe_quarantine_from_failure(params, str(last_exc), tool=tool)
+    await _handle_live_failure(wire_client, params, str(last_exc), tool=tool)
     raise last_exc
