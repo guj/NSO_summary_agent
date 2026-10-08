@@ -257,3 +257,21 @@ async def test_service_discovery_root_during_parallel_digs(root, depth):
         with pytest.raises(RuntimeError, match='Concurrency reservation'):
             await client.call_tool('explore_nso_path', {'path':path,'depth':depth})
     assert len(sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_worker_label_for_its_own_service_reaches_the_saved_case():
+    case = fixture()
+    selected = candidates(['a'], ['b'])
+    case.service_coverage = {'0': 'needs_investigation', '1': 'needs_investigation'}
+
+    async def verify(client, settings, child, *, record, **kwargs):
+        if record['name'] == '0':
+            child.service_coverage['0'] = 'disappeared'
+            child.service_coverage['1'] = 'not this worker\'s to set'
+        return True
+
+    await run(case, selected, verify)
+
+    assert case.service_coverage == {'0': 'disappeared', '1': 'needs_investigation'}
+

@@ -115,21 +115,26 @@ def _service_extras(case: dict[str, Any]):
             yield (ev.get("payload") or {}).get("extra") or {}
 
 
-def _service_inventory(case: dict[str, Any]) -> dict[str, str]:
-    """Service name -> service type, for services present at the end of the run."""
-    out: dict[str, str] = {}
+def _service_records(case: dict[str, Any]):
+    """(name, service type, removed while the scan ran) for each listed service."""
     for extra in _service_extras(case):
         for key, record in (extra.get("services") or {}).items():
             if not isinstance(record, dict):
                 continue
-            # Removed while the scan ran; that run's own report already says so.
-            if (record.get("presence_recheck") or {}).get("outcome") == "absent":
-                continue
             name = str(record.get("name") or str(key).split("/", 1)[-1]).strip()
             kind = str(record.get("service_type") or str(key).split("/", 1)[0]).strip()
             if name:
-                out[name] = kind
-    return out
+                yield name, kind, (record.get("presence_recheck") or {}).get("outcome") == "absent"
+
+
+def _service_inventory(case: dict[str, Any]) -> dict[str, str]:
+    """Service name -> service type, for services present at the end of the run."""
+    return {name: kind for name, kind, removed in _service_records(case) if not removed}
+
+
+def _removed_during_scan(case: dict[str, Any]) -> set[str]:
+    """Services the run itself saw removed; its own report already says so."""
+    return {name for name, _kind, removed in _service_records(case) if removed}
 
 
 def _full_service_scope(case: dict[str, Any]) -> bool:
@@ -173,6 +178,82 @@ def _services_no_longer_present(older: dict[str, Any], newer: dict[str, Any]) ->
         for name, kind in _service_inventory(older).items()
         if name not in now and kind in collected
     }
+
+
+# Routing protocol (spine role) -> the layer its collection errors are filed under.
+_ROUTING_LAYERS = {"bgp": "routing", "isis": "underlay"}
+
+
+def _routing_edges(case: dict[str, Any], role: str) -> dict[str, dict[str, Any]] | None:
+    """Session id -> state for one routing protocol; None when the run did not collect it."""
+    found: dict[str, dict[str, Any]] | None = None
+    for ev in case.get("evidence") or []:
+        if not isinstance(ev, dict) or ev.get("kind") != "spine" or ev.get("role") != role:
+            continue
+        found = {} if found is None else found
+        for edge in (ev.get("payload") or {}).get("operational_edges") or []:
+            if isinstance(edge, dict) and edge.get("id"):
+                found[str(edge["id"])] = edge.get("state") or {}
+    return found
+
+
+def _devices_answering(case: dict[str, Any], layer: str) -> set[str]:
+    """Devices a full, unfiltered scan queried live, less those whose query for this layer failed."""
+    config = case.get("run_configuration")
+    if (not isinstance(config, dict) or case.get("focus_devices")
+            or config.get("Device filter") != "All"
+            or str(config.get("Scope flags") or "") != "Default"):
+        return set()
+    failed = {
+        str(issue.get("message") or "").split(":", 1)[0].strip()
+        for issue in case.get("issues") or []
+        if isinstance(issue, dict) and issue.get("code") == "collection_error"
+        and issue.get("layer") == layer
+    }
+    return set(case.get("live_verified_devices") or []) - failed
+
+
+def _routing_sessions_lost(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[str, str]]:
+    """Sessions and adjacencies up in the older run that are not up in the newer one.
+
+    A session the devices now report down is always listed. One that is
+    merely absent is listed only when both of its devices answered this
+    protocol's query in a full scan; otherwise absence is not evidence.
+    """
+    known = set(older.get("device_names") or []) | set(newer.get("device_names") or [])
+    rows: list[dict[str, str]] = []
+    for role, layer in _ROUTING_LAYERS.items():
+        before, now = _routing_edges(older, role), _routing_edges(newer, role)
+        if not before or now is None:
+            continue
+        answering = _devices_answering(newer, layer)
+        for edge_id, state in sorted(before.items()):
+            if state.get("status") != "up":
+                continue
+            current = now.get(edge_id)
+            if current is None:
+                devices = {part for part in edge_id.split(":") if part in known}
+                if len(devices) == 2 and devices <= answering:
+                    rows.append({"protocol": role, "edge_id": edge_id,
+                                 "now": "not reported", "states": ""})
+            elif current.get("status") in {"down", "degraded"}:
+                rows.append({"protocol": role, "edge_id": edge_id, "now": str(current["status"]),
+                             "states": f"{current.get('local')} / {current.get('remote')}"})
+    return rows
+
+
+def _routing_session_line(row: dict[str, str]) -> str:
+    parts = row["edge_id"].split(":")
+    label = f"`{row['edge_id']}`"
+    if len(parts) == 5 and row["protocol"] == "bgp":
+        _, addr_a, addr_b, dev_a, dev_b = parts
+        label = f"BGP `{dev_a}` {addr_a} ↔ `{dev_b}` {addr_b}"
+    elif len(parts) == 5 and row["protocol"] == "isis":
+        _, dev_a, if_a, dev_b, if_b = parts
+        label = f"IS-IS `{dev_a}` {if_a} ↔ `{dev_b}` {if_b}"
+    if row["now"] == "not reported":
+        return f"{label} — not reported this run; both devices answered"
+    return f"{label} — {row['now']} ({row['states']})"
 
 
 def _issue_subject(issue: dict[str, Any]) -> str:
@@ -474,7 +555,10 @@ def compute_case_delta(
 
     coverage_changes: list[dict[str, str]] = []
     newly_missing_evidence: list[dict[str, str]] = []
+    reported_removed = _removed_during_scan(older)
     for name, old_label in old_cov.items():
+        if name not in new_cov and name in reported_removed:
+            continue
         if name not in new_cov and name in gone:
             # No longer in NSO, not left unchecked: no evidence is missing.
             coverage_changes.append(
@@ -648,6 +732,7 @@ def compute_case_delta(
         "last_known_service_faults": history,
         "recovered_devices": recovered_devices,
         "newly_missing_evidence": newly_missing_evidence,
+        "routing_sessions_lost": _routing_sessions_lost(older, newer),
         "services_no_longer_present": [
             {"service": name, "service_type": kind,
              "previous_coverage": old_cov.get(name, "")}
@@ -666,6 +751,8 @@ def delta_has_operational_changes(delta: dict[str, Any]) -> bool:
     if delta.get("recovered_devices"):
         return True
     if delta.get("newly_missing_evidence"):
+        return True
+    if delta.get("routing_sessions_lost"):
         return True
     if delta.get("services_no_longer_present"):
         return True
@@ -739,6 +826,12 @@ def format_case_delta(
         list(delta.get("newly_missing_evidence") or []),
         "None",
     )
+    if delta.get("routing_sessions_lost"):
+        _section(
+            "Routing sessions up before, not up now",
+            [_routing_session_line(row) for row in delta["routing_sessions_lost"]],
+            "None",
+        )
     if delta.get("services_no_longer_present"):
         _section(
             "Services no longer present",
@@ -844,6 +937,15 @@ def format_changes_since_previous(
                      "readiness may have used different checks. Failure onset is unverified.")
         lines.append("")
     lines.extend(format_last_known_faults(list(delta.get("last_known_service_faults") or [])))
+    lost = list(delta.get("routing_sessions_lost") or [])
+    if lost:
+        lines.append("**Routing sessions up in the previous run, not up now:**")
+        for row in lost[:persistent_limit]:
+            lines.append(f"- {_routing_session_line(row)}")
+        extra = len(lost) - persistent_limit
+        if extra > 0:
+            lines.append(f"- …and {extra} more")
+        lines.append("")
     lines.append("**Recovered devices:**")
     if not recovered_devs and not recovered_probs:
         lines.append("- None")
@@ -935,7 +1037,15 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
         return out
 
     gone = [row["service"] for row in delta.get("services_no_longer_present") or []]
+    lost = [_routing_session_line(row).replace("`", "")
+            for row in delta.get("routing_sessions_lost") or []]
     return {
+        **({"routing_sessions_lost": {
+            "count": len(lost),
+            "sessions": lost[:20],
+            "note": ("Up in the previous run. Either the devices now report the "
+                     "session down, or it is absent although both devices answered."),
+        }} if lost else {}),
         **({"services_no_longer_present": {
             "count": len(gone),
             "services": gone[:20],

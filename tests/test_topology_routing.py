@@ -201,6 +201,43 @@ def test_pair_bgp_observations_bidirectional_up():
     assert not any(i["code"] == "one_sided_session" for i in issues)
 
 
+def _pair_states(state_a: str, state_b: str):
+    observations = [
+        BgpSessionObservation("lbnl-data-sw", "10.0.0.2", state_a),
+        BgpSessionObservation("renc-data-sw", "10.0.0.1", state_b),
+    ]
+    neighbor_configs = {
+        "lbnl-data-sw": [BgpNeighborConfig("lbnl-data-sw", "10.0.0.2", 398900, 398900)],
+        "renc-data-sw": [BgpNeighborConfig("renc-data-sw", "10.0.0.1", 398900, 398900)],
+    }
+    router_ids = {"lbnl-data-sw": "10.0.0.1", "renc-data-sw": "10.0.0.2"}
+    return pair_bgp_observations(observations, neighbor_configs, router_ids)
+
+
+def test_session_reported_down_by_both_ends_raises_an_issue():
+    edges, issues = _pair_states("Idle", "Idle")
+
+    assert edges[0]["state"]["status"] == "down"
+    down = [i for i in issues if i["code"] == "session_down"]
+    assert len(down) == 1
+    assert down[0]["edge_id"] == edges[0]["id"]
+    assert (down[0]["layer"], down[0]["severity"]) == ("routing", "high")
+    assert "lbnl-data-sw" in down[0]["message"] and "renc-data-sw" in down[0]["message"]
+    assert "idle" in down[0]["message"]
+
+
+@pytest.mark.parametrize("state_a,state_b", [
+    ("Established", "Established"),   # up
+    ("Established", "Idle"),          # one-sided: already its own issue
+    ("", ""),                         # neither end says anything: no evidence
+    ("garbled", "garbled"),
+])
+def test_no_session_down_issue_without_a_failed_state(state_a, state_b):
+    _edges, issues = _pair_states(state_a, state_b)
+
+    assert not any(i["code"] == "session_down" for i in issues)
+
+
 class FakeClient:
     def __init__(self, handlers: dict[tuple[str, str], Any]):
         self.handlers = handlers

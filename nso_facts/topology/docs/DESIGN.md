@@ -373,6 +373,7 @@ Parse neighbor rows for **Established** / **Idle** / **Active** / … — same b
 | Code | Meaning |
 |------|---------|
 | `one_sided_session` | A Established; B not Established (or vice versa) |
+| `session_down` | Neither end Established, and at least one end reports a failed state such as Idle |
 | `live_session_not_in_config` | Live pair not reflected in BGP neighbor config |
 | `configured_no_session` | Static session; no operational Established state |
 | `unknown_neighbor_address` | Neighbor IP could not be mapped to an NSO device |

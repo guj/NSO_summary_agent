@@ -210,6 +210,10 @@ async def collect_operational_routing(
     return operational, issues, coverage
 
 
+_FAILED_BGP_STATES = frozenset({"idle", "active", "connect", "opensent", "openconfirm",
+                                "open-sent", "open-confirm", "admin", "shutdown"})
+
+
 def _unpaired_session_state(edge, observations):
     """Keep exact endpoint observations when reciprocal pairing is incomplete."""
     local, remote = edge.get("local") or {}, edge.get("remote") or {}
@@ -219,8 +223,7 @@ def _unpaired_session_state(edge, observations):
                 and o.neighbor_address == peer.get("address")}
         return next(iter(rows)) if len(rows) == 1 else "unknown"
     left, right = observed(local, remote), observed(remote, local)
-    failed = any(s in {"idle", "active", "connect", "opensent", "openconfirm", "open-sent", "open-confirm", "admin", "shutdown"}
-                 for s in (left, right))
+    failed = bool({left, right} & _FAILED_BGP_STATES)
     return {"local": left, "remote": right,
             "status": "down" if failed else "up" if left == right == "established" else "unknown",
             "detail": ("Observed non-established BGP session; missing endpoint evidence remains unverified"
@@ -338,6 +341,20 @@ def pair_bgp_observations(
                     "message": (
                         f"BGP session {dev_a} {addr_a} ({state_a}) ↔ "
                         f"{dev_b} {addr_b} ({state_b})"
+                    ),
+                }
+            )
+        # Not established is not enough: an end must name a failed state.
+        elif status == "down" and {state_a, state_b} & _FAILED_BGP_STATES:
+            issues.append(
+                {
+                    "severity": "high",
+                    "layer": "routing",
+                    "code": "session_down",
+                    "edge_id": edge_id,
+                    "message": (
+                        f"BGP session down: {dev_a} {addr_a} ({state_a or 'unknown'}) ↔ "
+                        f"{dev_b} {addr_b} ({state_b or 'unknown'})"
                     ),
                 }
             )

@@ -97,6 +97,8 @@ def _mapping_attention(issue: dict[str, Any]) -> str | None:
                 "may still be present; further live MCP skipped."
             )
         )
+    if code == "session_down":
+        return msg or "BGP session down."
     return None
 
 
@@ -259,6 +261,25 @@ def _devices_from_bgp_edge_id(edge_id: str) -> tuple[str, str] | None:
     if not m:
         return None
     return m.group("dev_a"), m.group("dev_b")
+
+
+def _bgp_sessions_down_text(case: CaseFile, *, limit: int) -> str | None:
+    """Count and endpoints of BGP sessions the devices report down."""
+    sessions: list[str] = []
+    for issue in case.issues:
+        if not isinstance(issue, dict) or str(issue.get("code") or "") != "session_down":
+            continue
+        edge_id = str(issue.get("edge_id") or "")
+        pair = _devices_from_bgp_edge_id(edge_id)
+        label = f"`{pair[0]}` ↔ `{pair[1]}`" if pair else f"`{edge_id}`"
+        if label not in sessions:
+            sessions.append(label)
+    if not sessions:
+        return None
+    n = len(sessions)
+    more = f", and {n - limit} more" if n > limit else ""
+    return (f"{n} BGP session{'s' if n != 1 else ''} down: "
+            + ", ".join(sessions[:limit]) + more)
 
 
 def _issue_touches_device(issue: dict[str, Any], device: str) -> bool:
@@ -1591,6 +1612,13 @@ def format_followup_operator(case: CaseFile) -> list[str]:
                 "Do not treat a baseline pass or sampling omission as recovery."
             )
 
+    sessions_down = _bgp_sessions_down_text(case, limit=6)
+    if sessions_down:
+        items.append(
+            f"Investigate {sessions_down} (reported by the devices). "
+            "Services on these devices may share this cause."
+        )
+
     # 1) One action per device for live-MCP quarantine and/or sync unknowns.
     from nso_facts.mcp_client import (
         live_mcp_failure_kind,
@@ -2022,6 +2050,9 @@ def format_result_line(case: CaseFile) -> str:
                 )
             else:
                 parts.append("No dataplane investigations recorded.")
+    sessions_down = _bgp_sessions_down_text(case, limit=3)
+    if sessions_down:
+        parts.append(sessions_down + ".")
     parts.extend(collection_gaps)
     if mapping_n:
         parts.append(

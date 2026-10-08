@@ -131,6 +131,9 @@ is treated as Established.
 ### What goes under Attention?
 
 - A BGP or IS-IS neighbor that could not be mapped to a device in the NSO inventory.
+- A BGP session to another inventory device that the devices report down. It is also counted in
+  the Result line and listed in the follow-up. **Changes since previous run** lists BGP sessions
+  and IS-IS adjacencies that were up in the previous run and are not up now.
 - A device whose automated live queries timed out or failed. Further live queries to it are skipped
   for the rest of the run. NSO configuration may still be present and manual access may still work,
   so this is not proof that the device is down. If NSO itself stopped answering, the scan stops

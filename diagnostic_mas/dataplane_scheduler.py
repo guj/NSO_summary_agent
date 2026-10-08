@@ -164,6 +164,8 @@ def merge_case(parent, child, evidence_start, diagnosis_start, name):
     for issue in parent.issues:
         if issue.get('id') in updates:
             issue.update(updates[issue['id']])
+    if name in child.service_coverage:
+        parent.service_coverage[name] = child.service_coverage[name]
     parent.budget.dataplane_tools_used += child.budget.dataplane_tools_used
     if child.llm_halt_reason:
         mark_case_llm_halt(parent, child.llm_halt_reason)

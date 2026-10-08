@@ -477,6 +477,18 @@ def test_fault_ends_for_a_service_removed_while_the_scan_ran():
     assert service_fault_history(older, newer) == []
 
 
+def test_service_removed_during_the_previous_scan_is_not_reported_again():
+    older = _scan({"keep": "l2bridge", "left": "l2bridge"},
+                  coverage={"keep": "basic_passed", "left": "needs_investigation"})
+    records = older["evidence"][0]["payload"]["extra"]["services"]
+    records["l2bridge/left"]["presence_recheck"] = {"outcome": "absent"}
+
+    delta = compute_case_delta(older, _scan({"keep": "l2bridge"}))
+
+    assert delta["newly_missing_evidence"] == []
+    assert delta["services_no_longer_present"] == []
+
+
 def test_last_known_fault_is_kept_when_a_narrower_scan_leaves_the_service_out():
     from diagnostic_mas.case_delta import service_fault_history
 
@@ -504,3 +516,85 @@ def test_changes_section_lists_services_no_longer_present_apart_from_missing_evi
     for_summary = compact_delta_for_llm(delta)
     assert for_summary["services_no_longer_present"]["services"] == ["gone"]
     assert for_summary["newly_missing_evidence"] == []
+
+
+
+BGP_EDGE = "bgp:10.0.0.1:10.0.1.1:hub-data-sw:pe1-data-sw"
+ISIS_EDGE = "isis:hub-data-sw:HundredGigE0/0/0/1.3000:pe1-data-sw:HundredGigE0/0/0/2.3000"
+
+
+def _routing_scan(bgp: dict | None = None, isis: dict | None = None, *,
+                  verified: tuple[str, ...] = ("hub-data-sw", "pe1-data-sw"),
+                  scope: dict | None = FULL_SCOPE, issues: tuple[dict, ...] = ()) -> dict:
+    """A saved case holding routing sessions (edge id -> state). None: protocol not collected."""
+    evidence = [
+        {"kind": "spine", "role": role,
+         "payload": {"operational_edges": [{"id": edge, "state": dict(state)} for edge, state in edges.items()]}}
+        for role, edges in (("bgp", bgp), ("isis", isis)) if edges is not None
+    ]
+    case = {"evidence": evidence, "issues": list(issues), "diagnoses": [], "service_coverage": {},
+            "focus_devices": [], "device_names": ["hub-data-sw", "pe1-data-sw"],
+            "live_verified_devices": list(verified)}
+    if scope is not None:
+        case["run_configuration"] = dict(scope)
+    return case
+
+
+UP = {"local": "up", "remote": "up", "status": "up"}
+BOTH = {BGP_EDGE: {"local": "established", "remote": "established", "status": "up"}}
+
+
+def test_session_the_devices_now_report_down_is_listed_as_lost():
+    newer = _routing_scan(bgp={BGP_EDGE: {"local": "idle", "remote": "idle", "status": "down"}})
+
+    lost = compute_case_delta(_routing_scan(bgp=BOTH), newer)["routing_sessions_lost"]
+
+    assert lost == [{"protocol": "bgp", "edge_id": BGP_EDGE, "now": "down", "states": "idle / idle"}]
+
+
+def test_adjacency_neither_answering_device_lists_any_more_is_lost():
+    lost = compute_case_delta(_routing_scan(isis={ISIS_EDGE: UP}), _routing_scan(isis={}))["routing_sessions_lost"]
+
+    assert lost == [{"protocol": "isis", "edge_id": ISIS_EDGE, "now": "not reported", "states": ""}]
+
+
+def test_missing_adjacency_is_not_called_lost_without_an_answer_from_both_ends():
+    older = _routing_scan(isis={ISIS_EDGE: UP})
+    failed = {"layer": "underlay", "code": "collection_error", "status": "open",
+              "message": "pe1-data-sw: check_isis_adjacencies failed: timeout"}
+    not_evidence = {
+        "one end not queried": _routing_scan(isis={}, verified=("hub-data-sw",)),
+        "one end failed this query": _routing_scan(isis={}, issues=(failed,)),
+        "filtered scan": _routing_scan(isis={}, scope={**FULL_SCOPE, "Device filter": "hub-data-sw"}),
+        "scope unknown": _routing_scan(isis={}, scope=None),
+        "protocol not collected": _routing_scan(bgp={}),
+    }
+
+    for why, newer in not_evidence.items():
+        assert compute_case_delta(older, newer)["routing_sessions_lost"] == [], why
+
+
+def test_session_still_up_or_of_unknown_state_is_not_lost():
+    for state in ({"local": "established", "remote": "established", "status": "up"},
+                  {"local": "established", "remote": "unknown", "status": "unknown"}):
+        delta = compute_case_delta(_routing_scan(bgp=BOTH), _routing_scan(bgp={BGP_EDGE: state}))
+        assert delta["routing_sessions_lost"] == []
+
+
+def test_changes_section_and_summary_input_list_lost_routing_sessions():
+    from diagnostic_mas.case_delta import (
+        compact_delta_for_llm, delta_has_operational_changes, format_changes_since_previous)
+
+    delta = compute_case_delta(
+        _routing_scan(bgp=BOTH, isis={ISIS_EDGE: UP}),
+        _routing_scan(bgp={BGP_EDGE: {"local": "idle", "remote": "idle", "status": "down"}}, isis={}),
+    )
+
+    text = "\n".join(format_changes_since_previous(delta, previous_run_id="run-1"))
+
+    assert delta_has_operational_changes(delta)
+    assert "- BGP `hub-data-sw` 10.0.0.1 ↔ `pe1-data-sw` 10.0.1.1 — down (idle / idle)" in text
+    assert ("- IS-IS `hub-data-sw` HundredGigE0/0/0/1.3000 ↔ `pe1-data-sw` HundredGigE0/0/0/2.3000"
+            " — not reported this run; both devices answered") in text
+    assert compact_delta_for_llm(delta)["routing_sessions_lost"]["count"] == 2
+
