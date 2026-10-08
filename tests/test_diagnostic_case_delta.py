@@ -598,3 +598,63 @@ def test_changes_section_and_summary_input_list_lost_routing_sessions():
             " — not reported this run; both devices answered") in text
     assert compact_delta_for_llm(delta)["routing_sessions_lost"]["count"] == 2
 
+
+def _interface_scan(states: dict[str, tuple[str | None, str | None]]) -> dict:
+    """A saved case holding interface states: "device:interface" -> (admin, oper)."""
+    edges = [{"id": f"if:{key}", "state": {"admin": admin, "oper": oper}}
+             for key, (admin, oper) in states.items()]
+    return {"evidence": [{"kind": "spine", "role": "service",
+                          "payload": {"extra": {"services": {}, "physical_operational_edges": edges}}}],
+            "issues": [], "diagnoses": [], "service_coverage": {}, "focus_devices": []}
+
+
+UPLINK, ACCESS = "pe1-data-sw:HundredGigE0/0/0/23", "pe1-data-sw:HundredGigE0/0/0/5"
+
+
+def test_interface_that_went_down_is_listed_with_its_sub_interfaces_folded_in():
+    older = _interface_scan({UPLINK: ("up", "up"), UPLINK + ".3000": ("up", "up"), ACCESS: ("up", "up")})
+    newer = _interface_scan({UPLINK: ("down", "down"), UPLINK + ".3000": ("down", "down"), ACCESS: ("up", "up")})
+
+    assert compute_case_delta(older, newer)["interfaces_lost"] == [
+        {"device": "pe1-data-sw", "interface": "HundredGigE0/0/0/23", "now": "down", "sub_interfaces": 1}]
+
+
+def test_sub_interface_down_under_a_working_port_and_a_shut_port_are_listed_as_such():
+    older = _interface_scan({UPLINK: ("up", "up"), UPLINK + ".3000": ("up", "up"), ACCESS: ("up", "up")})
+    newer = _interface_scan({UPLINK: ("up", "up"), UPLINK + ".3000": ("down", "down"),
+                             ACCESS: ("admin-down", "admin-down")})
+
+    assert compute_case_delta(older, newer)["interfaces_lost"] == [
+        {"device": "pe1-data-sw", "interface": "HundredGigE0/0/0/23.3000", "now": "down", "sub_interfaces": 0},
+        {"device": "pe1-data-sw", "interface": "HundredGigE0/0/0/5", "now": "admin-down", "sub_interfaces": 0}]
+
+
+def test_interface_is_not_called_lost_without_a_down_state_this_run():
+    older = _interface_scan({UPLINK: ("up", "up"), ACCESS: ("down", "down")})
+    not_evidence = {
+        "gone from this run's list": _interface_scan({}),
+        "state not collected": _interface_scan({UPLINK: (None, None), ACCESS: ("down", "down")}),
+        "still up; other was never up": _interface_scan({UPLINK: ("up", "up"), ACCESS: ("down", "down")}),
+    }
+
+    for why, newer in not_evidence.items():
+        assert compute_case_delta(older, newer)["interfaces_lost"] == [], why
+
+
+def test_changes_section_and_summary_input_list_interfaces_that_went_down():
+    from diagnostic_mas.case_delta import (
+        compact_delta_for_llm, delta_has_operational_changes, format_changes_since_previous)
+
+    delta = compute_case_delta(
+        _interface_scan({UPLINK: ("up", "up"), UPLINK + ".3000": ("up", "up"), ACCESS: ("up", "up")}),
+        _interface_scan({UPLINK: ("down", "down"), UPLINK + ".3000": ("down", "down"),
+                         ACCESS: ("admin-down", "admin-down")}),
+    )
+
+    text = "\n".join(format_changes_since_previous(delta, previous_run_id="run-1"))
+
+    assert delta_has_operational_changes(delta)
+    assert ("- `pe1-data-sw`: HundredGigE0/0/0/23 (+1 sub-interface), "
+            "HundredGigE0/0/0/5 (admin-down)") in text
+    assert compact_delta_for_llm(delta)["interfaces_lost"]["count"] == 2
+

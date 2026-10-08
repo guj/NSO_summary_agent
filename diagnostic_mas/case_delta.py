@@ -242,6 +242,54 @@ def _routing_sessions_lost(older: dict[str, Any], newer: dict[str, Any]) -> list
     return rows
 
 
+def _interface_states(case: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
+    """(device, interface) -> recorded state, from the run's interface collection."""
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    for extra in _service_extras(case):
+        for edge in extra.get("physical_operational_edges") or []:
+            device, _, interface = str((edge or {}).get("id") or "").removeprefix("if:").partition(":")
+            if device and interface:
+                out[device, interface] = edge.get("state") or {}
+    return out
+
+
+def _interfaces_lost(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[str, Any]]:
+    """Interfaces up in the older run that the newer run recorded as down.
+
+    Only a recorded down or admin-down state counts. An interface missing from
+    the newer list, or without a collected state, is not evidence of a fault.
+    """
+    now = _interface_states(newer)
+    lost = {
+        key: str(now[key]["oper"])
+        for key, state in _interface_states(older).items()
+        if state.get("oper") == "up" and (now.get(key) or {}).get("oper") in {"down", "admin-down"}
+    }
+    rows: dict[tuple[str, str], dict[str, Any]] = {}
+    for (device, interface), state in sorted(lost.items()):
+        parent, dot, unit = interface.rpartition(".")
+        if dot and unit.isdigit() and (device, parent) in lost:
+            rows[device, parent]["sub_interfaces"] += 1   # the parent sorts first
+        else:
+            rows[device, interface] = {"device": device, "interface": interface,
+                                       "now": state, "sub_interfaces": 0}
+    return list(rows.values())
+
+
+def _interface_lines(rows: list[dict[str, Any]], *, per_device: int = 6) -> list[str]:
+    by_device: dict[str, list[str]] = {}
+    for row in rows:
+        n = row["sub_interfaces"]
+        note = (" (admin-down)" if row["now"] == "admin-down" else "") + (
+            f" (+{n} sub-interface{'s' if n != 1 else ''})" if n else "")
+        by_device.setdefault(row["device"], []).append(row["interface"] + note)
+    return [
+        f"`{device}`: " + ", ".join(names[:per_device])
+        + (f", +{len(names) - per_device} more" if len(names) > per_device else "")
+        for device, names in by_device.items()
+    ]
+
+
 def _routing_session_line(row: dict[str, str]) -> str:
     parts = row["edge_id"].split(":")
     label = f"`{row['edge_id']}`"
@@ -733,6 +781,7 @@ def compute_case_delta(
         "recovered_devices": recovered_devices,
         "newly_missing_evidence": newly_missing_evidence,
         "routing_sessions_lost": _routing_sessions_lost(older, newer),
+        "interfaces_lost": _interfaces_lost(older, newer),
         "services_no_longer_present": [
             {"service": name, "service_type": kind,
              "previous_coverage": old_cov.get(name, "")}
@@ -752,7 +801,7 @@ def delta_has_operational_changes(delta: dict[str, Any]) -> bool:
         return True
     if delta.get("newly_missing_evidence"):
         return True
-    if delta.get("routing_sessions_lost"):
+    if delta.get("routing_sessions_lost") or delta.get("interfaces_lost"):
         return True
     if delta.get("services_no_longer_present"):
         return True
@@ -830,6 +879,12 @@ def format_case_delta(
         _section(
             "Routing sessions up before, not up now",
             [_routing_session_line(row) for row in delta["routing_sessions_lost"]],
+            "None",
+        )
+    if delta.get("interfaces_lost"):
+        _section(
+            "Interfaces up before, down now",
+            _interface_lines(delta["interfaces_lost"]),
             "None",
         )
     if delta.get("services_no_longer_present"):
@@ -946,6 +1001,14 @@ def format_changes_since_previous(
         if extra > 0:
             lines.append(f"- …and {extra} more")
         lines.append("")
+    interface_lines = _interface_lines(list(delta.get("interfaces_lost") or []))
+    if interface_lines:
+        lines.append("**Interfaces up in the previous run, down now:**")
+        lines.extend(f"- {line}" for line in interface_lines[:persistent_limit])
+        extra = len(interface_lines) - persistent_limit
+        if extra > 0:
+            lines.append(f"- …and {extra} more devices")
+        lines.append("")
     lines.append("**Recovered devices:**")
     if not recovered_devs and not recovered_probs:
         lines.append("- None")
@@ -1039,7 +1102,14 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
     gone = [row["service"] for row in delta.get("services_no_longer_present") or []]
     lost = [_routing_session_line(row).replace("`", "")
             for row in delta.get("routing_sessions_lost") or []]
+    interfaces = list(delta.get("interfaces_lost") or [])
     return {
+        **({"interfaces_lost": {
+            "count": len(interfaces),
+            "by_device": [line.replace("`", "") for line in _interface_lines(interfaces)][:12],
+            "note": ("Up in the previous run and recorded down in this one. "
+                     "admin-down means shut down by configuration."),
+        }} if interfaces else {}),
         **({"routing_sessions_lost": {
             "count": len(lost),
             "sessions": lost[:20],
