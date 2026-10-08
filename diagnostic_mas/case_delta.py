@@ -109,15 +109,21 @@ def coverage_map(case: dict[str, Any]) -> dict[str, str]:
     return {str(k): str(v) for k, v in raw.items()}
 
 
-def _service_inventory(case: dict[str, Any]) -> dict[str, str]:
-    """Service name -> service type, from the run's service inventory."""
-    out: dict[str, str] = {}
+def _service_extras(case: dict[str, Any]):
     for ev in case.get("evidence") or []:
-        if not isinstance(ev, dict) or ev.get("kind") != "spine" or ev.get("role") != "service":
-            continue
-        extra = (ev.get("payload") or {}).get("extra") or {}
+        if isinstance(ev, dict) and ev.get("kind") == "spine" and ev.get("role") == "service":
+            yield (ev.get("payload") or {}).get("extra") or {}
+
+
+def _service_inventory(case: dict[str, Any]) -> dict[str, str]:
+    """Service name -> service type, for services present at the end of the run."""
+    out: dict[str, str] = {}
+    for extra in _service_extras(case):
         for key, record in (extra.get("services") or {}).items():
             if not isinstance(record, dict):
+                continue
+            # Removed while the scan ran; that run's own report already says so.
+            if (record.get("presence_recheck") or {}).get("outcome") == "absent":
                 continue
             name = str(record.get("name") or str(key).split("/", 1)[-1]).strip()
             kind = str(record.get("service_type") or str(key).split("/", 1)[0]).strip()
@@ -137,21 +143,35 @@ def _full_service_scope(case: dict[str, Any]) -> bool:
     return str(config.get("Scope flags") or "") == "Default"
 
 
+def _collected_types(case: dict[str, Any]) -> set[str] | None:
+    """Service types a full, unfiltered scan collected; None for a narrower scan.
+
+    A type counts when it still has services, or when the scan recorded that
+    NSO answered its listing in full, even with no instances left.
+    """
+    if not _full_service_scope(case):
+        return None
+    types = set(_service_inventory(case).values())
+    for extra in _service_extras(case):
+        types.update(extra.get("service_types_listed") or [])
+    return types
+
+
 def _services_no_longer_present(older: dict[str, Any], newer: dict[str, Any]) -> dict[str, str]:
     """Services in the older inventory that a full newer scan no longer lists.
 
     Owners delete services routinely, so this is neither a fault nor a gap.
-    Only claimed when the newer run was unfiltered and still collected that
+    Only claimed when the newer run was unfiltered and collected that
     service type; otherwise absence may just be a narrower scan.
     """
-    if not _full_service_scope(newer):
+    collected = _collected_types(newer)
+    if collected is None:
         return {}
     now = _service_inventory(newer)
-    collected_types = set(now.values())
     return {
         name: kind
         for name, kind in _service_inventory(older).items()
-        if name not in now and kind in collected_types
+        if name not in now and kind in collected
     }
 
 
@@ -298,7 +318,9 @@ def service_fault_history(
     """Carry unresolved faults through sampling gaps without asserting current health.
 
     Only a complete current dataplane pass clears a historical fault.
-    Baseline sync, missing inventory, and incomplete digs cannot clear it.
+    Baseline sync, a narrower scan, and incomplete digs cannot clear it.
+    A fault ends without being cleared when a full scan no longer lists
+    the service: there is nothing left to recheck.
     """
     history = {
         str(row["service"]): dict(row)
@@ -344,6 +366,13 @@ def service_fault_history(
                     "source": diagnosis.get("source") or finding.get("source") or "recorded finding",
                     "evidence_ids": list(diagnosis.get("evidence_ids") or []),
                 }
+    collected = _collected_types(newer)
+    if collected is not None:
+        now = _service_inventory(newer)
+        known_types = _service_inventory(older)
+        for name in [n for n, row in history.items() if n not in now
+                     and (row.get("service_type") or known_types.get(n)) in collected]:
+            del history[name]
     current_dp = _service_dataplane_map(newer)
     current_issues = _service_issue_faults(newer)
     for name, row in history.items():
@@ -418,10 +447,14 @@ def compute_case_delta(
         else:
             persistent.append(issue)
 
+    gone = _services_no_longer_present(older, newer)
     for key, issue in old_probs.items():
         if key in new_probs:
             continue
         subject = _issue_subject(issue)
+        # Listed under services no longer present: neither recovered nor skipped.
+        if str(issue.get("layer") or "") == "services" and subject in gone:
+            continue
         if issue.get("code") == "device_live_unreachable":
             devices = set(issue.get("devices") or [])
             if devices and devices <= live_verified and not devices.intersection(new_q):
@@ -439,7 +472,6 @@ def compute_case_delta(
         else:
             recovered.append(issue)
 
-    gone = _services_no_longer_present(older, newer)
     coverage_changes: list[dict[str, str]] = []
     newly_missing_evidence: list[dict[str, str]] = []
     for name, old_label in old_cov.items():

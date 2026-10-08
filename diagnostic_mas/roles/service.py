@@ -11,6 +11,7 @@ from diagnostic_mas.focus import (
     filter_services,
 )
 from multi_agent.fleet_spine import collect_fleet_spine
+from nso_facts.health import listed_service_types
 
 
 def format_live_l2_cause(live_l2: dict[str, Any] | None) -> str:
@@ -163,6 +164,7 @@ async def run_service_spine(
         "physical_issues": pack.get("physical_issues") or [],
         "counts": counts,
         "lean": lean,
+        "service_types_listed": listed_service_types(pack.get("services_by_type") or {}),
     }
     note = pack.get("service_sync_note")
     if isinstance(note, str) and note.strip():

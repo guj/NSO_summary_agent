@@ -27,6 +27,22 @@ def extract_service_instances(services_data: Any) -> list[dict[str, Any]]:
     return [item for item in services if isinstance(item, dict)]
 
 
+def listed_service_types(services_by_type: dict[str, Any]) -> list[str]:
+    """Types whose listing came back whole, including types with no instances.
+
+    A failed, malformed or partial listing is not counted: it cannot show
+    that a service is absent.
+    """
+    listed = []
+    for service_type, result in services_by_type.items():
+        data = result.get("data") if isinstance(result, dict) else None
+        if (isinstance(data, dict) and result.get("status") == "success"
+                and isinstance(data.get("services"), list)
+                and not any(data.get(k) for k in ("partial", "truncated", "has_more", "next_cursor", "next"))):
+            listed.append(service_type)
+    return sorted(listed)
+
+
 def sync_module_from_type(raw: str) -> str:
     """Module name for check_service_sync from `/ncs:services/<module>:<service>`."""
     s = raw.strip().lstrip("/")

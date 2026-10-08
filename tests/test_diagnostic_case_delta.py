@@ -367,13 +367,21 @@ FULL_SCOPE = {"Device filter": "All", "Service type filter": "All",
 
 
 def _scan(services: dict[str, str], *, coverage: dict[str, str] | None = None,
-          scope: dict | None = FULL_SCOPE, focus: list[str] | None = None) -> dict:
-    """A saved case holding a service inventory (name -> service type)."""
+          scope: dict | None = FULL_SCOPE, focus: list[str] | None = None,
+          listed: list[str] | None = None) -> dict:
+    """A saved case holding a service inventory (name -> service type).
+
+    ``listed`` is the set of types the scan asked NSO for and got a whole
+    answer to, which can include a type with no instances.
+    """
     records = {f"{kind}/{name}": {"name": name, "service_type": kind, "devices": ["pe1"]}
                for name, kind in services.items()}
+    extra: dict = {"services": records}
+    if listed is not None:
+        extra["service_types_listed"] = list(listed)
     case = {
         "evidence": [{"kind": "spine", "role": "service", "layer": "services",
-                      "payload": {"extra": {"services": records}}}],
+                      "payload": {"extra": extra}}],
         "issues": [], "diagnoses": [],
         "service_coverage": coverage if coverage is not None else {n: "basic_passed" for n in services},
         "focus_devices": focus or [],
@@ -421,6 +429,63 @@ def test_service_is_not_reported_gone_when_its_type_was_not_collected_or_scope_i
 
     assert type_not_collected["services_no_longer_present"] == []
     assert scope_unknown["services_no_longer_present"] == []
+
+
+def test_services_of_a_type_the_scan_listed_as_empty_are_no_longer_present():
+    older = _scan({"keep": "l2bridge", "m1": "port-mirror", "m2": "port-mirror"})
+    newer = _scan({"keep": "l2bridge"}, listed=["l2bridge", "port-mirror"])
+
+    delta = compute_case_delta(older, newer)
+
+    assert [row["service"] for row in delta["services_no_longer_present"]] == ["m1", "m2"]
+    assert delta["newly_missing_evidence"] == []
+
+
+def _faulty_then_gone(**newer_scan) -> tuple[dict, dict]:
+    """Older run: `faulty` is a last-known Down. Newer run: only `keep` is listed."""
+    older = _scan({"keep": "l3rt", "faulty": "l3rt"})
+    older["issues"] = [{"layer": "services", "code": "service_down", "status": "open",
+                        "edge_id": "faulty", "message": "duplicate gateway"}]
+    older["last_known_service_faults"] = [{
+        "service": "faulty", "status": "down", "service_type": "l3rt",
+        "last_observed_run_id": "r1", "cause": "duplicate gateway"}]
+    return older, _scan({"keep": "l3rt"}, **newer_scan)
+
+
+def test_last_known_fault_ends_when_a_full_scan_no_longer_lists_the_service():
+    from diagnostic_mas.case_delta import service_fault_history
+
+    older, newer = _faulty_then_gone()
+
+    assert service_fault_history(older, newer) == []
+    delta = compute_case_delta(older, newer)
+    assert delta["last_known_service_faults"] == []
+    assert [row["service"] for row in delta["services_no_longer_present"]] == ["faulty"]
+    # Gone is not fixed: the old fault must not be counted as a recovery either.
+    assert delta["recovered"] == [] and delta["out_of_scope"] == []
+    assert delta["newly_missing_evidence"] == []
+
+
+def test_fault_ends_for_a_service_removed_while_the_scan_ran():
+    from diagnostic_mas.case_delta import service_fault_history
+
+    older, newer = _faulty_then_gone()
+    records = newer["evidence"][0]["payload"]["extra"]["services"]
+    records["l3rt/faulty"] = {"name": "faulty", "service_type": "l3rt", "devices": ["pe1"],
+                              "presence_recheck": {"outcome": "absent"}}
+
+    assert service_fault_history(older, newer) == []
+
+
+def test_last_known_fault_is_kept_when_a_narrower_scan_leaves_the_service_out():
+    from diagnostic_mas.case_delta import service_fault_history
+
+    older, narrower = _faulty_then_gone(scope={**FULL_SCOPE, "Service ID filter": "keep"})
+
+    history = service_fault_history(older, narrower)
+
+    assert [row["service"] for row in history] == ["faulty"]
+    assert "not rechecked" in history[0]["verification"]
 
 
 def test_changes_section_lists_services_no_longer_present_apart_from_missing_evidence():

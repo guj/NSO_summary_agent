@@ -43,12 +43,12 @@ async def reconcile_presence(client, case, record, finding):
     out.update(dataplane_status="unknown", complete=False, fix_suggestion=None)
     if outcome == "absent":
         out["service_disappeared"] = True
-        out["cause"] = "Service disappeared during this scan. Fresh NSO inventory no longer contains its exact ID; removal intent is unknown."
+        out["cause"] = "Service is no longer present in NSO: a fresh inventory taken during this scan no longer lists its exact ID."
         case.service_coverage[record["name"]] = "disappeared"
         for issue in case.issues:
             if issue.get("edge_id") == record["name"] and issue.get("layer") == "services":
                 issue["status"] = "explained"
-                issue["resolution"] = "Service no longer present in fresh inventory; removal intent unknown, not a recovery."
+                issue["resolution"] = "Service no longer present in a fresh inventory; not a recovery."
     else:
         out["cause"] = reason + "; current service existence could not be verified."
     return out
@@ -60,8 +60,8 @@ def disappearance_section(case):
     if not rows:
         return []
     lines = ["## Services no longer present", "",
-             f"{len(rows)} service(s) disappeared during this scan and are excluded from active-service totals. Removal intent is unknown.", ""]
+             f"{len(rows)} service(s) were no longer present in NSO when rechecked during this scan and are not counted in the service totals.", ""]
     for r in rows:
         p = r["presence_recheck"]
-        lines.append(f"- `{r['service_type']}/{r['name']}` — initially observed {p.get('initial_observed_at') or 'during initial collection'}; absent at fresh inventory recheck {p['checked_at']}. Confirm with the service owner or NSO change history; do not restore automatically.")
+        lines.append(f"- `{r['service_type']}/{r['name']}` — listed {p.get('initial_observed_at') or 'during initial collection'}; no longer present at {p['checked_at']}.")
     return lines + [""]

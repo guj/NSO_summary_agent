@@ -617,9 +617,11 @@ finding is labeled **newly detected**, not a proven regression: an earlier
 readiness pass may have used different checks.
 
 Published diagnostic cases persist `last_known_service_faults` with their last
-observation run and explanation. Sampling omissions, absent inventory, baseline
+observation run and explanation. Sampling omissions, a narrower scan, baseline
 sync passes, and inconclusive rechecks do not clear those findings. A completed
 current dataplane pass clears the historical fault; current faults refresh it.
+A fault is dropped when a full, unfiltered scan no longer lists the service; the
+report then lists it under services no longer present.
 Historical findings are reported separately and do not alter current-run service
 counts or masquerade as fresh evidence. Old cases without the field are supported.
 Dry-runs can show history from the last published case but do not persist updates.
