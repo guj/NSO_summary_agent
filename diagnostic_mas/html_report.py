@@ -87,6 +87,16 @@ def _device_details(case: dict | None) -> dict[str, str]:
         focus_devices=case.get("focus_devices") or [],
     )
     details = device_detail_lines(view, live_verified=case.get("live_verified_devices"))
+    for ev in view.evidence:
+        kinds = {"port_investigation": "Port {port} investigation", "device_investigation": "Cut-off investigation"}
+        finding = ev.get("payload") if ev.get("kind") in kinds else None
+        if isinstance(finding, dict) and finding.get("concluded"):
+            details.setdefault(str(finding.get("device")), []).extend([
+                "", kinds[ev["kind"]].format(port=finding.get("port")),
+                f"  Observed: {finding.get('observed')}",
+                f"  Cause: {finding.get('cause')}",
+                f"  Suggested check: {finding.get('fix_suggestion') or 'none given'}",
+            ])
     return {
         name: '<details class="device-detail"><summary>Interfaces and hardware</summary><pre>'
         + html.escape("\n".join(lines))

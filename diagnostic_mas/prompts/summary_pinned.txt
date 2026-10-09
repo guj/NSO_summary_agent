@@ -37,6 +37,11 @@ When ``changes_since_previous`` is present in the JSON:
 When ``changes_since_previous`` is absent: summarize this run only;
 do not invent a prior baseline.
 
+Diagnoses with source ``port_investigation`` or ``device_investigation``: the
+service is Down on this scan's own evidence and the cause was investigated
+once, for its port or for its cut-off device. Report them together under that
+port or device; do not describe them as individually investigated.
+
 Incomplete dataplane verifies (complete=false / dataplane=unknown unresolved):
 - Preserve Diagnosis stop reasons (timeout / budget / no conclude_dataplane);
   do not rewrite into invented sync or forwarding faults.

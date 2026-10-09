@@ -27,6 +27,10 @@ class Budget:
     dataplane_tools_used: int = 0
     # Total MCP tool calls across all drill sessions (reporting; not dataplane)
     drills_used: int = 0
+    # Down ports investigated once before the service digs (0 disables)
+    max_port_investigations: int = 6
+    port_investigations_used: int = 0
+    port_tools_used: int = 0
 
 
 @dataclass
@@ -211,7 +215,7 @@ def debit_drill(
     n: int = 1,
     *,
     session: DrillSession | None = None,
-    account: Literal["drill", "dataplane"] = "drill",
+    account: Literal["drill", "dataplane", "port"] = "drill",
 ) -> bool:
     """Debit drill or dataplane tool call(s). Prefer a per-issue ``session`` cap."""
     b = case.budget
@@ -221,11 +225,13 @@ def debit_drill(
         session.tools_used += n
         if account == "dataplane":
             b.dataplane_tools_used += n
+        elif account == "port":
+            b.port_tools_used += n
         else:
             b.drills_used += n
         return True
     # No session: global cap = issues × tools-per-issue (drill pool only)
-    if account == "dataplane":
+    if account != "drill":
         return False
     cap = max(0, b.max_drill_issues) * max(0, b.max_tools_per_drill)
     if b.drills_used + n > cap:

@@ -265,6 +265,7 @@ async def _run(args: argparse.Namespace) -> int:
             max_drill_issues=max(0, getattr(args, "max_drill_issues", 2)),
             max_tools_per_drill=max(0, getattr(args, "max_tools_per_drill", 12)),
             max_dataplane_tools=max(0, getattr(args, "max_dataplane_tools", 40)),
+            max_port_investigations=max(0, getattr(args, "max_port_investigations", 6)),
         )
     )
     from diagnostic_mas.run_configuration import capture_run_configuration
@@ -754,6 +755,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=12,
         help="Max MCP tool calls per drilled Issue (default 12)",
+    )
+    parser.add_argument(
+        "--max-port-investigations",
+        type=int,
+        default=6,
+        help=(
+            "Max down ports and cut-off devices investigated once before the "
+            "service digs (default 6; 0 investigates every service individually)"
+        ),
     )
     parser.add_argument(
         "--spine-concurrent-devices", type=_positive_worker_count, default=1,

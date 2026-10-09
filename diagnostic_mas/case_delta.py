@@ -22,6 +22,8 @@ _CHECKED_COVERAGE = frozenset(
         "llm_budget_exceeded",
         "collection_concluded",
         "category_peer_skipped",
+        "port_investigated",
+        "device_investigated",
     }
 )
 
@@ -213,6 +215,12 @@ def _devices_answering(case: dict[str, Any], layer: str) -> set[str]:
     return set(case.get("live_verified_devices") or []) - failed
 
 
+def _adjacency_ends(edge_id: str) -> list[tuple[str, str]]:
+    """(device, interface) at each end of an ``isis:devA:ifA:devB:ifB`` id."""
+    parts = edge_id.split(":")
+    return [(parts[1], parts[2]), (parts[3], parts[4])] if len(parts) == 5 and parts[0] == "isis" else []
+
+
 def _routing_sessions_lost(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[str, str]]:
     """Sessions and adjacencies up in the older run that are not up in the newer one.
 
@@ -227,11 +235,20 @@ def _routing_sessions_lost(older: dict[str, Any], newer: dict[str, Any]) -> list
         if not before or now is None:
             continue
         answering = _devices_answering(newer, layer)
+        # Parallel links are also recorded under ids that pair one link's end
+        # with another's, so an absent id is a loss only when neither of its
+        # ends is in any adjacency now.
+        still_adjacent = {
+            end for current_id, current_state in now.items() if current_state.get("status") == "up"
+            for end in _adjacency_ends(current_id)
+        } if role == "isis" else set()
         for edge_id, state in sorted(before.items()):
             if state.get("status") != "up":
                 continue
             current = now.get(edge_id)
             if current is None:
+                if still_adjacent & set(_adjacency_ends(edge_id)):
+                    continue
                 devices = {part for part in edge_id.split(":") if part in known}
                 if len(devices) == 2 and devices <= answering:
                     rows.append({"protocol": role, "edge_id": edge_id,
@@ -288,6 +305,12 @@ def _interface_lines(rows: list[dict[str, Any]], *, per_device: int = 6) -> list
         + (f", +{len(names) - per_device} more" if len(names) > per_device else "")
         for device, names in by_device.items()
     ]
+
+
+def _cleared_line(row: dict[str, str]) -> str:
+    label = f"{row['service_type']}/{row['service']}" if row.get("service_type") else row["service"]
+    return (f"`{label}` — passes the checks this run "
+            f"(was {row['was']} in run `{row['last_observed_run_id']}`)")
 
 
 def _routing_session_line(row: dict[str, str]) -> str:
@@ -425,6 +448,24 @@ def _service_dataplane_map(case: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _passing_this_run(case: dict[str, Any]) -> set[str]:
+    """Services whose final status in this run is OpUp, by fixed check or LLM."""
+    from diagnostic_mas.service_final_status import assessment
+
+    digs = {
+        str((dx.get("subject") or {}).get("name") or ""): dx
+        for dx in case.get("diagnoses") or []
+        if isinstance(dx, dict) and dx.get("kind") == "dataplane"
+    }
+    return {
+        str(record["name"])
+        for extra in _service_extras(case)
+        for record in (extra.get("services") or {}).values()
+        if isinstance(record, dict) and record.get("name")
+        and assessment(record, digs.get(str(record["name"])))[0] == "up"
+    }
+
+
 def _service_issue_faults(case: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Service-layer problem issues keyed by edge_id / subject."""
     out: dict[str, dict[str, Any]] = {}
@@ -446,7 +487,8 @@ def service_fault_history(
 ) -> list[dict[str, Any]]:
     """Carry unresolved faults through sampling gaps without asserting current health.
 
-    Only a complete current dataplane pass clears a historical fault.
+    A historical fault is cleared by a pass in the current run: a complete
+    dataplane pass, or the service's own operational checks passing.
     Baseline sync, a narrower scan, and incomplete digs cannot clear it.
     A fault ends without being cleared when a full scan no longer lists
     the service: there is nothing left to recheck.
@@ -502,6 +544,8 @@ def service_fault_history(
         for name in [n for n, row in history.items() if n not in now
                      and (row.get("service_type") or known_types.get(n)) in collected]:
             del history[name]
+    for name in _passing_this_run(newer) & history.keys():
+        del history[name]
     current_dp = _service_dataplane_map(newer)
     current_issues = _service_issue_faults(newer)
     for name, row in history.items():
@@ -780,6 +824,12 @@ def compute_case_delta(
         "last_known_service_faults": history,
         "recovered_devices": recovered_devices,
         "newly_missing_evidence": newly_missing_evidence,
+        "service_faults_cleared": [
+            {"service": name, "service_type": row.get("service_type") or "",
+             "was": row.get("status") or "", "last_observed_run_id": row.get("last_observed_run_id") or "unknown"}
+            for name, row in sorted(old_history.items())
+            if name in _passing_this_run(newer) and name not in gone
+        ],
         "routing_sessions_lost": _routing_sessions_lost(older, newer),
         "interfaces_lost": _interfaces_lost(older, newer),
         "services_no_longer_present": [
@@ -802,6 +852,8 @@ def delta_has_operational_changes(delta: dict[str, Any]) -> bool:
     if delta.get("newly_missing_evidence"):
         return True
     if delta.get("routing_sessions_lost") or delta.get("interfaces_lost"):
+        return True
+    if delta.get("service_faults_cleared"):
         return True
     if delta.get("services_no_longer_present"):
         return True
@@ -879,6 +931,12 @@ def format_case_delta(
         _section(
             "Routing sessions up before, not up now",
             [_routing_session_line(row) for row in delta["routing_sessions_lost"]],
+            "None",
+        )
+    if delta.get("service_faults_cleared"):
+        _section(
+            "Service faults no longer observed",
+            [_cleared_line(row) for row in delta["service_faults_cleared"]],
             "None",
         )
     if delta.get("interfaces_lost"):
@@ -992,6 +1050,14 @@ def format_changes_since_previous(
                      "readiness may have used different checks. Failure onset is unverified.")
         lines.append("")
     lines.extend(format_last_known_faults(list(delta.get("last_known_service_faults") or [])))
+    cleared = list(delta.get("service_faults_cleared") or [])
+    if cleared:
+        lines.append("**Service faults no longer observed:**")
+        lines.extend(f"- {_cleared_line(row)}" for row in cleared[:persistent_limit])
+        extra = len(cleared) - persistent_limit
+        if extra > 0:
+            lines.append(f"- …and {extra} more")
+        lines.append("")
     lost = list(delta.get("routing_sessions_lost") or [])
     if lost:
         lines.append("**Routing sessions up in the previous run, not up now:**")
@@ -1103,7 +1169,14 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
     lost = [_routing_session_line(row).replace("`", "")
             for row in delta.get("routing_sessions_lost") or []]
     interfaces = list(delta.get("interfaces_lost") or [])
+    cleared = [row["service"] for row in delta.get("service_faults_cleared") or []]
     return {
+        **({"service_faults_cleared": {
+            "count": len(cleared),
+            "services": cleared[:20],
+            "note": ("Down or degraded in an earlier run; they pass this run's checks. "
+                     "PE-side readiness only; customer delivery was not tested."),
+        }} if cleared else {}),
         **({"interfaces_lost": {
             "count": len(interfaces),
             "by_device": [line.replace("`", "") for line in _interface_lines(interfaces)][:12],

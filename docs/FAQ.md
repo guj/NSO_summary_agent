@@ -172,6 +172,19 @@ within the limits set by `--max-dataplane-per-category` and `--max-dataplane-ser
 Per-service sections appear only for services that were investigated or have a fault; add
 `--services-detail` to list every instance.
 
+A down port is investigated once, before the services. It qualifies when a service whose basic
+check is Down attaches to a link recorded as down, and every failed check of that service is on
+such a link. Those services keep the Down from their own basic check, show "Down — port
+investigated once" in the table, and are not investigated individually; the port's finding is
+printed under its device. A port investigation that does not finish explains nothing, and its
+services are investigated as usual. `--max-port-investigations` sets the ceiling (default 6).
+
+A cut-off device is handled the same way. A device is cut off when it answered the scan's
+routing queries and has no IS-IS adjacency and no BGP session up. It is investigated once, and
+its services that do not pass their basic check and whose own configuration names another
+device are reported Down with "Down — device investigated once". Services on that device whose
+configuration names no other device keep the result of their own basic check.
+
 ### Why is a service Unknown when it looks fine?
 
 Unknown describes the investigation, not the service. It means there was not enough evidence:

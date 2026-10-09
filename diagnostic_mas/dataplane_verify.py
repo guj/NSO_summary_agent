@@ -454,8 +454,11 @@ def select_dataplane_candidates(
     explicit_service: bool = False,
     one_per_typed_category: bool = True,
     category_rotate_seed: str | None = None,
+    exclude: frozenset[str] | set[str] = frozenset(),
 ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     """Pick services for LLM dataplane verify.
+
+    ``exclude`` names services a port investigation already explained.
 
     Default: ``system=up`` and ``dataplane=not_checked`` (fleet runs).
     ``suspicious_only`` (service focus): only instances that look wrong or
@@ -474,6 +477,8 @@ def select_dataplane_candidates(
     """
     eligible: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for ev, rec in iter_service_records(case):
+        if str(rec.get("name") or "") in exclude:
+            continue
         basic = rec.get("basic_checks")
         if isinstance(basic, dict):
             if explicit_service or basic.get("needs_investigation"):
@@ -619,7 +624,7 @@ def update_coverage_from_diagnoses(case: CaseFile) -> None:
             continue
         subject = dx.get("subject") if isinstance(dx.get("subject"), dict) else {}
         name = str(subject.get("name") or dx.get("name") or "").strip()
-        if not name:
+        if not name or dx.get("source") in {"port_investigation", "device_investigation"}:
             continue
         if dx.get("complete") is False:
             case.service_coverage[name] = "unresolved"
@@ -2779,6 +2784,28 @@ async def run_dataplane_verify_phase(
         per_category = max(0, int(max_per_category))
     else:
         per_category = None
+    # A down port or a cut-off device is investigated once; the services it
+    # explains need no dig.
+    explained: set[str] = set()
+    if not explicit_service and case.budget.max_port_investigations > 0:
+        from diagnostic_mas.port_investigation import (
+            run_device_investigations,
+            run_port_investigations,
+        )
+
+        try:
+            explained = await run_port_investigations(
+                client, settings, case, device_names=device_names, openai_client=openai_client)
+            explained |= await run_device_investigations(
+                client, settings, case, device_names=device_names, openai_client=openai_client)
+        except ProviderBudgetExceeded as exc:
+            mark_case_llm_halt(case, str(exc))
+        except Exception as exc:  # noqa: BLE001 — services are then investigated as usual
+            _log(f"port and device investigations failed ({type(exc).__name__}: {exc}); "
+                 "investigating services individually")
+        if case.budget.port_investigations_used:
+            _log(f"port and device investigations={case.budget.port_investigations_used} "
+                 f"explained services={len(explained)}")
     candidates = select_dataplane_candidates(
         case,
         limit=limit,
@@ -2787,6 +2814,7 @@ async def run_dataplane_verify_phase(
         explicit_service=explicit_service,
         one_per_typed_category=True,
         category_rotate_seed=category_rotate_seed,
+        exclude=explained,
     )
     apply_coverage_after_candidate_select(case, candidates)
     if not candidates:

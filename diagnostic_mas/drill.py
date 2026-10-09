@@ -327,6 +327,8 @@ _DRILL_SKIP_CODES = frozenset(
     {
         "unknown_neighbor_address",
         "unknown_neighbor_system_id",
+        "port_down",  # has its own investigation, before the service digs
+        "device_cut_off",
     }
 )
 
@@ -1034,8 +1036,8 @@ async def execute_one_drill_call(
             f"(allowlist/device/args). Allowlist={sorted(allowed)}"
         )
     task = gated[0]
-    acct: Literal["drill", "dataplane"] = (
-        "dataplane" if account == "dataplane" else "drill"
+    acct: Literal["drill", "dataplane", "port"] = (
+        account if account in {"dataplane", "port"} else "drill"  # type: ignore[assignment]
     )
     if not debit_drill(case, 1, session=session, account=acct):
         return "ERROR: drill tool budget exhausted"
@@ -1074,6 +1076,8 @@ async def llm_drill_tool_loop(
     focus_issue: dict[str, Any],
     session: DrillSession,
     openai_client: Any | None = None,
+    system_prompt: str | None = None,
+    account: str = "drill",
 ) -> tuple[int, bool]:
     """Batch tool calls → then LLM evaluates; conclude ends the loop.
 
@@ -1094,7 +1098,7 @@ async def llm_drill_tool_loop(
     )
     ctx["known_devices"] = sorted(device_names)[:80]
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": _system_prompt_drill_agent()},
+        {"role": "system", "content": system_prompt or _system_prompt_drill_agent()},
         {
             "role": "user",
             "content": (
@@ -1285,6 +1289,7 @@ async def llm_drill_tool_loop(
                 reason=str(reason) if reason else None,
                 device_names=device_names,
                 session=session,
+                account=account,
             )
             messages.append(
                 {

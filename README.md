@@ -565,6 +565,7 @@ In the HTML report, each device also has a collapsed **Interfaces and hardware**
 | `--max-dataplane-services N` | Total cap on dataplane LLM instances (default without per-category: one best per typed prompt; **two** if only one typed category is present) |
 | `--max-dataplane-per-category N` | Up to N digs from each typed prompt category (even overnight sample; optional total cap still applies) |
 | `--max-drill-issues N` | Run-wide drill slot count (default 2; separate from dataplane selection) |
+| `--max-port-investigations N` | Down ports and cut-off devices investigated once before the service investigations (default 6; 0 investigates every service individually) |
 | `--max-tools-per-drill N` | MCP calls per drilled issue (default 12) |
 | `--services-detail` | Emit a per-instance section for every service (default: digs / impairments only) |
 
@@ -619,7 +620,8 @@ readiness pass may have used different checks.
 Published diagnostic cases persist `last_known_service_faults` with their last
 observation run and explanation. Sampling omissions, a narrower scan, baseline
 sync passes, and inconclusive rechecks do not clear those findings. A completed
-current dataplane pass clears the historical fault; current faults refresh it.
+current dataplane pass clears the historical fault, and so does a pass of the
+service's own operational checks in the current run; current faults refresh it.
 A fault is dropped when a full, unfiltered scan no longer lists the service; the
 report then lists it under services no longer present.
 Historical findings are reported separately and do not alter current-run service

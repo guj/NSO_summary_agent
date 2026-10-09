@@ -34,6 +34,10 @@ def assessment(service, dig=None):
             status = "up"
         if dig.get("source") == "llm" and dig.get("complete") is not False and status in {"up", "down", "degraded"}:
             return status, "LLM concluded " + dict(zip(STATUSES, LABELS))[status]
+        if dig.get("source") == "port_investigation" and status == "down":
+            return status, "Down — port investigated once"
+        if dig.get("source") == "device_investigation" and status == "down":
+            return status, "Down — device investigated once"
     label = dict(zip(STATUSES, LABELS))[operational]
     if operational == "up" and not dig:
         return operational, "Basic operational pass"

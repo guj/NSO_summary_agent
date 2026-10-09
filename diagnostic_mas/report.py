@@ -279,6 +279,7 @@ def _dataplane_dig_subjects(case: CaseFile) -> dict[str, dict[str, Any]]:
         rows[name] = {
             "status": str(dx.get("status") or dx.get("dataplane_status") or "").lower(),
             "complete": dx.get("complete"),
+            "source": dx.get("source"),
         }
     for ev in case.evidence:
         kind = ev.get("kind")
@@ -365,7 +366,23 @@ def dataplane_dig_counts(case: CaseFile) -> dict[str, int]:
 
 def format_dataplane_dig_line(case: CaseFile) -> str:
     """Coverage statement under the system-level services table."""
-    digs = _dataplane_dig_subjects(case)
+    from diagnostic_mas.port_investigation import SOURCES, device_findings, port_findings
+
+    subjects = _dataplane_dig_subjects(case)
+    explained = sum(1 for row in subjects.values() if row.get("source") in SOURCES)
+    line = _dataplane_dig_line(
+        case, {name: row for name, row in subjects.items() if row.get("source") not in SOURCES})
+    if explained:
+        counts = [(sum(1 for f in found(case) if f.get("concluded")), kind)
+                  for found, kind in ((port_findings, "port"), (device_findings, "device"))]
+        by = " and ".join(f"{n} {kind} investigation{'s' if n != 1 else ''}" for n, kind in counts if n)
+        line += (
+            f" {explained} service{'s are' if explained != 1 else ' is'} explained by {by}: "
+            "Down on this scan's own evidence, not investigated individually.")
+    return line
+
+
+def _dataplane_dig_line(case: CaseFile, digs: dict[str, dict[str, Any]]) -> str:
     passed = 0
     incomplete = 0
     faults = 0

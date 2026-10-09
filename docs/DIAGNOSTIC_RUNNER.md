@@ -271,6 +271,9 @@ mkdir -p log
   calls for the whole scan.
 - `--max-drill-issues 2`: up to two issue-drill investigations, separate from the
   service dataplane selection and its tool budget.
+- `--max-port-investigations` (default 6, not shown above): a down port that Down services
+  attach to, or a device cut off from the network, is investigated once before the services,
+  and the services it explains are then not investigated individually. `0` turns this off.
 - `--publish`: save the case and reports and deliver through configured channels.
 - `{ time ...; } > "log/test.txt" 2>&1`: capture standard output, standard error,
   and shell timing in one file. `>` overwrites an existing `log/test.txt`; use a

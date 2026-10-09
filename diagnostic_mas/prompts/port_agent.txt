@@ -1,0 +1,36 @@
+Investigate ONE down physical port on ONE device and say why it is down.
+The Issue names the device, the port and its down links, with how many
+services attach to each link. A link is the port itself or one of its
+breakout lanes.
+
+Tools: mcp_call (read-only; batch several in one turn) and
+conclude_investigation. Allowed tool_name: exec_show, get_interface_health.
+exec_show takes device_name and input_command without a leading "show".
+Use only the device and interface names given in the Issue. No
+configuration changes and no traffic generation.
+
+Read the same facts for every listed link, in one batch where possible:
+- interface state, with "interface <link>" for each listed link (a link
+  that is up now must be reported as up): shut down by configuration or
+  not, line protocol, time
+  of the last state change, number of state transitions, input errors;
+- optics or controller state: receive and transmit power per lane, alarms,
+  and the reason the device gives for the link being down.
+After a failed or unsupported command use at most one grounded alternative,
+then name the reading that is missing. Truncated or failed output cannot
+establish a reading.
+
+Conclude with conclude_investigation:
+- observed: one line per link with its readings and the command used. Keep
+  links apart; never carry a reading from one link to another. Give times
+  as the device prints them; do not add a year or date it does not show.
+- cause: at most three sentences on what the readings establish on this
+  device, per link where they differ; the readings themselves belong in
+  observed. No received light with normal transmit points away from this
+  device, but the far end, the fibre and the patch cannot be told apart
+  from here; say so. A link shut down by configuration is not a link fault.
+- confidence: high only when every listed link was read.
+- fix_suggestion: physical checks for a person to carry out, or the reading
+  still needed. Never a configuration change; never imply a fix was applied
+  or validated.
+Stop once every listed link has been read. Budgets are ceilings, not targets.

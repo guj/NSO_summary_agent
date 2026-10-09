@@ -756,6 +756,8 @@ def _coverage_label(code: str) -> str:
             "not a confirmed forwarding fault)"
         ),
         "needs_investigation": "Pending investigation",
+        "port_investigated": "Explained by a port investigation (not investigated individually)",
+        "device_investigated": "Explained by a device investigation (not investigated individually)",
         "category_peer_skipped": (
             "Not selected (typed-category dataplane sample is another instance)"
         ),
@@ -839,6 +841,7 @@ def format_devices_operator(case: CaseFile) -> list[str]:
         lines.append(f"**Routing:** BGP {bgp_prose} · IS-IS {isis}")
         if drill_line:
             lines.append(drill_line)
+        lines.extend(_port_finding_lines(case, device))
         lines.append("")
 
         attention: list[str] = []
@@ -860,6 +863,56 @@ def format_devices_operator(case: CaseFile) -> list[str]:
                 for item in attention:
                     lines.append(f"- {item}")
             lines.append("")
+    return lines
+
+
+def _port_finding_lines(case: CaseFile, device: str) -> list[str]:
+    """One line per port investigated on this device."""
+    from diagnostic_mas.port_investigation import brief, device_findings, port_findings
+
+    lines: list[str] = []
+    for finding in device_findings(case):
+        if finding.get("device") != device:
+            continue
+        n = len(finding.get("services") or [])
+        services = f"{n} service{'s' if n != 1 else ''}"
+        if finding.get("concluded") and finding.get("sessions_now", "down") != "down":
+            cause = scrub_internal_ids(brief(finding.get("cause"), 300))
+            lines.append(f"**Cut off:** {cause} (not confirmed when re-read; "
+                         f"{services} left to {'their' if n != 1 else 'its'} own investigation)")
+        elif finding.get("concluded"):
+            cause = scrub_internal_ids(brief(finding.get("cause"), 300))
+            lines.append(f"**Cut off:** {cause} ({services} that use another device; investigated once)")
+        else:
+            lines.append("**Cut off:** investigation did not finish; "
+                         f"its {services} were left to their own investigation")
+    for finding in port_findings(case):
+        if finding.get("device") != device:
+            continue
+        links = finding.get("links") or {}
+        n = sum(len(names) for names in links.values())
+        services = f"{n} service{'s' if n != 1 else ''}"
+        states = finding.get("link_states")
+        read_down = n if states is None else sum(
+            len(names) for link, names in links.items() if states.get(link) == "down")
+        rest = n - read_down
+        if finding.get("concluded") and rest:
+            cause = scrub_internal_ids(brief(finding.get("cause"), 300))
+            left = f"{rest} service{'s' if rest != 1 else ''} left to {'their' if rest != 1 else 'its'} own investigation"
+            if read_down:
+                note = (f"{read_down} service{'s' if read_down != 1 else ''} on "
+                        f"{'links' if read_down != 1 else 'a link'} read down; "
+                        + left.replace(" service left", " left").replace(" services left", " left")
+                        + f": {'their links were' if rest != 1 else 'its link was'} not read down")
+            else:
+                note = f"no link read down; {left}"
+            lines.append(f"**Port {finding.get('port')}:** {cause} ({note})")
+        elif finding.get("concluded"):
+            cause = scrub_internal_ids(brief(finding.get("cause"), 300))
+            lines.append(f"**Port {finding.get('port')}:** {cause} ({services} attached; investigated once)")
+        else:
+            lines.append(f"**Port {finding.get('port')}:** investigation did not finish; "
+                         f"its {services} were left to their own investigation")
     return lines
 
 
@@ -2093,13 +2146,16 @@ def format_run_details(
     b = case.budget
     dp_cap = dataplane_tools_cap(b)
     dp_used = int(getattr(b, "dataplane_tools_used", 0) or 0)
-    digs_n = sum(1 for d in case.diagnoses if d.get("kind") == "dataplane")
+    explained_sources = {"port_investigation", "device_investigation"}
+    digs_n = sum(1 for d in case.diagnoses
+                 if d.get("kind") == "dataplane" and d.get("source") not in explained_sources)
     if digs_n <= 0:
         # Fall back to incomplete/finding evidence if diagnoses absent.
         digs_n = sum(
             1
             for e in case.evidence
             if e.get("kind") in {"dataplane_finding", "dataplane_incomplete"}
+            and (e.get("payload") or {}).get("source") not in explained_sources
         )
     if digs_n > 0:
         dp_tools_line = (
@@ -2120,6 +2176,11 @@ def format_run_details(
         f"{getattr(b, 'max_drill_issues', 0)} "
         f"(tools used {getattr(b, 'drills_used', 0)})",
     ]
+    if getattr(b, "port_investigations_used", 0):
+        by_port = sum(1 for d in case.diagnoses if d.get("source") in explained_sources)
+        lines.append(
+            f"**Port and device investigations:** {b.port_investigations_used} / {b.max_port_investigations} "
+            f"(tools used {b.port_tools_used}); {by_port} service{'s' if by_port != 1 else ''} explained")
     if any((b.max_deep_checks, b.max_handoffs, b.deep_checks_used, b.handoffs_used)):
         lines.append(
             f"**Deep checks / handoffs:** "

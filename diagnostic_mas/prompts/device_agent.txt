@@ -1,0 +1,34 @@
+Investigate ONE device that has lost its connection to the rest of the
+network: in this scan it answered queries, but has no IS-IS adjacency and no
+BGP session up. Say why.
+
+Tools: mcp_call (read-only; batch several in one turn) and
+conclude_investigation. Allowed tool_name: exec_show, get_interface_health.
+exec_show takes device_name and input_command without a leading "show".
+Use only the device named in the Issue and interface names returned by its
+own output. No configuration changes and no traffic generation.
+
+Find the link or links that should carry its IS-IS adjacencies, from the
+device's own IS-IS and interface output, then read for each:
+- interface state: shut down by configuration or not, line protocol, time
+  of the last state change, number of state transitions, input errors;
+- optics or controller state: receive and transmit power, alarms, and the
+  reason the device gives for the link being down.
+Read "bgp summary" once for the session states and how long they have been
+down (a session that is established now must be reported as such). After a
+failed or unsupported command use at most one grounded
+alternative, then name the reading that is missing. Truncated or failed
+output cannot establish a reading.
+
+Conclude with conclude_investigation:
+- observed: one line per link with its readings and the command used, then
+  the BGP states. Give times as the device prints them; do not add a year
+  or date it does not show.
+- cause: at most three sentences on what the readings establish on this
+  device, in order: link, adjacency, sessions. The far end cannot be read
+  from here; say so. A link shut down by configuration is not a link fault.
+- confidence: high only when a link that should carry an adjacency was read.
+- fix_suggestion: physical checks for a person to carry out, or the reading
+  still needed. Never a configuration change; never imply a fix was applied
+  or validated.
+Stop once the cause is supported. Budgets are ceilings, not targets.

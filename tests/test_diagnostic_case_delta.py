@@ -574,6 +574,18 @@ def test_missing_adjacency_is_not_called_lost_without_an_answer_from_both_ends()
         assert compute_case_delta(older, newer)["routing_sessions_lost"] == [], why
 
 
+def test_lost_adjacency_is_listed_once_when_parallel_links_were_cross_paired():
+    """Two parallel links show up as extra ids pairing one link's end with the other's."""
+    edge = lambda a, b: f"isis:hub-data-sw:HundredGigE0/0/0/1.{a}:pe1-data-sw:HundredGigE0/0/0/2.{b}"
+    older = _routing_scan(isis={edge(10, 10): UP, edge(10, 20): UP, edge(20, 20): UP})
+    newer = _routing_scan(isis={edge(10, 10): UP})
+
+    lost = compute_case_delta(older, newer)["routing_sessions_lost"]
+
+    # Only the link whose two ends both dropped out; the cross-paired id is not a second loss.
+    assert [row["edge_id"] for row in lost] == [edge(20, 20)]
+
+
 def test_session_still_up_or_of_unknown_state_is_not_lost():
     for state in ({"local": "established", "remote": "established", "status": "up"},
                   {"local": "established", "remote": "unknown", "status": "unknown"}):
@@ -657,4 +669,57 @@ def test_changes_section_and_summary_input_list_interfaces_that_went_down():
     assert ("- `pe1-data-sw`: HundredGigE0/0/0/23 (+1 sub-interface), "
             "HundredGigE0/0/0/5 (admin-down)") in text
     assert compact_delta_for_llm(delta)["interfaces_lost"]["count"] == 2
+
+
+def _fault_then(newer_status: str | None, *, checked: bool = True) -> tuple[dict, dict]:
+    """Older run: `svc` is a last-known Down. Newer run: its fixed check gives ``newer_status``."""
+    older = _scan({"svc": "l3rt", "other": "l3rt"})
+    older["last_known_service_faults"] = [{
+        "service": "svc", "status": "down", "service_type": "l3rt",
+        "last_observed_run_id": "r1", "cause": "uplink down"}]
+    newer = _scan({"svc": "l3rt", "other": "l3rt"})
+    record = newer["evidence"][0]["payload"]["extra"]["services"]["l3rt/svc"]
+    record.update({"in_sync": True, "device_sync": {"pe1": "in-sync"}})
+    if checked:
+        record["basic_checks"] = {"status": newer_status, "checks": []}
+    return older, newer
+
+
+def test_last_known_fault_ends_when_the_service_passes_the_fixed_checks_this_run():
+    from diagnostic_mas.case_delta import service_fault_history, format_changes_since_previous
+
+    older, newer = _fault_then("up")
+
+    assert service_fault_history(older, newer) == []
+    delta = compute_case_delta(older, newer)
+    assert delta["last_known_service_faults"] == []
+    assert delta["service_faults_cleared"] == [
+        {"service": "svc", "service_type": "l3rt", "was": "down", "last_observed_run_id": "r1"}]
+    text = "\n".join(format_changes_since_previous(delta, previous_run_id="r1"))
+    assert "- `l3rt/svc` — passes the checks this run (was down in run `r1`)" in text
+    assert "Last-known service faults" not in text
+
+
+def test_last_known_fault_is_kept_without_a_passing_check_this_run():
+    from diagnostic_mas.case_delta import service_fault_history
+
+    for why, (older, newer) in {
+        "fixed check still unknown": _fault_then("unknown"),
+        "fixed check still down": _fault_then("down"),
+        "not checked this run": _fault_then(None, checked=False),
+    }.items():
+        history = service_fault_history(older, newer)
+        assert [row["service"] for row in history] == ["svc"], why
+        assert compute_case_delta(older, newer)["service_faults_cleared"] == [], why
+
+
+def test_passing_check_does_not_end_a_fault_the_llm_confirmed_again_this_run():
+    from diagnostic_mas.case_delta import service_fault_history
+
+    older, newer = _fault_then("up")
+    newer["diagnoses"] = [{"kind": "dataplane", "source": "llm", "status": "down", "complete": True,
+                           "subject": {"name": "svc", "service_type": "l3rt"},
+                           "observed": "o", "cause": "c"}]
+
+    assert [row["service"] for row in service_fault_history(older, newer)] == ["svc"]
 
