@@ -289,6 +289,9 @@ not targets, and higher concurrency does not guarantee proportional speedup.
 1. Collect inventory and endpoint fleet sync. Inconclusive sync is retried once
    per relevant endpoint; unresolved sync remains Unknown and skips operational
    checks and routine service digs. A collection error is not out-of-sync.
+   The collection phase ends by reading the error counters of the ports under
+   services and IS-IS adjacencies, for comparison with the next scan
+   (`--max-port-counter-reads`, default 400; 0 turns it off).
 2. Run deterministic operational checks using NSO intent to identify exact
    service interfaces and objects. L2PTP checks endpoint xconnects and follows the
    service label in each direction; L2Bridge

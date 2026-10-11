@@ -511,6 +511,12 @@ def _status_change_line(row: dict[str, str]) -> str:
     return f"`{name}` — {label.get(row['was'], row['was'])} → {label.get(row['now'], row['now'])}"
 
 
+def _links_gaining_errors(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[str, Any]]:
+    from diagnostic_mas.port_counters import links_gaining_errors
+
+    return links_gaining_errors(older, newer)
+
+
 def _service_issue_faults(case: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Service-layer problem issues keyed by edge_id / subject."""
     out: dict[str, dict[str, Any]] = {}
@@ -920,6 +926,7 @@ def compute_case_delta(
             if name in _passing_this_run(newer) and name not in gone
         ],
         "status_changed_on_unchanged_checks": _status_changed_on_unchanged_checks(older, newer),
+        "links_gaining_errors": _links_gaining_errors(older, newer),
         "routing_sessions_lost": _routing_sessions_lost(older, newer),
         "interfaces_lost": _interfaces_lost(older, newer),
         "services_no_longer_present": [
@@ -943,7 +950,7 @@ def delta_has_operational_changes(delta: dict[str, Any]) -> bool:
         return True
     if delta.get("routing_sessions_lost") or delta.get("interfaces_lost"):
         return True
-    if delta.get("status_changed_on_unchanged_checks"):
+    if delta.get("status_changed_on_unchanged_checks") or delta.get("links_gaining_errors"):
         return True
     if delta.get("service_faults_cleared"):
         return True
@@ -1171,6 +1178,17 @@ def format_changes_since_previous(
         for row in lost[:persistent_limit]:
             lines.append(f"- {_routing_session_line(row)}")
         extra = len(lost) - persistent_limit
+        if extra > 0:
+            lines.append(f"- …and {extra} more")
+        lines.append("")
+    gaining = list(delta.get("links_gaining_errors") or [])
+    if gaining:
+        from diagnostic_mas.port_counters import gain_line
+
+        # A lead on a link that still works; no service status rests on it.
+        lines.append("**Links gaining errors while up:**")
+        lines.extend(f"- {gain_line(row)}" for row in gaining[:persistent_limit])
+        extra = len(gaining) - persistent_limit
         if extra > 0:
             lines.append(f"- …and {extra} more")
         lines.append("")

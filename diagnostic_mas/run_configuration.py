@@ -46,6 +46,7 @@ def capture_run_configuration(args, settings, budget, *, skip_llm, dry_run):
         "Maximum drill issues": budget.max_drill_issues,
         "Tools per drill issue": budget.max_tools_per_drill,
         "Maximum port investigations": budget.max_port_investigations,
+        "Maximum port counter reads": cap("max_port_counter_reads") if cap("max_port_counter_reads") is not None else 400,
         "Maximum deep checks": budget.max_deep_checks,
         "Maximum handoffs": budget.max_handoffs,
         "Dataplane/drill LLM request timeout (seconds)": llm_timeout_seconds(settings),

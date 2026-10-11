@@ -97,12 +97,43 @@ def _device_details(case: dict | None) -> dict[str, str]:
                 f"  Cause: {finding.get('cause')}",
                 f"  Suggested check: {finding.get('fix_suggestion') or 'none given'}",
             ])
+            details[str(finding.get("device"))].extend(_technician_lines(finding, view.evidence))
     return {
         name: '<details class="device-detail"><summary>Interfaces and hardware</summary><pre>'
         + html.escape("\n".join(lines))
         + "</pre></details>"
         for name, lines in details.items()
     }
+
+
+def _technician_lines(finding: dict, evidence: list) -> list[str]:
+    """For the person at the panel: each link, where its service goes, and the commands that were read."""
+    from diagnostic_mas.port_investigation import other_attachments
+
+    if "link_descriptions" not in finding and "commands" not in finding:
+        return []
+    records = {}
+    for ev in evidence:
+        if ev.get("kind") == "spine" and ev.get("role") == "service":
+            services = ((ev.get("payload") or {}).get("extra") or {}).get("services") or {}
+            records = {str(r.get("name")): r for r in services.values() if isinstance(r, dict)}
+    described, ages = finding.get("link_descriptions") or {}, finding.get("link_ages") or {}
+    lines = ["  For the technician:"]
+    for link, names in (finding.get("links") or {}).items():
+        text = described.get(link)
+        about = ("description not read" if text is None else
+                 f'description "{text}"' if text else "no description on the device")
+        age = ages.get(link)
+        lines.append(f"    {link}: {about}" + (f"; {'never came up' if age == 'never' else 'down ' + age}" if age else ""))
+        for name in names:
+            ends = other_attachments(records.get(name) or {}, str(finding.get("device")), link)
+            lines.append(f"      service {name}: " + ("other attachment " + ", ".join(ends) if ends else
+                                                      "no other attachment in its config"))
+    commands = finding.get("commands") or {}
+    for label, key in (("Light levels from", "light"), ("Link state from", "state")):
+        if commands.get(key):
+            lines.append(f"    {label}: " + ", ".join("show " + c for c in commands[key]))
+    return lines
 
 
 def notification_digest(report: str, run_id: str, *, changes: list[str] | None = None) -> str:

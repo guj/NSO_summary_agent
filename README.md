@@ -552,6 +552,10 @@ Stdout / `report.md` use a concise operator layout (not the older Issues/Budget 
 
 In the HTML report, each device also has a collapsed **Interfaces and hardware** block (interface counts, hardware readings, exceptions). It is not part of the terminal or Slack text.
 
+A port investigation adds a **For the technician** list to that block: each down link with its description as the device shows it, how long the device says it has been down, each service on it with where else that service attaches, and the show commands the light levels and link states were read with. All of it comes from that scan's own readings and service definitions.
+
+The section of an l3rt service that is OpUp ends with a **Delivery check for an operator**: the ping to its gateway that someone on the customer side can run, from a permitted host when the service lists one. The line says the agent did not run it; the agent has no access to customer hosts.
+
 **Publish:** Slack and email receive a compact digest; email attaches the self-contained HTML report (see [Compact diagnostic notifications and HTML reports](#compact-diagnostic-notifications-and-html-reports)).
 
 ### Useful flags
@@ -566,6 +570,7 @@ In the HTML report, each device also has a collapsed **Interfaces and hardware**
 | `--max-dataplane-per-category N` | Up to N digs from each typed prompt category (even overnight sample; optional total cap still applies) |
 | `--max-drill-issues N` | Run-wide drill slot count (default 2; separate from dataplane selection) |
 | `--max-port-investigations N` | Down ports and cut-off devices investigated once before the service investigations (default 6; 0 investigates every service individually) |
+| `--max-port-counter-reads N` | Ports whose error counters are read each scan and compared with the next: ports under a service or an IS-IS adjacency (default 400; 0 reads none) |
 | `--max-tools-per-drill N` | MCP calls per drilled issue (default 12) |
 | `--services-detail` | Emit a per-instance section for every service (default: digs / impairments only) |
 
@@ -644,6 +649,22 @@ from an earlier scan. **Changes since previous run** lists these under
 **Service faults still open**, one line per port or cut-off device that explains
 several services. A fault found in the current scan is listed as new, not as still open.
 
+
+### Links gaining errors while up
+
+Each scan reads the error counters of every port that carries a service attachment or
+an IS-IS adjacency: one `show interfaces <port>` per port, in the collection phase after
+the service step, within `--max-port-counter-reads`. The readings are saved with the scan.
+The next scan subtracts, and **Changes since previous run** lists a port under **Links
+gaining errors while up** when it is up now and its CRC, input-error or output-error
+count grew, or its state-transition count grew (it went down and came back). The Slack and
+email digest carries the same line when there is one.
+
+This is a lead, never a status: no service changes state because of it. Drops alone are
+not listed. A port is not compared when it was not read in both scans, when its counters
+were cleared in between, or when a counter went back. A read that fails leaves the port
+without a reading and is not a fault. The first scan after enabling this has nothing to
+subtract.
 
 ### Undecided rules
 

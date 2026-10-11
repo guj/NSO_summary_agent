@@ -42,6 +42,7 @@ async def run_mandatory_spines(
     service_id: str | None = None,
     filter_services_to_devices: bool = False,
     spine_concurrent_devices: int = 1,
+    max_port_counter_reads: int = 400,
 ) -> list[dict[str, Any]]:
     """Collect physical + enabled layer spines into the case. Returns physical_edges."""
     # Lean focus: skip physical inventory walk
@@ -122,6 +123,12 @@ async def run_mandatory_spines(
             operational_edges=spine.get("operational_edges"),
             extra=spine.get("extra"),
         )
+        # Counters of the ports under services and adjacencies, for the next scan to subtract.
+        if max_port_counter_reads > 0:
+            from diagnostic_mas.port_counters import record_port_counters
+
+            await record_port_counters(client, case, ceiling=max_port_counter_reads,
+                                       workers=spine_concurrent_devices)
 
     if run_device:
         spine = await run_device_health_spine(client, settings, device_names)

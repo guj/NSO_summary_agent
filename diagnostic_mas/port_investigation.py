@@ -159,6 +159,46 @@ def _link_states(links: Any, readings: list[tuple[str, str]]) -> dict[str, str]:
     return states
 
 
+_INTERFACE_HEAD = r"^([\w/.-]+) is (?:administratively down|up|down), line protocol is (up|down)"
+
+
+def _link_descriptions(links: Any, readings: list[tuple[str, str]]) -> dict[str, str]:
+    """Each link's description as the device shows it; empty when its output has none."""
+    found: dict[str, str] = {}
+    for _command, text in readings:
+        heads = re.findall(_INTERFACE_HEAD, text, re.M | re.I)
+        link = next((str(name) for name in links if len(heads) == 1 and interfaces_match(str(name), heads[0][0])), None)
+        if link:
+            described = re.search(r"^\s+Description: (.+?)\s*$", text, re.M)
+            found[link] = described[1][:120] if described else ""
+    return found
+
+
+def _reading_commands(links: Any, readings: list[tuple[str, str]]) -> dict[str, list[str]]:
+    """The device commands behind the finding: which gave light levels, which gave a link's state."""
+    light: list[str] = []
+    state: list[str] = []
+    for command, text in readings:
+        if not command:
+            continue
+        if re.search(r"-?\d+(?:\.\d+)? dBm", text) and command not in light:
+            light.append(command)
+        heads = re.findall(_INTERFACE_HEAD, text, re.M | re.I)
+        if (len(heads) == 1 and any(interfaces_match(str(name), heads[0][0]) for name in links)
+                and command not in state):
+            state.append(command)
+    return {"light": light, "state": state}
+
+
+def other_attachments(record: dict[str, Any], device: str, link: str) -> list[str]:
+    """Where else the service attaches, from its own config: ``interface on device``, without the given link."""
+    from diagnostic_mas.operational_checks.probe import attachments
+
+    intent = (record.get("basic_checks") or {}).get("intent") or {}
+    return [f"{ep['ac']} on {ep['device']}" for ep in attachments(intent)
+            if not (ep["device"] == device and interfaces_match(_link_of(ep["ac"]), link))]
+
+
 def _link_ages(links: Any, readings: list[tuple[str, str]]) -> dict[str, str]:
     """How long each down link has been down, as the device states it; ``never`` if it never came up.
 
@@ -166,8 +206,7 @@ def _link_ages(links: Any, readings: list[tuple[str, str]]) -> dict[str, str]:
     """
     ages: dict[str, str] = {}
     for _command, text in readings:
-        heads = re.findall(r"^([\w/.-]+) is (?:administratively down|up|down), line protocol is (up|down)",
-                           text, re.M | re.I)
+        heads = re.findall(_INTERFACE_HEAD, text, re.M | re.I)
         if len(heads) != 1 or heads[0][1].lower() != "down":
             continue
         link = next((str(name) for name in links if interfaces_match(str(name), heads[0][0])), None)
@@ -253,7 +292,9 @@ async def run_port_investigations(
             edge_id=f"if:{target['device']}:{target['port']}", message=_issue_message(target),
             prompt=_system_prompt(), device_names=device_names, openai_client=openai_client, tool_loop=tool_loop,
             confirm=lambda readings, links=target["links"]: {
-                "link_states": _link_states(links, readings), "link_ages": _link_ages(links, readings)})
+                "link_states": _link_states(links, readings), "link_ages": _link_ages(links, readings),
+                "link_descriptions": _link_descriptions(links, readings),
+                "commands": _reading_commands(links, readings)})
         if payload["concluded"]:
             concluded[target["device"], target["port"]] = payload
     return _explain_services(case, concluded)

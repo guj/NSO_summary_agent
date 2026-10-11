@@ -1556,10 +1556,42 @@ def format_services_operator(
                     "with LLM enabled for a focused investigation."
                 )
 
+        up = ((dx.get("complete", True) is not False
+               and str(dx.get("dataplane_status") or "").lower() in {"up", "ok"}) if dx
+              else (rec.get("basic_checks") or {}).get("status") == "up")
+        delivery = _delivery_check_line(rec) if up else None
+        if delivery:
+            lines.append("")
+            lines.append(delivery)
         lines.append("")
         lines.append(f"*Service ID: `{name}`*")
         lines.append("")
     return lines
+
+
+def _delivery_check_line(rec: dict[str, Any]) -> str | None:
+    """What an operator can run from the customer side of an l3rt; this agent has no way to run it."""
+    import ipaddress
+
+    if str(rec.get("service_type") or "") != "l3rt":
+        return None
+    intent = (rec.get("basic_checks") or {}).get("intent") or {}
+    external = intent.get("external-access") or {}
+    parts = []
+    for version in (4, 6):
+        gateway = intent.get(f"gateway-ipv{version}") or {}
+        try:
+            net = ipaddress.ip_interface(f"{gateway['address']}/{gateway.get('netmask', gateway.get('prefix-length'))}")
+        except (KeyError, TypeError, ValueError):
+            continue
+        hosts = [str(h["address"]).split("/")[0] for h in external.get(f"permit-ipv{version}") or []
+                 if isinstance(h, dict) and h.get("address")]
+        where = ("permitted host " + " or ".join(f"`{h}`" for h in hosts[:2]) if hosts
+                 else f"a host in `{net.network}`")
+        parts.append(f"from {where}, `ping {net.ip}`")
+    if not parts:
+        return None
+    return "**Delivery check for an operator (not run by this agent):** " + "; ".join(parts) + "."
 
 
 def _site_label(device: str) -> str:

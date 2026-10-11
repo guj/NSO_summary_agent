@@ -448,6 +448,7 @@ async def _run_after_accounting(
             service_id=service_id,
             filter_services_to_devices=filter_services_to_devices,
             spine_concurrent_devices=getattr(args, "spine_concurrent_devices", 1),
+            max_port_counter_reads=max(0, getattr(args, "max_port_counter_reads", 400)),
         )
         if nso_unreachable_reason():
             return NSO_UNREACHABLE_EXIT
@@ -783,6 +784,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Max down ports and cut-off devices investigated once before the "
             "service digs (default 6; 0 investigates every service individually)"
+        ),
+    )
+    parser.add_argument(
+        "--max-port-counter-reads",
+        type=int,
+        default=400,
+        help=(
+            "Max ports whose error counters are read each scan, for comparison with the "
+            "next scan: ports under a service or an IS-IS adjacency (default 400; 0 reads none)"
         ),
     )
     parser.add_argument(

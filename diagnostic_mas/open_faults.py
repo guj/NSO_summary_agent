@@ -168,6 +168,13 @@ def digest_changes(delta: dict[str, Any] | None, previous_run_id: str | None,
         links = list(delta.get("interfaces_lost") or [])
         lines.append("- Links up before, down now: " + (
             f"{len(links)} — " + "; ".join(_interface_lines(links)[:3]) if links else "none"))
+        gaining = list(delta.get("links_gaining_errors") or [])
+        if gaining:
+            from diagnostic_mas.port_counters import gain_line
+
+            lines.append(f"- Links gaining errors while up: {len(gaining)} — "
+                         + "; ".join(gain_line(row) for row in gaining[:2])
+                         + (f"; +{len(gaining) - 2} more" if len(gaining) > 2 else ""))
         sessions = list(delta.get("routing_sessions_lost") or [])
         if sessions:
             lines.append(f"- Routing sessions lost: {len(sessions)} — "

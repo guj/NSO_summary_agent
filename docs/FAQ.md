@@ -216,6 +216,11 @@ basic check, Up would rest on the model's judgement alone, and that judgement ha
 on the same readings. The LLM's finding is kept in the service's section. A fault the LLM finds
 on such a device is still reported Down.
 
+**Changes since previous run** also lists "Links gaining errors while up": ports under a service or
+an IS-IS adjacency that are up and whose CRC, input-error or output-error count grew since the
+previous scan, or that went down and came back. It is an early sign of a failing optic or fibre,
+reported as a lead; it does not change any service's status.
+
 **Changes since previous run** lists a service under "Status changed while the fixed checks read
 the same" when it was investigated in both scans, its basic check read exactly the same, and its
 final status differs. That is a change of verdict, not a change on the network.
