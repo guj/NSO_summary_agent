@@ -290,7 +290,8 @@ not targets, and higher concurrency does not guarantee proportional speedup.
    per relevant endpoint; unresolved sync remains Unknown and skips operational
    checks and routine service digs. A collection error is not out-of-sync.
 2. Run deterministic operational checks using NSO intent to identify exact
-   service interfaces and objects. L2PTP checks endpoint xconnects; L2Bridge
+   service interfaces and objects. L2PTP checks endpoint xconnects and follows the
+   service label in each direction; L2Bridge
    checks local bridge membership/forwarding; L2STS additionally checks effective
    EVPN RTs, replication and transport; L3RT checks gateway, routes and forwarding
    including configured border dependencies.

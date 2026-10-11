@@ -20,6 +20,11 @@ read-only evidence; no device configuration is changed.
 
 - `common.py`: evaluates collected sync evidence; no duplicate sync queries.
 - `l2ptp.py`: every intended AC-matched xconnect UP, no contradictory segment state.
+  Then, for a circuit between two devices, the service label is followed in each
+  direction: the label the sender shows for the far end, what the sender's
+  forwarding entry actually sends for it, and the receiver's own label for the
+  circuit. Two ends showing different numbers is not a fault; a label that cannot
+  be followed to the receiver's label is Unknown, never Down.
 - `l2bridge.py`: exact observed bridge identity, all intended ACs UP and members,
   programmed local forwarding members and flood readiness. Remote/routed or
   non-default switching dependencies go to investigation rather than falsely pass.
@@ -48,8 +53,8 @@ read-only evidence; no device configuration is changed.
 - `probe.py`, `bridge.py`: conservative IOS-XR output adapters and bounded collection.
   Other output formats fail closed to Unknown. Device commands are sequential by default;
   identical queries (including errors) reuse a run-local cache. No automatic retry
-  or CLI syntax guessing. Non-L2PTP basic collection is capped at 24 cache misses
-  per service. Existing MCP timeouts and access guards still apply.
+  or CLI syntax guessing. Basic collection is capped at 24 cache misses per service
+  (L2PTP's shared per-device xconnect read is outside that count). Existing MCP timeouts and access guards still apply.
 
 ## Evidence and reporting
 
@@ -91,7 +96,7 @@ LLM conclusion gates are independent of these collection fixes.
 operational collection across different devices. This is separate from
 `--dataplane-concurrent_works`, which controls LLM investigations.
 
-Only service operational checks (including L2PTP xconnect probes) use this
+Only service operational checks (including L2PTP xconnect and label reads) use this
 option. NSO inventory/sync and other spine phases retain their existing order.
 A run-local semaphore bounds active calls, and per-device locks allow only one
 live command per device. Groups are processed by primary device, but secondary

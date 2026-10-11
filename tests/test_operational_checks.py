@@ -56,9 +56,13 @@ async def test_collection_reuses_devices_and_skips_sync_unknown(monkeypatch):
     from nso_facts.service_collect import collect_service_health
     import nso_facts.service_collect as sc
     calls = []
+    summary = "evpn_vpws xc\n UP Hu0/0/0/1.100 UP EVPN 9001,100,10.0.0.1 UP"
+    detail = ("Group evpn_vpws, XC xc, state is up; Interworking none\n  AC: HundredGigE0/0/0/1.100, state is up\n"
+              "  EVPN: neighbor 10.0.0.1, PW ID: evi 9001, ac-id 100, state is up ( established )\n"
+              "      Label        24001                          24001\n      AC ID        100                            100\n")
     async def fake_call(client, tool, args=None):
         calls.append((tool, args))
-        return {"status": "success", "data": {"result": "evpn_vpws xc\n UP Hu0/0/0/1.100 UP EVPN 9001,100,10.0.0.1 UP"}}
+        return {"status": "success", "data": {"result": detail if args["input_command"].endswith("detail") else summary}}
     monkeypatch.setattr(sc, "call_mcp", fake_call)
     def instance(name, remote):
         def endpoint(d):
@@ -66,7 +70,9 @@ async def test_collection_reuses_devices_and_skips_sync_unknown(monkeypatch):
         return {"name": name, "stp-a": endpoint("a"), "stp-z": endpoint(remote)}
     services = {"l2ptp": {"status": "success", "data": {"services": [instance("one", "b"), instance("two", "b"), instance("skip", "c")]}}}
     out = await collect_service_health(None, services, {}, {"a": "in-sync", "b": "in-sync", "c": "error: timeout"}, service_sync_mode="skip", operational_policy="routine")
-    assert [args["device_name"] for tool, args in calls] == ["a", "b"]
+    # One state read and one label read per device, shared by both circuits.
+    assert [(args["device_name"], args["input_command"].split()[-1]) for tool, args in calls] == [
+        ("a", "xconnect"), ("b", "xconnect"), ("a", "detail"), ("b", "detail")]
     assert out["l2ptp/one"]["basic_checks"]["status"] == "up"
     assert out["l2ptp/two"]["basic_checks"]["status"] == "up"
     assert out["l2ptp/skip"]["basic_checks"]["status"] == "not_checked"

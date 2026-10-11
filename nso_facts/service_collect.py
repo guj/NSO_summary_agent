@@ -109,10 +109,12 @@ async def collect_service_health(
 
     if operational_policy:
         from diagnostic_mas.operational_checks.common import sync_ready
-        from diagnostic_mas.operational_checks.l2ptp import evaluate
+        from diagnostic_mas.operational_checks.l2ptp import evaluate_with_labels
+        from diagnostic_mas.operational_checks.probe import Probe
         from diagnostic_mas.operational_checks.scheduler import DeviceCalls, ProbeCache, run_groups
         workers = spine_concurrent_devices
         calls = DeviceCalls(call_mcp, workers)
+        cache = ProbeCache()
         force = operational_policy == "force"
         ptp = [(services[f"{t}/{n}"], inst) for t, inst, _, n in planned if t == "l2ptp"]
         eligible = [(r, inst) for r, inst in ptp if force or sync_ready(r)]
@@ -124,13 +126,12 @@ async def collect_service_health(
         for rec, inst in ptp:
             if force or sync_ready(rec):
                 rec["live_l2"] = summarize_live_l2(extract_l2_access_endpoints(inst), rows_by_device)
-            basic = evaluate(rec, force=force)
+            basic = await evaluate_with_labels(rec, Probe(client, calls, cache), force=force)
             rec["basic_checks"] = basic
             rec["operational_status"] = basic["status"]
             if basic["status"] in {"down", "unknown"}:
                 rec["status"] = basic["status"]
         from diagnostic_mas.operational_checks.runner import evaluate as evaluate_other
-        cache = ProbeCache()
         # Every other type: its own module, or the interface-only check when it has none.
         jobs = [(services[f"{t}/{n}"], inst) for t, inst, _, n in planned if t != "l2ptp"]
         async def evaluate_job(job):
