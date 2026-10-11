@@ -210,6 +210,16 @@ Unknown with the reason "Interfaces up — service logic not checked", because w
 nothing about whether the service itself works. Types with their own checks are l2ptp, l2bridge,
 l2sts, l3rt and port-mirror.
 
+A service also stays Unknown when its basic check asked a device and got no usable answer to any
+command, even if the LLM then read the device another way and concluded Up. With nothing from the
+basic check, Up would rest on the model's judgement alone, and that judgement has gone both ways
+on the same readings. The LLM's finding is kept in the service's section. A fault the LLM finds
+on such a device is still reported Down.
+
+**Changes since previous run** lists a service under "Status changed while the fixed checks read
+the same" when it was investigated in both scans, its basic check read exactly the same, and its
+final status differs. That is a change of verdict, not a change on the network.
+
 Some NSO deployments return no usable answer from `check_service_sync` for every service. In that
 case set `NSO_SERVICE_SYNC_MODE=skip`: the per-service sync calls are skipped and configuration
 sync is taken from the endpoint devices' fleet sync instead. The default is `check`.

@@ -628,6 +628,12 @@ Historical findings are reported separately and do not alter current-run service
 counts or masquerade as fresh evidence. Old cases without the field are supported.
 Dry-runs can show history from the last published case but do not persist updates.
 
+An LLM "Up" is accepted only when the service's operational check got a usable answer
+from every device it asked. Otherwise the service stays Unknown and the LLM's finding
+is kept as a note; a fault found the same way is still reported. A service investigated
+in two scans whose operational check read the same, but whose final status differs, is
+listed under **Status changed while the fixed checks read the same**.
+
 Each open fault also carries the scan that first listed it, and keeps it while the
 fault stays open; a fault that clears and returns starts again. A fault carried
 from a scan that did not record this is dated once from the saved scans under

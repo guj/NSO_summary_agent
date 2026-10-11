@@ -297,7 +297,9 @@ not targets, and higher concurrency does not guarantee proportional speedup.
    including configured border dependencies.
    A fault the checks show in full (an L3RT gateway address held by another
    service on the same device) is reported Down with no LLM investigation.
-3. Operational passes skip routine LLM investigation. Other eligible services
+3. An LLM Up needs an operational-check reading from every device of the service;
+   without one the service stays Unknown and the finding is kept as a note.
+   Operational passes skip routine LLM investigation. Other eligible services
    are investigated within category/total caps. An exact service-ID request can
    force a dig. Incomplete LLM work does not erase a confirmed operational fault.
 4. Report final OpUp/Down/Degraded/Unknown and verification gaps. OpUp establishes

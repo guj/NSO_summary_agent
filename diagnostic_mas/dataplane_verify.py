@@ -992,6 +992,19 @@ def _basic_gate_coverage(record: dict[str, Any]) -> tuple[set[str], set[str]]:
     return covered, config
 
 
+def _devices_unread_by_fixed_checks(record: dict[str, Any]) -> list[str]:
+    """Service devices the fixed check asked and got no usable answer from, for any command."""
+    basic = record.get("basic_checks")
+    asked: set[str] = set()
+    answered: set[str] = set()
+    for source in (basic.get("sources") or []) if isinstance(basic, dict) else []:
+        device = str(source.get("device") or "")
+        asked.add(device)
+        if source.get("available") is True:
+            answered.add(device)
+    return sorted(d for d in _service_devices(record) if d in asked and d not in answered)
+
+
 def accept_dataplane_conclusion(
     record: dict[str, Any],
     finding: dict[str, Any],
@@ -1054,6 +1067,19 @@ def accept_dataplane_conclusion(
                     + ", ".join(missing)
                 ),
             )
+
+    # With no fixed-check reading from a device, Up would rest on the model's judgement
+    # alone, which has gone both ways on the same readings. A fault found there still stands.
+    unread = _devices_unread_by_fixed_checks(record)
+    if unread:
+        return _demote_up_finding(
+            out,
+            status="unknown",
+            gate_reason=(
+                "the fixed checks could not read " + ", ".join(unread)
+                + "; an Up needs a fixed-check reading from every device of the service"
+            ),
+        )
 
     failed = _necessary_check_failed(session_evidence, devices)
     if failed:

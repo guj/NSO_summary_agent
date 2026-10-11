@@ -467,6 +467,50 @@ def _passing_this_run(case: dict[str, Any]) -> set[str]:
     }
 
 
+def _judged_services(case: dict[str, Any]) -> dict[str, tuple[str, str, Any]]:
+    """Service name -> (type, final status, what its fixed check read), for investigated services."""
+    from diagnostic_mas.service_final_status import assessment
+
+    digs = {
+        str((dx.get("subject") or {}).get("name") or ""): dx
+        for dx in case.get("diagnoses") or []
+        if isinstance(dx, dict) and dx.get("kind") == "dataplane"
+    }
+    out: dict[str, tuple[str, str, Any]] = {}
+    for extra in _service_extras(case):
+        for record in (extra.get("services") or {}).values():
+            basic = record.get("basic_checks") if isinstance(record, dict) else None
+            if not isinstance(basic, dict) or not record.get("name") or basic.get("status") in {None, "not_checked"}:
+                continue
+            read = (basic.get("status"), sorted(
+                json.dumps([c.get("check"), c.get("status"), c.get("device"), c.get("observation")],
+                           sort_keys=True, default=str)
+                for c in basic.get("checks") or [] if isinstance(c, dict)))
+            name = str(record["name"])
+            # Only an investigation can give a second opinion; a scan that ran none gave no verdict.
+            if name in digs:
+                out[name] = (str(record.get("service_type") or ""), assessment(record, digs[name])[0], read)
+    return out
+
+
+def _status_changed_on_unchanged_checks(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[str, str]]:
+    """Services investigated in both scans whose final status differs while the fixed check read the same."""
+    before, now = _judged_services(older), _judged_services(newer)
+    return [
+        {"service": name, "service_type": kind, "was": before[name][1], "now": status}
+        for name, (kind, status, read) in sorted(now.items())
+        if name in before and before[name][1] != status and before[name][2] == read
+    ]
+
+
+def _status_change_line(row: dict[str, str]) -> str:
+    from diagnostic_mas.service_final_status import LABELS, STATUSES
+
+    label = dict(zip(STATUSES, LABELS))
+    name = f"{row['service_type']}/{row['service']}" if row.get("service_type") else row["service"]
+    return f"`{name}` — {label.get(row['was'], row['was'])} → {label.get(row['now'], row['now'])}"
+
+
 def _service_issue_faults(case: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Service-layer problem issues keyed by edge_id / subject."""
     out: dict[str, dict[str, Any]] = {}
@@ -875,6 +919,7 @@ def compute_case_delta(
             for name, row in sorted(old_history.items())
             if name in _passing_this_run(newer) and name not in gone
         ],
+        "status_changed_on_unchanged_checks": _status_changed_on_unchanged_checks(older, newer),
         "routing_sessions_lost": _routing_sessions_lost(older, newer),
         "interfaces_lost": _interfaces_lost(older, newer),
         "services_no_longer_present": [
@@ -897,6 +942,8 @@ def delta_has_operational_changes(delta: dict[str, Any]) -> bool:
     if delta.get("newly_missing_evidence"):
         return True
     if delta.get("routing_sessions_lost") or delta.get("interfaces_lost"):
+        return True
+    if delta.get("status_changed_on_unchanged_checks"):
         return True
     if delta.get("service_faults_cleared"):
         return True
@@ -1100,6 +1147,14 @@ def format_changes_since_previous(
 
         lines.append("**Service faults still open:**")
         lines.extend(format_open_faults(still_open, limit=persistent_limit))
+        lines.append("")
+    moved = list(delta.get("status_changed_on_unchanged_checks") or [])
+    if moved:
+        lines.append("**Status changed while the fixed checks read the same:**")
+        lines.extend(f"- {_status_change_line(row)}" for row in moved[:persistent_limit])
+        extra = len(moved) - persistent_limit
+        if extra > 0:
+            lines.append(f"- …and {extra} more")
         lines.append("")
     lines.extend(format_last_known_faults(list(delta.get("last_known_service_faults") or [])))
     cleared = list(delta.get("service_faults_cleared") or [])

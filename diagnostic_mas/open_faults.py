@@ -144,7 +144,7 @@ def _listed(items: list[str], limit: int) -> str:
 def digest_changes(delta: dict[str, Any] | None, previous_run_id: str | None,
                    groups: list[dict[str, Any]], *, limit: int = 5) -> list[str]:
     """The lines that lead the notification: changes since the previous scan, then what is still open."""
-    from diagnostic_mas.case_delta import _interface_lines, _routing_session_line
+    from diagnostic_mas.case_delta import _interface_lines, _routing_session_line, _status_change_line
 
     if delta is None:
         lines = ["No previous scan to compare with."]
@@ -154,6 +154,11 @@ def digest_changes(delta: dict[str, Any] | None, previous_run_id: str | None,
             [f"{_label(r, short=True)} {r.get('status')}" for r in delta.get("newly_failed_services") or []], limit))
         lines.append("- Cleared: " + _listed(
             [_label(r, short=True) for r in delta.get("service_faults_cleared") or []], limit))
+        moved = list(delta.get("status_changed_on_unchanged_checks") or [])
+        if moved:
+            lines.append(f"- Status changed on unchanged checks: {len(moved)} — "
+                         + "; ".join(_status_change_line(row).replace(" — ", " ") for row in moved[:3])
+                         + (f"; +{len(moved) - 3} more" if len(moved) > 3 else ""))
         back = [f"`{device}`" for device in delta.get("recovered_devices") or []]
         if back:
             lines.append("- Devices answering again: " + ", ".join(back))
