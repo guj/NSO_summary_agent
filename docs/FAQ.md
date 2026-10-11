@@ -7,7 +7,8 @@ agent, see [DIAGNOSTIC_RUNNER.md](DIAGNOSTIC_RUNNER.md).
 
 ### What sections does the report have?
 
-In order: **Summary**, **Changes since previous run**, **Devices**, **Services**,
+In order: **Summary**, **Changes since previous run**, **Undecided rules** (only when a rule the
+operators have not decided would change a service in this scan), **Devices**, **Services**,
 **Recommended follow-up**, **Run configuration** and **Run details**. The Summary is written by
 the LLM and is omitted with `--skip-llm`. Findings from LLM investigations appear under the
 service they concern; the rest of the report is deterministic.
@@ -134,7 +135,9 @@ is treated as Established.
 - A BGP session to another inventory device that the devices report down. It is also counted in
   the Result line and listed in the follow-up. **Changes since previous run** lists BGP sessions
   and IS-IS adjacencies that were up in the previous run and are not up now, and interfaces that
-  went from up to down.
+  went from up to down. It also lists the service faults still open, each with the scan that first
+  listed it and, for a down link, how long the device says it has been down. The Slack and email
+  digest starts with the same changes.
 - A device whose automated live queries timed out or failed. Further live queries to it are skipped
   for the rest of the run. NSO configuration may still be present and manual access may still work,
   so this is not proof that the device is down. If NSO itself stopped answering, the scan stops
@@ -184,6 +187,14 @@ routing queries and has no IS-IS adjacency and no BGP session up. It is investig
 its services that do not pass their basic check and whose own configuration names another
 device are reported Down with "Down — device investigated once". Services on that device whose
 configuration names no other device keep the result of their own basic check.
+
+A duplicate gateway needs no investigation at all. When two l3rt services on one device are
+configured with the same gateway address, the device gives the subnet's route to one of them.
+The service whose route is bound to the other's interface is reported Down by the basic check
+itself, with "Down — decided by the fixed check", and its section names the service that holds
+the address. The holder stays Up and its section notes the shared address. If the device's route
+cannot be read, the shared configuration alone decides nothing and the service is investigated as
+usual. Only l3rt services have a gateway address, so no other type is affected.
 
 ### Why is a service Unknown when it looks fine?
 

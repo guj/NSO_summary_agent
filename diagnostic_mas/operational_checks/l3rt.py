@@ -20,6 +20,19 @@ def route_prefix(text, target):
         return None
 
 
+def gateway_owners(instances):
+    """Gateway addresses configured on more than one service of one device: (device, address) -> service names."""
+    owners = {}
+    for instance in instances:
+        for version in (4, 6):
+            try:
+                address = str(ipaddress.ip_address((instance.get(f"gateway-ipv{version}") or {})["address"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            owners.setdefault((instance.get("device"), address), []).append(str(instance.get("name")))
+    return {key: sorted(names) for key, names in owners.items() if len(names) > 1}
+
+
 async def check(instance, probe):
     local = instance.get("device")
     if not safe(local):
@@ -48,6 +61,7 @@ async def check(instance, probe):
         probe.check("routing_context", "unknown", "Unsupported VRF identifier", local)
         return
     targets = {}
+    gateways = {}
     for version in (4, 6):
         intent = instance.get(f"gateway-ipv{version}")
         if intent:
@@ -56,6 +70,7 @@ async def check(instance, probe):
                 if net.version != version:
                     raise ValueError()
                 targets.setdefault(version, []).append(str(net.network))
+                gateways[str(net.network)] = str(net.ip)
                 # Exact configured address, not a similarly named gateway.
                 addresses = re.findall(r"\b[0-9a-fA-F:.]+(?:/\d+)?", config)
                 present = any(value.split("/")[0] == str(net.ip) for value in addresses)
@@ -110,7 +125,22 @@ async def check(instance, probe):
                 cef = await probe.show(dev, f"cef {ctx}{'ipv6 ' if version == 6 else ''}{prefix}")
                 connected = dev == local and bool(re.search(r'Known via "connected"', route)) and gateway in route
                 if dev == local and target not in {"0.0.0.0/0", "::/0"}:
-                    probe.check("gateway_route_binding", "pass" if connected else "unknown", f"{prefix} bound to {gateway}", dev)
+                    # The same gateway address on another service of this device: the route shows who holds it.
+                    address = gateways.get(target)
+                    others = [n for n in probe.fleet.get("gateway_owners", {}).get((local, address), [])
+                              if n != str(instance.get("name"))] if address else []
+                    shared = f"{address} is also configured on service{'s' if len(others) > 1 else ''} {', '.join(others)}"
+                    held = re.search(r"directly connected, via (\S+)", route)
+                    if (others and not connected and re.search(r'Known via "connected"', route)
+                            and held and held[1] != gateway):
+                        probe.check("gateway_unique", "fault",
+                                    f"{shared}; {prefix} is bound to {held[1]}, not this service's {gateway}",
+                                    dev, conclusive=True)
+                    else:
+                        probe.check("gateway_route_binding", "pass" if connected else "unknown", f"{prefix} bound to {gateway}", dev)
+                        if others and connected:
+                            probe.check("gateway_shared", "pass",
+                                        f"{shared}; {prefix} is bound to this service's {gateway}", dev)
                 ok = cef_ready(cef, prefix, connected=connected)
                 if connected:
                     ok = ok and gateway in cef

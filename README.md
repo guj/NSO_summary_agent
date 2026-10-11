@@ -628,6 +628,36 @@ Historical findings are reported separately and do not alter current-run service
 counts or masquerade as fresh evidence. Old cases without the field are supported.
 Dry-runs can show history from the last published case but do not persist updates.
 
+Each open fault also carries the scan that first listed it, and keeps it while the
+fault stays open; a fault that clears and returns starts again. A fault carried
+from a scan that did not record this is dated once from the saved scans under
+`runs/`. When the oldest saved scan already lists it, the report says "or earlier".
+For a down link behind a port finding, the report adds the time the device itself
+gives ("Last link flapped"), read from that scan's own port investigation and never
+from an earlier scan. **Changes since previous run** lists these under
+**Service faults still open**, one line per port or cut-off device that explains
+several services. A fault found in the current scan is listed as new, not as still open.
+
+
+### Undecided rules
+
+Two rules for l3rt are waiting for the operators to decide. Until then the report
+shows how many services each would change, in an **Undecided rules** block after
+**Changes since previous run**. The block is left out when both counts are zero,
+and no status in the report depends on it.
+
+- **Border route:** l3rt that are Up on the LLM's conclusion where the fixed check's
+  only gap is the service's exact prefix on a border router. If the exact prefix is
+  required they become Unknown; if a covering route is enough they pass without the LLM.
+- **Cut-off device:** for a device with no IS-IS adjacency and no BGP session up, the
+  services its cut-off investigation marked Down, and the l3rt that name only that
+  device and are still Up. Those would be Down if an l3rt must reach other sites.
+
+The Slack and email digest shows the cut-off line whenever a device is cut off, and
+the border-route line only when its count differs from the previous scan. The counts
+are saved with the scan as `undecided_rules`. All of this lives in
+`diagnostic_mas/undecided_rules.py`; remove a rule's count there once the rule is
+decided and built into the fixed checks.
 
 ### Dataplane investigation gaps and timing
 
@@ -667,7 +697,11 @@ nso-diagnostic-run --service-only --service-id <service-id> --dry-run --save-mcp
 
 Published `nso-diagnostic-run` runs now save `report.html` alongside `report.md`
 and `case.json`. Email and Slack receive a bounded digest instead of the full
-report. Email includes the self-contained HTML as an attachment: download it
+report. The digest leads with the status counts, then what changed since the
+previous scan (new service faults, cleared faults, devices answering again, links
+that went down, routing sessions lost) and the faults still open with their age.
+The priority follow-up items come after that. The rest of the Result line and the
+investigation-coverage sentence are in the full report only. Email includes the self-contained HTML as an attachment: download it
 and open it in a browser for search, service-status filters, expandable details,
 and section navigation. No additional LLM calls are used. Terminal Markdown is
 unchanged. Dry runs do not publish or save the HTML report.

@@ -756,6 +756,7 @@ def _coverage_label(code: str) -> str:
             "not a confirmed forwarding fault)"
         ),
         "needs_investigation": "Pending investigation",
+        "fixed_check_decided": "Decided by the fixed check (no investigation needed)",
         "port_investigated": "Explained by a port investigation (not investigated individually)",
         "device_investigated": "Explained by a device investigation (not investigated individually)",
         "category_peer_skipped": (
@@ -1536,6 +1537,11 @@ def format_services_operator(
                         "you want a re-verify — raising dig budget alone will not "
                         "select collection-down instances."
                     )
+            elif cov == "fixed_check_decided":
+                lines.append(
+                    "**Next action:** The fixed check's finding above is the cause. Resolving it is a "
+                    "change for a person to decide and approve; no LLM investigation is needed."
+                )
             elif cov == "category_peer_skipped":
                 stype = str(rec.get("service_type") or "").strip() or "this type"
                 lines.append(

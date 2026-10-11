@@ -159,6 +159,26 @@ def _link_states(links: Any, readings: list[tuple[str, str]]) -> dict[str, str]:
     return states
 
 
+def _link_ages(links: Any, readings: list[tuple[str, str]]) -> dict[str, str]:
+    """How long each down link has been down, as the device states it; ``never`` if it never came up.
+
+    Only an answer about one interface is used, so a value cannot be taken from its neighbour.
+    """
+    ages: dict[str, str] = {}
+    for _command, text in readings:
+        heads = re.findall(r"^([\w/.-]+) is (?:administratively down|up|down), line protocol is (up|down)",
+                           text, re.M | re.I)
+        if len(heads) != 1 or heads[0][1].lower() != "down":
+            continue
+        link = next((str(name) for name in links if interfaces_match(str(name), heads[0][0])), None)
+        flapped = re.search(r"^\s+Last link flapped (\S+)", text, re.M)
+        if link and flapped:
+            ages[link] = flapped[1]
+        elif link and re.search(r"^\s+Interface state transitions: 0\s*$", text, re.M):
+            ages[link] = "never"
+    return ages
+
+
 def _sessions_state(device: str, readings: list[tuple[str, str]]) -> str:
     """The device's BGP sessions as the investigation itself read them."""
     from nso_facts.topology.routing import parse_bgp_summary_text
@@ -232,7 +252,8 @@ async def run_port_investigations(
             client, settings, case, target, kind=SOURCE, code="port_down", layer="physical",
             edge_id=f"if:{target['device']}:{target['port']}", message=_issue_message(target),
             prompt=_system_prompt(), device_names=device_names, openai_client=openai_client, tool_loop=tool_loop,
-            confirm=lambda readings, links=target["links"]: {"link_states": _link_states(links, readings)})
+            confirm=lambda readings, links=target["links"]: {
+                "link_states": _link_states(links, readings), "link_ages": _link_ages(links, readings)})
         if payload["concluded"]:
             concluded[target["device"], target["port"]] = payload
     return _explain_services(case, concluded)

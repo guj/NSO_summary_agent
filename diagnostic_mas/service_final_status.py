@@ -39,6 +39,8 @@ def assessment(service, dig=None):
         if dig.get("source") == "device_investigation" and status == "down":
             return status, "Down — device investigated once"
     label = dict(zip(STATUSES, LABELS))[operational]
+    if operational == "down" and not dig and basic.get("needs_investigation") is False:
+        return operational, "Down — decided by the fixed check"
     if operational == "up" and not dig:
         return operational, "Basic operational pass"
     suffix = "LLM incomplete; retained" if dig else "not investigated"

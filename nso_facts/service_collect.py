@@ -131,12 +131,14 @@ async def collect_service_health(
             rec["operational_status"] = basic["status"]
             if basic["status"] in {"down", "unknown"}:
                 rec["status"] = basic["status"]
+        from diagnostic_mas.operational_checks.l3rt import gateway_owners
         from diagnostic_mas.operational_checks.runner import evaluate as evaluate_other
+        fleet = {"gateway_owners": gateway_owners(inst for t, inst, _, _n in planned if t == "l3rt")}
         # Every other type: its own module, or the interface-only check when it has none.
         jobs = [(services[f"{t}/{n}"], inst) for t, inst, _, n in planned if t != "l2ptp"]
         async def evaluate_job(job):
             rec, instance = job
-            basic = await evaluate_other(rec, instance, client, calls, cache, force=force)
+            basic = await evaluate_other(rec, instance, client, calls, cache, force=force, fleet=fleet)
             rec["basic_checks"] = basic
             rec["operational_status"] = basic["status"]
             if basic["status"] in {"down", "unknown", "degraded"}:

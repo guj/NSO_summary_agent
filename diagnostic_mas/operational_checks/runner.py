@@ -7,10 +7,11 @@ CHECKS = {"l2bridge": l2bridge.check, "l2sts": l2sts.check, "l3rt": l3rt.check,
           "port-mirror": port_mirror.check}
 
 
-async def evaluate(record, instance, client, call, cache, *, force=False):
+async def evaluate(record, instance, client, call, cache, *, force=False, fleet=None):
     if not sync_ready(record) and not force:
         return result(record, "not_checked", "Sync prerequisite not satisfied", [])
     probe = Probe(client, call, cache)
+    probe.fleet = fleet or {}
     if record["service_type"] in {"l2bridge", "l2sts"}:
         actual = {ep["device"] for ep in attachments(instance)}
         if actual != set(record.get("devices") or []):
@@ -24,6 +25,10 @@ async def evaluate(record, instance, client, call, cache, *, force=False):
     reasons = [str(c["observation"]) for c in probe.checks if c["status"] != "pass"]
     reason = "; ".join(reasons[:4]) if reasons else "All required basic PE-side checks passed"
     out = result(record, status, reason, probe.checks)
+    faults = [c for c in probe.checks if c["status"] == "fault"]
+    if faults and all(c.get("conclusive") for c in faults):
+        # This run's own readings show the whole fault; an investigation would add nothing.
+        out["needs_investigation"] = False
     out["intent"] = {key: instance[key] for key in
         ("device", "interface", "site-a", "site-z", "gateway-ipv4", "gateway-ipv6", "external-access",
          "from-interface", "from-interface-vlan", "to-interface", "direction")

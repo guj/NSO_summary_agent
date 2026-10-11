@@ -105,18 +105,22 @@ def _device_details(case: dict | None) -> dict[str, str]:
     }
 
 
-def notification_digest(report: str, run_id: str) -> str:
+def notification_digest(report: str, run_id: str, *, changes: list[str] | None = None) -> str:
     lines = [f"# NSO diagnostic report — {run_id}"]
     for prefix in ("**Scope:**", "**Duration:**"):
         line = next((l for l in report.splitlines() if l.startswith(prefix)), "")
         if line:
             lines.append(line[:200])
     coverage = next((l for l in report.splitlines() if 'Only ' in l and 'received additional dataplane investigation:' in l), '')
-    if coverage:
-        lines.append(coverage[:850])
+    result = next((l for l in report.splitlines() if l.startswith('**Result:**')), '')
+    # The status counts lead; the rest of that line and the coverage sentence are in the full report.
+    counts = re.search(r'Final service status: ([^.]*\.)', result)
+    if counts:
+        lines.append('**Result:** ' + counts[1])
     else:
-        result = next((l for l in report.splitlines() if l.startswith('**Result:**')), '')
-        lines.append(result[:850])
+        lines.append((coverage or result)[:850])
+    if changes:
+        lines += ['', *changes]
     section = re.search(r'^## Recommended follow-up\s*\n(.*?)(?=^## |\Z)', report, re.M | re.S)
     if section:
         items = re.findall(r'^\d+\. .+', section.group(1), re.M)

@@ -395,7 +395,9 @@ def select_drill_issues(case: CaseFile, *, limit: int) -> list[dict[str, Any]]:
         return []
     from diagnostic_mas.dataplane_verify import dataplane_diagnosed_names
 
-    dataplane_done = dataplane_diagnosed_names(case)
+    # A service the fixed check decided needs no investigation of any kind.
+    dataplane_done = dataplane_diagnosed_names(case) | {
+        name for name, coverage in case.service_coverage.items() if coverage == "fixed_check_decided"}
     candidates = [
         i
         for i in case.issues

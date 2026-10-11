@@ -598,6 +598,10 @@ def render_report(
         )
         lines.append("")
 
+    from diagnostic_mas.undecided_rules import format_undecided_rules
+
+    lines.extend(format_undecided_rules(case.undecided_rules))
+
     lines.append("## Devices")
     lines.append("")
     lines.extend(format_devices_operator(case))

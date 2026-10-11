@@ -46,6 +46,8 @@ class Probe:
         self.calls = 0
         self.checks = []
         self.sources = []
+        # Facts the collector worked out across all services, for checks that need them.
+        self.fleet = {}
 
     async def show(self, device, command, *, required=True):
         if hasattr(self.cache, "locks"):
@@ -78,8 +80,12 @@ class Probe:
             self.check("collection", "unknown", "Unavailable/unsupported response: " + command, device)
         return text
 
-    def check(self, name, status, observation, device=None):
-        self.checks.append({"check": name, "status": status, "device": device, "observation": observation})
+    def check(self, name, status, observation, device=None, *, conclusive=False):
+        """Record one observation; ``conclusive`` marks a fault this run's readings show in full."""
+        record = {"check": name, "status": status, "device": device, "observation": observation}
+        if conclusive:
+            record["conclusive"] = True
+        self.checks.append(record)
 
 
 def interface_state(text, interface):

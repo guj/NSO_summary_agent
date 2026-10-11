@@ -295,6 +295,8 @@ not targets, and higher concurrency does not guarantee proportional speedup.
    checks local bridge membership/forwarding; L2STS additionally checks effective
    EVPN RTs, replication and transport; L3RT checks gateway, routes and forwarding
    including configured border dependencies.
+   A fault the checks show in full (an L3RT gateway address held by another
+   service on the same device) is reported Down with no LLM investigation.
 3. Operational passes skip routine LLM investigation. Other eligible services
    are investigated within category/total caps. An exact service-ID request can
    force a dig. Incomplete LLM work does not erase a confirmed operational fault.

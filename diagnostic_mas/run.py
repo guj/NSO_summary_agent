@@ -589,6 +589,7 @@ async def _run_after_accounting(
     from diagnostic_mas.case_delta import (
         compact_delta_for_llm,
         compute_case_delta,
+        first_seen_from_saved_scans,
         load_previous_case,
         service_fault_history,
     )
@@ -599,6 +600,12 @@ async def _run_after_accounting(
         previous_case or {}, case_to_dict(case),
         previous_run_id=previous_run_id, run_id=run_id,
     )
+    first_seen_from_saved_scans(case.last_known_service_faults, Path(state_dir) / "runs", before=run_id)
+    # What each rule the operators have not decided would change in this scan; reporting only.
+    from diagnostic_mas import undecided_rules
+    from nso_facts.mcp_client import successful_live_devices
+
+    case.undecided_rules = undecided_rules.undecided_rule_counts(case, answered=set(successful_live_devices()))
     case_delta = None
     if previous_case is not None:
         case_delta = compute_case_delta(previous_case, case_to_dict(case))
@@ -617,6 +624,15 @@ async def _run_after_accounting(
         if case_delta is not None:
             case_delta = dict(case_delta)
             case_delta["last_known_service_faults"] = report_case.last_known_service_faults
+
+    # What is still open, grouped by the port or device that explains it, with its age.
+    from diagnostic_mas.open_faults import digest_changes, open_fault_groups
+
+    open_faults = open_fault_groups(
+        report_case, report_case.last_known_service_faults,
+        new=[row.get("service") for row in (case_delta or {}).get("newly_failed_services") or []])
+    if case_delta is not None:
+        case_delta["open_faults"] = open_faults
 
     narrative = ""
     reporting_notes: list[str] = []
@@ -674,7 +690,11 @@ async def _run_after_accounting(
             report_url = (settings.diagnostic_report_base_url.rstrip("/") + "/"
                           + quote(out.parent.name, safe="") + "/report.html")
         channels = publish_all(
-            notification_digest(report, run_id),
+            notification_digest(report, run_id, changes=[
+                *digest_changes(case_delta, previous_run_id, open_faults),
+                *(["", *rules] if (rules := undecided_rules.digest_undecided_rules(
+                    case.undecided_rules, (previous_case or {}).get("undecided_rules"))) else []),
+            ]),
             run_id,
             settings,
             attachment_path=out.parent / "report.html",

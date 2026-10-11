@@ -38,6 +38,11 @@ read-only evidence; no device configuration is changed.
   and all configured border routers. External services include default routes.
   Missing family/role/VRF identity or unsupported direct-routed variants remain
   Unknown. No customer address, BVI or VRF is invented.
+  A gateway address configured on two services of one device is found from the
+  collected service definitions. The service whose subnet route the device has
+  bound to the other's interface is Down, as a conclusive fault: it is not sent
+  to the LLM. The holder passes, with a note. Without the device's route the
+  shared configuration decides nothing.
 - `port_mirror.py`: one `monitor-session status` read per device, shared by its
   services. The session is matched by the service's destination interface in
   the device's answer, never by a name built from the service ID. Pass needs the

@@ -22,6 +22,7 @@ _CHECKED_COVERAGE = frozenset(
         "llm_budget_exceeded",
         "collection_concluded",
         "category_peer_skipped",
+        "fixed_check_decided",
         "port_investigated",
         "device_investigated",
     }
@@ -503,6 +504,7 @@ def service_fault_history(
         (newer, run_id or newer.get("run_id")),
     ):
         dp = _service_dataplane_map(snapshot)
+        kinds = _service_inventory(snapshot)
         # Include collection-reported faults, but prefer completed diagnostics.
         findings = {}
         for name, issue in _service_issue_faults(snapshot).items():
@@ -528,9 +530,14 @@ def service_fault_history(
                     and (d.get("subject") or {}).get("name") == name
                     and d.get("status", d.get("dataplane_status")) == st
                 ), {})
+                # A row carried without a first-seen scan is dated from the saved scans later.
+                earlier = history.get(name)
+                first = observed_run if earlier is None else earlier.get("first_observed_run_id")
                 history[name] = {
                     "service": name, "status": st,
-                    "service_type": finding.get("service_type", ""),
+                    "service_type": finding.get("service_type") or kinds.get(name, ""),
+                    "first_observed_run_id": first or None,
+                    "first_observed_exact": bool(first) and (earlier is None or bool(earlier.get("first_observed_exact"))),
                     "last_observed_run_id": observed_run or "unknown",
                     "cause": diagnosis.get("cause") or finding.get("cause") or "",
                     "observed": diagnosis.get("observed") or "",
@@ -564,6 +571,44 @@ def service_fault_history(
             "not rechecked; last-known fault unresolved"
         )
     return sorted(history.values(), key=lambda r: r["service"])
+
+
+def first_seen_from_saved_scans(rows: list[dict[str, Any]], runs_dir: Path | str, *, before: str) -> None:
+    """Date the faults that were carried without a first-seen scan, from the saved scans.
+
+    Walks the saved scans older than ``before``, newest first, for as long as
+    each still lists the fault. When the oldest readable scan still lists it,
+    the fault may be older than the history, so the date is not exact. This
+    reads how long a fault has been listed, never whether it is still there.
+    """
+    pending = {str(r["service"]): r for r in rows if isinstance(r, dict) and not r.get("first_observed_run_id")}
+    for row in pending.values():
+        row.update(first_observed_run_id=None, first_observed_exact=False)
+    try:
+        saved = sorted((d.name for d in Path(runs_dir).iterdir() if d.is_dir() and d.name < str(before)), reverse=True)
+    except OSError:
+        return
+    for run in saved:
+        if not pending:
+            return
+        try:
+            listed = load_case_dict(Path(runs_dir) / run / "case.json").get("last_known_service_faults")
+        except (OSError, ValueError):
+            return
+        if not isinstance(listed, list):
+            return
+        then = {str(r.get("service")): r for r in listed if isinstance(r, dict)}
+        for name in list(pending):
+            seen = then.get(name)
+            if seen is None:
+                # Not open in this scan: it began in the scan after, if one was found.
+                row = pending.pop(name)
+                row["first_observed_exact"] = bool(row["first_observed_run_id"])
+            elif seen.get("first_observed_run_id"):
+                pending.pop(name).update(first_observed_run_id=seen["first_observed_run_id"],
+                                         first_observed_exact=bool(seen.get("first_observed_exact")))
+            else:
+                pending[name]["first_observed_run_id"] = run
 
 
 def format_last_known_faults(rows: list[dict[str, Any]]) -> list[str]:
@@ -1048,6 +1093,13 @@ def format_changes_since_previous(
     if failed:
         lines.append("A newly detected fault does not prove a regression: prior "
                      "readiness may have used different checks. Failure onset is unverified.")
+        lines.append("")
+    still_open = list(delta.get("open_faults") or [])
+    if still_open:
+        from diagnostic_mas.open_faults import format_open_faults
+
+        lines.append("**Service faults still open:**")
+        lines.extend(format_open_faults(still_open, limit=persistent_limit))
         lines.append("")
     lines.extend(format_last_known_faults(list(delta.get("last_known_service_faults") or [])))
     cleared = list(delta.get("service_faults_cleared") or [])

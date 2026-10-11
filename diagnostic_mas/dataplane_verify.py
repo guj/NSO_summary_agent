@@ -372,6 +372,9 @@ def init_service_coverage(case: CaseFile) -> None:
             case.service_coverage[name] = "collection_concluded"
         elif service_needs_investigation(rec):
             case.service_coverage[name] = "needs_investigation"
+        elif (rec.get("basic_checks") or {}).get("status") == "down":
+            # A fault this run's own readings show in full: Down, with nothing left to investigate.
+            case.service_coverage[name] = "fixed_check_decided"
         else:
             case.service_coverage[name] = "basic_passed"
 
