@@ -23,16 +23,19 @@ _IOS_INTERFACE_PREFIXES: tuple[tuple[str, str], ...] = (
 )
 
 
+def _is_short_form(name: str, short_prefix: str) -> bool:
+    """A short form is its prefix and then a number: ``Fo0/0/0/3``, not ``FourHundredGigE0/0/0/3``."""
+    return name.startswith(short_prefix) and name[len(short_prefix) : len(short_prefix) + 1].isdigit()
+
+
 def interface_variants(name: str) -> set[str]:
     """Return equivalent IOS-XR interface name forms (long + short)."""
     variants = {name}
     for long_prefix, short_prefix in _IOS_INTERFACE_PREFIXES:
         if name.startswith(long_prefix):
             variants.add(short_prefix + name[len(long_prefix) :])
-        elif name.startswith(short_prefix):
-            remainder = name[len(short_prefix) :]
-            if remainder:
-                variants.add(long_prefix + remainder)
+        elif _is_short_form(name, short_prefix):
+            variants.add(long_prefix + name[len(short_prefix) :])
     return variants
 
 
@@ -43,10 +46,8 @@ def interfaces_match(left: str, right: str) -> bool:
 def expand_interface_name(name: str) -> str:
     """Prefer long IOS-XR form (e.g. Hu0/0/0/0 → HundredGigE0/0/0/0)."""
     for long_prefix, short_prefix in _IOS_INTERFACE_PREFIXES:
-        if name.startswith(short_prefix):
-            remainder = name[len(short_prefix) :]
-            if remainder:
-                return long_prefix + remainder
+        if _is_short_form(name, short_prefix):
+            return long_prefix + name[len(short_prefix) :]
     return name
 
 

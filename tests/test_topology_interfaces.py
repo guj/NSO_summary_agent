@@ -3,6 +3,7 @@
 from nso_facts.topology.interfaces import (
     canonical_interface_name,
     expand_interface_name,
+    interface_variants,
     interfaces_match,
     physical_interfaces_by_device,
 )
@@ -44,6 +45,15 @@ def test_expand_interface_name():
     assert expand_interface_name("Hu0/0/0/0.2401") == "HundredGigE0/0/0/0.2401"
     assert expand_interface_name("TF0/0/0/10/0") == "TwentyFiveGigE0/0/0/10/0"
     assert expand_interface_name("BV4002") == "BVI4002"
+
+
+def test_a_long_name_is_not_read_as_an_abbreviation():
+    # "FourHundredGigE" begins with "Fo", the short form of FortyGigE; "HundredGigE" with its own "Hu".
+    assert interface_variants("FourHundredGigE0/0/0/26") == {"FourHundredGigE0/0/0/26", "FH0/0/0/26"}
+    assert interface_variants("TenGigE0/0/0/18/0") == {"TenGigE0/0/0/18/0", "Te0/0/0/18/0"}
+    assert expand_interface_name("FourHundredGigE0/0/0/26") == "FourHundredGigE0/0/0/26"
+    assert expand_interface_name("HundredGigE0/0/0/23") == "HundredGigE0/0/0/23"
+    assert expand_interface_name("Bundle-Ether100") == "Bundle-Ether100"
 
 
 def test_canonical_interface_name_from_physical():

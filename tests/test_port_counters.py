@@ -92,6 +92,16 @@ def test_ports_to_read_are_those_under_a_service_attachment_or_an_adjacency():
     }
 
 
+def test_a_400g_uplink_is_read_under_its_own_name():
+    # As cern-data-sw and newy-data-sw reported their adjacency on 11 October 2026.
+    case = CaseFile(budget=Budget(0, 0))
+    add_evidence(case, {"kind": "spine", "role": "isis", "layer": "underlay", "payload": {"operational_edges": [
+        {"id": "isis:cern-data-sw:FourHundredGigE0/0/0/26.3732:newy-data-sw:FourHundredGigE0/0/0/60.3732"}]}})
+
+    assert sorted(counter_targets(case)) == [
+        ("cern-data-sw", "FourHundredGigE0/0/0/26"), ("newy-data-sw", "FourHundredGigE0/0/0/60")]
+
+
 def _call(outputs: dict, asked: list):
     async def call(client, tool, args):
         assert tool == "exec_show"
