@@ -23,19 +23,26 @@ _IOS_INTERFACE_PREFIXES: tuple[tuple[str, str], ...] = (
 )
 
 
-def _is_short_form(name: str, short_prefix: str) -> bool:
-    """A short form is its prefix and then a number: ``Fo0/0/0/3``, not ``FourHundredGigE0/0/0/3``."""
-    return name.startswith(short_prefix) and name[len(short_prefix) : len(short_prefix) + 1].isdigit()
+def _known_long_name(name: str) -> tuple[str, str] | None:
+    """The table row whose long name ``name`` already carries, if any."""
+    for row in _IOS_INTERFACE_PREFIXES:
+        if name.startswith(row[0]):
+            return row
+    return None
 
 
 def interface_variants(name: str) -> set[str]:
     """Return equivalent IOS-XR interface name forms (long + short)."""
+    known = _known_long_name(name)
+    if known:
+        # Already long: "FourHundredGigE…" is not the "Fo" abbreviation of FortyGigE.
+        return {name, known[1] + name[len(known[0]) :]}
     variants = {name}
     for long_prefix, short_prefix in _IOS_INTERFACE_PREFIXES:
-        if name.startswith(long_prefix):
-            variants.add(short_prefix + name[len(long_prefix) :])
-        elif _is_short_form(name, short_prefix):
-            variants.add(long_prefix + name[len(short_prefix) :])
+        if name.startswith(short_prefix):
+            remainder = name[len(short_prefix) :]
+            if remainder:
+                variants.add(long_prefix + remainder)
     return variants
 
 
@@ -45,9 +52,13 @@ def interfaces_match(left: str, right: str) -> bool:
 
 def expand_interface_name(name: str) -> str:
     """Prefer long IOS-XR form (e.g. Hu0/0/0/0 → HundredGigE0/0/0/0)."""
+    if _known_long_name(name):
+        return name
     for long_prefix, short_prefix in _IOS_INTERFACE_PREFIXES:
-        if _is_short_form(name, short_prefix):
-            return long_prefix + name[len(short_prefix) :]
+        if name.startswith(short_prefix):
+            remainder = name[len(short_prefix) :]
+            if remainder:
+                return long_prefix + remainder
     return name
 
 
