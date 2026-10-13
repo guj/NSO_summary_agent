@@ -176,6 +176,24 @@ def test_recovered_devices_and_incomplete_dig_missing_evidence():
     assert "Compared to `run-old`" in section
 
 
+def test_italic_lines_of_the_changes_show_as_italics_in_the_html_report_not_as_underscores():
+    from agent.markdown_channels import markdown_to_html
+    from diagnostic_mas.case_delta import format_case_delta, format_changes_since_previous
+
+    issue = {"code": "collection_error", "layer": "underlay", "status": "open", "message": "no answer"}
+    delta = {"notes": ["Older scan had no service step."], "persistent": [issue, dict(issue, message="again")]}
+    section = format_changes_since_previous(delta, previous_run_id="run-old")
+    assert any("Unchanged open items" in line for line in section)
+
+    for text in ("\n".join(section), format_case_delta(delta, older_label="run-old", newer_label="run-new")):
+        page = markdown_to_html(text)
+        assert "<em>Note: Older scan had no service step.</em>" in page
+        assert "_Note" not in page and "._" not in page and "_Unchanged" not in page
+    page = markdown_to_html("\n".join(section))
+    assert "<em>Compared to <code>run-old</code>.</em>" in page
+    assert "<em>Unchanged open items" in page and "not re-summarized as new findings.</em>" in page
+
+
 def test_report_includes_changes_section_before_devices():
     from diagnostic_mas.case_delta import compute_case_delta
     from diagnostic_mas.report import render_report

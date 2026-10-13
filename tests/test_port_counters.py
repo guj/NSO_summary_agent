@@ -222,8 +222,44 @@ def test_report_and_notification_list_the_lead_without_touching_any_status():
             "in 1 h 47 min; carries an IS-IS adjacency; 21 services on this device")
     text = "\n".join(format_changes_since_previous(delta, previous_run_id="r1"))
     assert f"**Links gaining errors while up:**\n- {line}\n" in text
-    assert f"- Links gaining errors while up: 1 — {line}" in digest_changes(delta, "r1", [])
+    digest = "\n".join(digest_changes(delta, "r1", []))
+    assert f"\n\n**Links gaining errors while up:** 1\n- {line}\n\n**Still open:** none" in digest
     assert delta["newly_failed_services"] == []
+
+
+# What five ports gained between the scans of 11 and 12 October 2026.
+TOKY, FLAPPED, EDUKY = "TenGigE0/0/0/18/0", "HundredGigE0/0/0/22", "HundredGigE0/0/0/7"
+SECOND_FLAP = "HundredGigE0/0/0/21"
+
+
+def _five_leads() -> tuple[dict, dict]:
+    ports = (EDUKY, FLAPPED, SECOND_FLAP, UPLINK, TOKY)
+    now = {EDUKY: _reading(crc=1, input_errors=1), FLAPPED: _reading(transitions=28),
+           SECOND_FLAP: _reading(transitions=28), UPLINK: _reading(crc=1, input_errors=1),
+           TOKY: _reading(crc=57190, input_errors=57190)}
+    return _counters(EARLIER, **{port: _reading() for port in ports}), _counters(LATER, **now)
+
+
+def test_the_link_that_gained_most_is_listed_first_then_the_ones_that_only_changed_state():
+    rows = links_gaining_errors(*_five_leads())
+
+    assert [row["port"] for row in rows] == [TOKY, UPLINK, EDUKY, SECOND_FLAP, FLAPPED]
+
+
+def test_notification_gives_the_three_largest_one_per_line():
+    older, newer = _five_leads()
+    for scan in (older, newer):
+        scan.update(issues=[], diagnoses=[], service_coverage={})
+
+    lines = digest_changes(compute_case_delta(older, newer), "r1", [])
+
+    start = lines.index("**Links gaining errors while up:** 5, largest first")
+    # The fixture's ports carry a description, printed after the port name.
+    assert [line.split(" (")[0] for line in lines[start + 1:start + 5]] == [
+        f"- `rutg-data-sw` {TOKY}", f"- `rutg-data-sw` {UPLINK}", f"- `rutg-data-sw` {EDUKY}", "- …and 2 more"]
+    assert ": +57190 CRC, +57190 input errors in 1 h 47 min" in lines[start + 1]
+    assert lines[start - 1] == "" and lines[start + 5] == "" and lines[start + 6].startswith("**Still open:**")
+    assert not [line for line in lines if line.startswith("- Links gaining errors")]
 
 
 async def test_collection_phase_reads_the_counters_after_the_service_step(monkeypatch):

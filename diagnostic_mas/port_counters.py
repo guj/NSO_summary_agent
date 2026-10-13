@@ -165,7 +165,9 @@ def links_gaining_errors(older: dict[str, Any], newer: dict[str, Any]) -> list[d
                      "minutes": round(elapsed / 60) if elapsed is not None else None,
                      "services": int(reading.get("services") or 0), "adjacency": bool(reading.get("adjacency")),
                      "device_services": int(reading.get("device_services") or 0)})
-    return rows
+    # Most errors gained first, then links that only changed state: a short list must not cut off the worst one.
+    return sorted(rows, key=lambda row: (-max(row["gained"].values(), default=0), -row["state_changes"],
+                                         row["device"], row["port"]))
 
 
 def gain_line(row: dict[str, Any]) -> str:

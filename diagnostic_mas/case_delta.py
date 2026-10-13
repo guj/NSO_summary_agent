@@ -977,7 +977,7 @@ def format_case_delta(
         "",
     ]
     for note in delta.get("notes") or []:
-        lines.append(f"_Note: {note}_")
+        lines.append(f"*Note: {note}*")
         lines.append("")
 
     def _section(title: str, items: list[Any], empty: str) -> None:
@@ -1101,11 +1101,11 @@ def format_changes_since_previous(
         return lines
 
     if previous_run_id:
-        lines.append(f"_Compared to `{previous_run_id}`._")
+        lines.append(f"*Compared to `{previous_run_id}`.*")
         lines.append("")
 
     for note in delta.get("notes") or []:
-        lines.append(f"_Note: {note}_")
+        lines.append(f"*Note: {note}*")
         lines.append("")
 
     failed = list(delta.get("newly_failed_services") or [])
@@ -1251,8 +1251,8 @@ def format_changes_since_previous(
             )
         elif len(persistent) > 1:
             lines.append(
-                "_Unchanged open items — details under Devices / Services; "
-                "not re-summarized as new findings._"
+                "*Unchanged open items — details under Devices / Services; "
+                "not re-summarized as new findings.*"
             )
     return lines
 

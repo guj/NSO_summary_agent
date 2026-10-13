@@ -657,8 +657,9 @@ an IS-IS adjacency: one `show interfaces <port>` per port, in the collection pha
 the service step, within `--max-port-counter-reads`. The readings are saved with the scan.
 The next scan subtracts, and **Changes since previous run** lists a port under **Links
 gaining errors while up** when it is up now and its CRC, input-error or output-error
-count grew, or its state-transition count grew (it went down and came back). The Slack and
-email digest carries the same line when there is one.
+count grew, or its state-transition count grew (it went down and came back). The list is
+ordered by size: most errors gained first, then links that only changed state. The Slack and
+email digest carries the three largest, one per line.
 
 This is a lead, never a status: no service changes state because of it. Drops alone are
 not listed. A port is not compared when it was not read in both scans, when its counters

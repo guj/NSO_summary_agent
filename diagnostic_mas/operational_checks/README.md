@@ -43,13 +43,13 @@ read-only evidence; no device configuration is changed.
   bound to the other's interface is Down, as a conclusive fault: it is not sent
   to the LLM. The holder passes, with a note. Without the device's route the
   shared configuration decides nothing.
-- `port_mirror.py`: one `monitor-session status` read per device, shared by its
+- `port_mirror.py`: one `monitor-session status detail` read per device, shared by its
   services. The session is matched by the service's destination interface in
   the device's answer, never by a name built from the service ID. Pass needs the
   session, every intended source operational in the intended direction, and the
   destination and source interfaces up. A session missing from the answer is
-  Unknown, not Down: the service may simply be gone. The status layout follows
-  Cisco's documentation and has not yet been sampled from a live device.
+  Unknown, not Down: the service may simply be gone. The status layout is the
+  one atla-data-sw returned on 13 October 2026.
 - `generic.py`: every other service type. It reads the state of each interface
   the instance names (the shared `type`/`id` shape). An interface down is Down;
   otherwise the result is Unknown with "only its interfaces were examined". It

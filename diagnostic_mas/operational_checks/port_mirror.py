@@ -1,8 +1,9 @@
 """Port-mirror readiness: the device's mirror session, its sources and its ports.
 
 The session is found by the service's destination interface in the device's own
-answer; a session that is not listed is Unknown, never Down. The status layout
-is the one Cisco documents for IOS-XR and was not yet sampled from a live device.
+answer; a session that is not listed is Unknown, never Down. The layout read is
+the one atla-data-sw returned for ``show monitor-session status detail`` on
+13 October 2026: one block per session, one indented block per source.
 """
 import re
 from nso_facts.l2vpn_xconnect import ac_name_from_endpoint
@@ -11,17 +12,23 @@ from .generic import check_interfaces
 from .probe import safe
 
 DIRECTIONS = {"both": "both", "rx-only": "rx", "tx-only": "tx"}
+STATUS = "monitor-session status detail"
 
 
 def sessions(text):
-    """Sessions in ``show monitor-session status`` output; [] when not recognized."""
+    """Sessions in ``show monitor-session status detail`` output; [] when not recognized."""
     found = []
-    for block in re.split(r"^Monitor-session ", text, flags=re.M)[1:]:
-        destination = re.search(r"^Destination interface (\S+)", block, re.M)
+    for block in re.split(r"^Monitor-session ", (text or "").replace("\r", ""), flags=re.M)[1:]:
+        destination = re.search(r"^[ \t]*Destination interface (\S+)", block, re.M)
         if destination:
-            rows = re.findall(r"^(\S+)[ \t]+(Rx|Tx|Both)[ \t]+(\S.*)$", block, re.M | re.I)
-            found.append({"name": block.split(None, 1)[0], "destination": destination[1],
-                          "sources": [(name, direction.lower(), status.strip()) for name, direction, status in rows]})
+            sources = []
+            # A source is its name alone on a line, then its fields indented under it.
+            for name, fields in re.findall(r"^[ \t]{2}(\S+)[ \t]*\n((?:[ \t]{4,}\S.*\n?)+)", block, re.M):
+                direction = re.search(r"^\s*Direction:\s*(\S+)", fields, re.M)
+                status = re.search(r"^\s*Status:\s*(\S.*)$", fields, re.M)
+                if direction and status:
+                    sources.append((name, direction[1].lower(), status[1].strip()))
+            found.append({"name": block.split(None, 1)[0], "destination": destination[1], "sources": sources})
     return found
 
 
@@ -38,7 +45,7 @@ async def check(instance, probe):
         probe.check("intent", "unknown", "Service does not name one device, one destination and a source", device)
         return
     destination = destinations[0]
-    text = await probe.show(device, "monitor-session status")
+    text = await probe.show(device, STATUS)
     session = next((s for s in sessions(text) if interfaces_match(destination, s["destination"])), None)
     if session is None:
         probe.check("session", "unknown", f"No mirror session to {destination} in the device's answer", device)

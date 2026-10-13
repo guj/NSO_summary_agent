@@ -8,17 +8,65 @@ from diagnostic_mas.service_final_status import assessment
 from nso_facts.service_collect import collect_service_health
 from test_operational_service_types import call_from, record
 
-# The status layout Cisco documents for IOS-XR; not yet seen from a live device here.
-SESSION = (
-    "Monitor-session mon_pm1\n"
-    "Destination interface HundredGigE0/0/0/9\n"
-    "================================================================================\n"
-    "Source Interface      Dir   Status\n"
-    "--------------------- ----  ----------------------------------------------------\n"
-    "Hu0/0/0/2             Both  Operational\n"
-    "Hu0/0/0/3.100         Both  Operational\n"
-)
+def source(port, status="Operational", direction="Both"):
+    """One source of a session, laid out as ``show monitor-session status detail`` prints it."""
+    return (f"  {port}\n"
+            f"    Direction:     {direction}\n"
+            "    Port level:    True\n"
+            "    ACL match:     Disabled\n"
+            "    IPv4 ACL:      Disabled\n"
+            "    IPv6 ACL:      Disabled\n"
+            "    MPLS ACL:      Disabled\n"
+            "    Portion:       Full packet\n"
+            "    Interval:      Mirror all packets\n"
+            "    Mirror drops:  Disabled\n"
+            f"    Status:        {status}\n")
+
+
+def session(name, destination, *sources):
+    return (f"Monitor-session {name}\n  Destination interface {destination}\n"
+            "  Source Interfaces\n  -----------------\n" + "".join(sources) + "\n")
+
+
+STATUS = "monitor-session status detail"
+SESSION = session("mon_pm1", "HundredGigE0/0/0/9", source("HundredGigE0/0/0/2"), source("HundredGigE0/0/0/3.100"))
 PORTS = ("Hu0/0/0/9", "Hu0/0/0/2", "Hu0/0/0/3.100")
+
+# What atla-data-sw returned on 13 October 2026, the first live sample: two services, one source each.
+ATLA = """\r
+\rTue Oct 13 04:15:27.810 UTC\r
+Monitor-session mon_ATLA_Patchwork_A-7af33e30-a377-4605-bb3d-243b49e72e39\r
+  Destination interface TwentyFiveGigE0/0/0/12/1\r
+  Source Interfaces\r
+  -----------------\r
+  HundredGigE0/0/0/22\r
+    Direction:     Both\r
+    Port level:    True\r
+    ACL match:     Disabled\r
+    IPv4 ACL:      Disabled\r
+    IPv6 ACL:      Disabled\r
+    MPLS ACL:      Disabled\r
+    Portion:       Full packet\r
+    Interval:      Mirror all packets\r
+    Mirror drops:  Disabled\r
+    Status:        Not operational (source state down). \r
+\r
+Monitor-session mon_ATLA_Patchwork_A-f655fd58-132e-4094-9006-66c16d6dfca9\r
+  Destination interface TwentyFiveGigE0/0/0/12/0\r
+  Source Interfaces\r
+  -----------------\r
+  HundredGigE0/0/0/0\r
+    Direction:     Both\r
+    Port level:    True\r
+    ACL match:     Disabled\r
+    IPv4 ACL:      Disabled\r
+    IPv6 ACL:      Disabled\r
+    MPLS ACL:      Disabled\r
+    Portion:       Full packet\r
+    Interval:      Mirror all packets\r
+    Mirror drops:  Disabled\r
+    Status:        Operational\r
+RP/0/RP0/CPU0:atla-data-sw#"""
 
 
 def mirror(**changes):
@@ -32,8 +80,8 @@ def mirror(**changes):
     }
 
 
-def device_answers(session=SESSION, down=()):
-    answers = {("a", "monitor-session status"): session}
+def device_answers(answer=SESSION, down=()):
+    answers = {("a", STATUS): answer}
     for port in PORTS:
         state = "down, line protocol is down" if port in down else "up, line protocol is up"
         answers[("a", f"interfaces {port}")] = f"{port} is {state}"
@@ -56,14 +104,38 @@ async def test_port_mirror_is_up_when_its_session_sources_and_ports_are_all_up()
 
 @pytest.mark.asyncio
 async def test_port_mirror_is_down_when_a_source_is_not_operational():
-    session = SESSION.replace(
-        "Hu0/0/0/2             Both  Operational",
-        "Hu0/0/0/2             Both  Not operational (destination interface down)")
+    # The second status is the one amst-data-sw gave on 13 October 2026 for a source that another session mirrors to.
+    for status in ("Not operational (source state down).", "Not operational (source interface is also a destination)."):
+        answer = session("mon_pm1", "HundredGigE0/0/0/9", source("HundredGigE0/0/0/2", status),
+                         source("HundredGigE0/0/0/3.100"))
 
-    result = await check_mirror(device_answers(session))
+        result = await check_mirror(device_answers(answer))
 
-    assert result["status"] == "down"
-    assert "Not operational (destination interface down)" in result["reason"]
+        assert result["status"] == "down"
+        assert f"Hu0/0/0/2: {status}" in result["reason"]
+
+
+@pytest.mark.asyncio
+async def test_port_mirror_reads_the_layout_a_live_device_returned():
+    def atla(name, source_port, destination):
+        return {"name": name, "device": "atla-data-sw", "direction": "both",
+                "from-interface": [{"type": "HundredGigE", "id": source_port}],
+                "to-interface": {"type": "TwentyFiveGigE", "id": destination}}
+
+    answers = {("atla-data-sw", STATUS): ATLA}
+    for port, state in (("TF0/0/0/12/1", "up"), ("Hu0/0/0/22", "down"), ("TF0/0/0/12/0", "up"), ("Hu0/0/0/0", "up")):
+        answers["atla-data-sw", f"interfaces {port}"] = f"{port} is {state}, line protocol is {state}"
+
+    dark = await evaluate(record("port-mirror", ["atla-data-sw"]), atla("dark", "0/0/0/22", "0/0/0/12/1"), None,
+                          call_from(answers, []), {})
+    fine = await evaluate(record("port-mirror", ["atla-data-sw"]), atla("fine", "0/0/0/0", "0/0/0/12/0"), None,
+                          call_from(answers, []), {})
+
+    assert dark["status"] == "down"
+    assert "Hu0/0/0/22: Not operational (source state down)." in dark["reason"]
+    assert (fine["status"], fine["needs_investigation"]) == ("up", False)
+    assert ("source", "pass", "Hu0/0/0/0 both: Operational") in {
+        (c["check"], c["status"], c["observation"]) for c in fine["checks"]}
 
 
 @pytest.mark.asyncio
@@ -98,7 +170,7 @@ async def test_port_mirror_is_unknown_not_down_when_its_session_is_not_in_the_an
 
 @pytest.mark.asyncio
 async def test_port_mirror_is_unknown_when_a_source_is_missing_or_mirrored_in_another_direction():
-    missing = SESSION.replace("Hu0/0/0/3.100         Both  Operational\n", "")
+    missing = session("mon_pm1", "HundredGigE0/0/0/9", source("HundredGigE0/0/0/2"))
 
     assert (await check_mirror(device_answers(missing)))["status"] == "unknown"
     assert (await check_mirror(device_answers(), mirror(direction="rx-only")))["status"] == "unknown"
@@ -111,7 +183,7 @@ async def test_services_on_one_device_share_a_single_status_command():
     await check_mirror(device_answers(), calls=calls, cache=cache)
     await check_mirror(device_answers(), mirror(name="pm2"), calls=calls, cache=cache)
 
-    assert calls.count(("a", "monitor-session status")) == 1
+    assert calls.count(("a", STATUS)) == 1
 
 
 # --- service types the agent has no module for ----------------------------------
