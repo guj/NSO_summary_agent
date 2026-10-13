@@ -57,7 +57,9 @@ async def check(instance, probe):
             if row is None:
                 probe.check("source", "unknown", f"{source} is not listed under {session['name']}", device)
             elif not row[2].lower().startswith("operational"):
-                probe.check("source", "fault", f"{source}: {row[2]}", device)
+                # "Not operational (reason)" is the device's own verdict on its session: nothing is left to investigate.
+                probe.check("source", "fault", f"{source}: {row[2]}", device,
+                            conclusive=row[2].lower().startswith("not operational"))
             elif row[1] != wanted:
                 probe.check("source", "unknown", f"{source} is mirrored {row[1]}, intended {wanted}", device)
             else:

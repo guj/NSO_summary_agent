@@ -647,7 +647,8 @@ For a down link behind a port finding, the report adds the time the device itsel
 gives ("Last link flapped"), read from that scan's own port investigation and never
 from an earlier scan. **Changes since previous run** lists these under
 **Service faults still open**, one line per port or cut-off device that explains
-several services. A fault found in the current scan is listed as new, not as still open.
+several services, and one line per reason for services the fixed check decided
+Down for the same reason. A fault found in the current scan is listed as new, not as still open.
 
 
 ### Links gaining errors while up

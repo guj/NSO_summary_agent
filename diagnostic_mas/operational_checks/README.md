@@ -48,8 +48,11 @@ read-only evidence; no device configuration is changed.
   the device's answer, never by a name built from the service ID. Pass needs the
   session, every intended source operational in the intended direction, and the
   destination and source interfaces up. A session missing from the answer is
-  Unknown, not Down: the service may simply be gone. The status layout is the
-  one atla-data-sw returned on 13 October 2026.
+  Unknown, not Down: the service may simply be gone. A source the device calls
+  "Not operational (reason)" is Down on the device's own word and is not sent
+  to the LLM; if the source port itself is down, the port is still
+  investigated. The status layout is the one atla-data-sw returned on
+  13 October 2026.
 - `generic.py`: every other service type. It reads the state of each interface
   the instance names (the shared `type`/`id` shape). An interface down is Down;
   otherwise the result is Unknown with "only its interfaces were examined". It

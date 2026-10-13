@@ -115,6 +115,76 @@ async def test_port_mirror_is_down_when_a_source_is_not_operational():
         assert f"Hu0/0/0/2: {status}" in result["reason"]
 
 
+# The reasons devices gave for the 34 port-mirror services found Down on 13 October 2026.
+CONFLICTS = ("Not operational (source interface is also a destination).",
+             "Not operational (source same as destination).",
+             "Not operational (destination not active).")
+
+
+@pytest.mark.parametrize("status", CONFLICTS)
+@pytest.mark.asyncio
+async def test_source_the_device_calls_not_operational_is_down_with_no_investigation(status):
+    answer = session("mon_pm1", "HundredGigE0/0/0/9", source("HundredGigE0/0/0/2", status),
+                     source("HundredGigE0/0/0/3.100"))
+
+    result = await check_mirror(device_answers(answer))
+
+    assert (result["status"], result["needs_investigation"]) == ("down", False)
+    assert [c["observation"] for c in result["checks"] if c.get("conclusive")] == [f"Hu0/0/0/2: {status}"]
+
+
+@pytest.mark.asyncio
+async def test_source_that_is_down_itself_still_gets_its_port_looked_at():
+    answer = session("mon_pm1", "HundredGigE0/0/0/9",
+                     source("HundredGigE0/0/0/2", "Not operational (source state down)."), source("HundredGigE0/0/0/3.100"))
+
+    result = await check_mirror(device_answers(answer, down=("Hu0/0/0/2",)))
+
+    # The device's reason is recorded, and the dark port keeps its investigation.
+    assert (result["status"], result["needs_investigation"]) == ("down", True)
+
+
+@pytest.mark.asyncio
+async def test_status_the_check_does_not_know_is_a_fault_that_is_still_investigated():
+    answer = session("mon_pm1", "HundredGigE0/0/0/9", source("HundredGigE0/0/0/2", "Initializing"),
+                     source("HundredGigE0/0/0/3.100"))
+
+    result = await check_mirror(device_answers(answer))
+
+    assert (result["status"], result["needs_investigation"]) == ("down", True)
+
+
+def test_scan_reports_such_a_service_down_without_sending_it_to_the_llm():
+    from diagnostic_mas.dataplane_verify import init_service_coverage
+    from diagnostic_mas.drill import select_drill_issues
+    from diagnostic_mas.case import open_issue
+    from diagnostic_mas.report import render_report
+    from diagnostic_mas.service_final_status import final_service_assessments
+
+    reason = f"Hu0/0/0/2: {CONFLICTS[0]}"
+    rec = record("port-mirror", ["a"]) | {
+        "name": "pm1", "status": "down", "operational_status": "down", "dataplane_status": "not_checked",
+        "basic_checks": {"schema_version": 1, "status": "down", "reason": reason, "needs_investigation": False,
+                         "sync_ready": True, "checks": [{"check": "source", "status": "fault", "device": "a",
+                                                         "observation": reason, "conclusive": True}]}}
+    case = CaseFile(budget=Budget(0, 0))
+    case.device_names = ["a"]
+    add_evidence(case, {"kind": "spine", "role": "service", "layer": "services",
+                        "payload": {"extra": {"services": {"port-mirror/pm1": rec}}}})
+    open_issue(case, code="service_down", severity="high", layer="services", edge_id="pm1", devices=["a"],
+               message="port-mirror pm1: down", evidence_ids=[])
+    init_service_coverage(case)
+
+    assert case.service_coverage["pm1"] == "fixed_check_decided"
+    assert "pm1" not in {r["name"] for _ev, r in select_dataplane_candidates(case)}
+    assert select_drill_issues(case, limit=2) == []
+    assert {name: (status, why) for _k, name, _s, status, why in final_service_assessments(case)}["pm1"] == (
+        "down", "Down — decided by the fixed check")
+    report = render_report(case, summary="s", duration_seconds=1, dry_run=True, llm_model="m")
+    assert "**Coverage:** Decided by the fixed check (no investigation needed)" in report
+    assert CONFLICTS[0] in report
+
+
 @pytest.mark.asyncio
 async def test_port_mirror_reads_the_layout_a_live_device_returned():
     def atla(name, source_port, destination):

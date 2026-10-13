@@ -386,6 +386,63 @@ async def test_call_mcp_quarantines_device_after_timeout_error():
         stop_mcp_cache()
 
 
+def _restconf_error(text: str) -> str:
+    return ('RESTCONF 500 at https://nso.example/restconf/data/x {\n  "ietf-restconf:errors": {"error": [{'
+            '"error-tag": "operation-failed", "error-message": "' + text + '"}]}}')
+
+
+# What NSO returned for kans-data-sw on 13 October 2026: the 20-second limit fell while the device was still printing.
+SLOW_READ = _restconf_error(
+    "External error in the NED implementation for device kans-data-sw: read timeout after 20 seconds, blocked on "
+    "\\r\\n\\rTue Oct 13 17:04:55.803 UTC\\r\\n\\r\\nQSFP8636 EEPROM port: 14\\r\\n\\tXcvr Type: QSFP28\\r\\n\\tExt Type: 1.5W, ")
+SILENT_READ = _restconf_error(
+    "External error in the NED implementation for device kans-data-sw: read timeout after 20 seconds, blocked on \\r\\n")
+NO_CONNECTION = _restconf_error(
+    "Failed to connect to device kans-data-sw: connection refused: NEDCOM CONNECT: Connect timed out in new state")
+
+
+async def _two_reads(first_error: str) -> tuple[dict, dict, int]:
+    """A read that fails with ``first_error``, then a second read of the same device."""
+    from nso_facts.mcp_client import start_mcp_cache, stop_mcp_cache
+
+    answers = iter([
+        SimpleNamespace(data={"status": "error", "error_message": first_error}, structured_content=None, content=[]),
+        SimpleNamespace(data={"status": "success", "data": {"result": "ok"}}, structured_content=None, content=[]),
+    ])
+    client = AsyncMock()
+    client.list_tools = AsyncMock(return_value=[_flat_tool("exec_show", {
+        "device_name": {"type": "string"}, "input_command": {"type": "string"}})])
+    client.call_tool = AsyncMock(side_effect=lambda tool, payload: next(answers))
+    start_mcp_cache()
+    try:
+        first = await call_mcp(client, "exec_show", {
+            "device_name": "kans-data-sw", "input_command": "controllers HundredGigE0/0/0/14 phy"})
+        second = await call_mcp(client, "exec_show", {
+            "device_name": "kans-data-sw", "input_command": "controllers optics 0/0/0/14"})
+    finally:
+        stop_mcp_cache()
+    return first, second, client.call_tool.await_count
+
+
+@pytest.mark.asyncio
+async def test_read_that_timed_out_while_the_device_was_answering_fails_alone():
+    first, second, wire_calls = await _two_reads(SLOW_READ)
+
+    assert first["status"] == "error"
+    # The device had begun to answer, so it is reachable: the next read goes to it.
+    assert (second["status"], wire_calls) == ("success", 2)
+
+
+@pytest.mark.parametrize("failure", [SILENT_READ, NO_CONNECTION])
+@pytest.mark.asyncio
+async def test_device_that_gave_no_answer_is_still_set_aside_for_the_scan(failure):
+    first, second, wire_calls = await _two_reads(failure)
+
+    assert first["status"] == "error"
+    assert second["status"] == "error" and "quarantined" in second["error_message"]
+    assert wire_calls == 1
+
+
 @pytest.mark.asyncio
 async def test_call_mcp_quarantine_still_serves_cache_hits():
     from nso_facts.mcp_client import start_mcp_cache, stop_mcp_cache

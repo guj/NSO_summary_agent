@@ -255,8 +255,26 @@ def _device_name_from_params(params: dict[str, Any] | None) -> str | None:
     return None
 
 
+_BLOCKED_ON_RE = re.compile(r"read timeout after \d+ seconds?, blocked on(.*)", re.IGNORECASE | re.DOTALL)
+
+
+def _device_was_answering(message: str) -> bool:
+    """True when a read ran out of time while the device's output was still arriving.
+
+    NSO reports what it had received ("blocked on <text>"). Device text there
+    shows the device is reachable: only this one read was too slow.
+    """
+    found = _BLOCKED_ON_RE.search(message or "")
+    if not found:
+        return False
+    received = re.sub(r"\\[rnt]|\s", "", found[1].split('"', 1)[0])
+    return len(received) >= 8
+
+
 def _looks_live_unreachable(message: str) -> bool:
     """True when a live MCP failure should quarantine further device calls."""
+    if _device_was_answering(message):
+        return False
     lowered = message.lower()
     return any(
         token in lowered

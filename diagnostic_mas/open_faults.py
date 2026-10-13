@@ -81,8 +81,24 @@ def _group(where: str, members: list[dict[str, Any]], ages: list[str], *, single
     }
 
 
+def decided_reason(record: Any) -> str | None:
+    """The fault the fixed check's own reading shows in full, for a service it decided Down; else None."""
+    basic = record.get("basic_checks") if isinstance(record, dict) else None
+    if not isinstance(basic, dict) or basic.get("status") != "down" or basic.get("needs_investigation") is not False:
+        return None
+    for check in basic.get("checks") or []:
+        if check.get("status") == "fault" and check.get("conclusive"):
+            return str(check.get("observation") or "").strip().rstrip(".") or None
+    return None
+
+
+def shared_reason(reason: str) -> str:
+    """The reason without the object it opens with (``TF0/0/0/10/0: …``): services with one cause share it."""
+    return reason.split(": ", 1)[-1]
+
+
 def open_fault_groups(case: CaseFile, rows: list[dict[str, Any]], *, new: Any = ()) -> list[dict[str, Any]]:
-    """The open faults as report rows: one per port or cut-off device that explains them, else one per service.
+    """The open faults as report rows: one per port, cut-off device or fixed-check reason, else one per service.
 
     ``new`` names the faults found this scan: they are reported as new, not also as still open.
     """
@@ -105,6 +121,18 @@ def open_fault_groups(case: CaseFile, rows: list[dict[str, Any]], *, new: Any = 
                    if (left.get(name) or {}).get("source") == DEVICE_SOURCE]
         if members:
             groups.append(_group(f"`{finding.get('device')}` cut off", members, []))
+    # Services the fixed check decided for one and the same reason are one row.
+    from diagnostic_mas.device_health import services_from_case
+
+    records = {str(rec.get("name")): rec for rec in services_from_case(case).values() if isinstance(rec, dict)}
+    by_reason: dict[tuple[str, str], list[str]] = {}
+    for name, row in left.items():
+        reason = decided_reason(records.get(name))
+        if reason:
+            by_reason.setdefault((str(row.get("service_type") or ""), shared_reason(reason)), []).append(name)
+    for (_kind, reason), names in by_reason.items():
+        if len(names) > 1:
+            groups.append(_group(f'"{reason}"', [left.pop(name) for name in names], []))
     groups.extend(_group("", [row], [], single=True) for row in left.values())
     return groups
 

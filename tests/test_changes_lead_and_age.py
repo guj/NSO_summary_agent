@@ -218,6 +218,91 @@ def test_fault_found_this_scan_is_reported_as_new_and_not_also_as_still_open():
     assert digest_changes(None, None, open_fault_groups(case, rows))[2] == "**Open service faults:** 8 services, 4 causes"
 
 
+ALSO = "Not operational (source interface is also a destination)."
+SAME = "Not operational (source same as destination)."
+
+
+def _decided(name: str, device: str, reason: str) -> dict:
+    """A port-mirror the fixed check found Down on the device's own word."""
+    return {"name": name, "service_type": "port-mirror", "devices": [device], "status": "down",
+            "basic_checks": {"status": "down", "needs_investigation": False, "reason": reason, "checks": [
+                {"check": "session", "status": "pass", "device": device, "observation": f"mon_{name}"},
+                {"check": "source", "status": "fault", "device": device, "observation": reason, "conclusive": True}]}}
+
+
+def _decided_case() -> tuple[CaseFile, list[dict]]:
+    """Three mirrors with one reason on two devices, one with another reason: as on 13 October 2026."""
+    records = [_decided("a1", "amst-data-sw", f"TF0/0/0/10/0: {ALSO}"), _decided("a2", "amst-data-sw", f"TF0/0/0/10/1: {ALSO}"),
+               _decided("c1", "cern-data-sw", f"TF0/0/0/22/1: {ALSO}"), _decided("c2", "cern-data-sw", f"TF0/0/0/22/0: {SAME}")]
+    case = CaseFile(budget=Budget(0, 0))
+    add_evidence(case, {"kind": "spine", "role": "service", "layer": "services", "payload": {"extra": {
+        "services": {f"port-mirror/{r['name']}": r for r in records}}}})
+    return case, [_row(r["name"], source="collection", first=R3, exact=True, kind="port-mirror") for r in records]
+
+
+def test_faults_the_fixed_check_decided_are_grouped_by_the_reason_the_device_gave():
+    case, rows = _decided_case()
+
+    lines = format_open_faults(open_fault_groups(case, rows))
+
+    assert lines == [
+        '- "Not operational (source interface is also a destination)": 3 port-mirror Down. First seen 6 Oct.',
+        "- `port-mirror/c2` Down. First seen 6 Oct.",
+    ]
+    assert digest_changes({}, R2, open_fault_groups(case, rows))[-3] == "**Still open:** 4 services, 2 causes"
+
+
+def test_fault_that_still_needs_an_investigation_is_not_put_in_a_reason_group():
+    case, rows = _decided_case()
+    services = case.evidence[0]["payload"]["extra"]["services"]
+    services["port-mirror/a1"]["basic_checks"]["needs_investigation"] = True      # its source port is down too
+
+    lines = format_open_faults(open_fault_groups(case, rows))
+
+    assert lines[0] == '- "Not operational (source interface is also a destination)": 2 port-mirror Down. First seen 6 Oct.'
+    assert "- `port-mirror/a1` Down. First seen 6 Oct." in lines
+
+
+def test_follow_up_gives_decided_faults_one_item_per_reason_and_asks_for_no_investigation():
+    from diagnostic_mas.case import open_issue
+    from diagnostic_mas.operator_report import format_followup_operator
+
+    case, _rows = _decided_case()
+    for name in ("a1", "a2", "c1", "c2"):
+        open_issue(case, code="service_down", severity="high", layer="services", edge_id=name, devices=[],
+                   message=f"port-mirror {name}: down", evidence_ids=[])
+
+    items = [line.split(". ", 1)[1] for line in format_followup_operator(case)]      # without the item numbers
+
+    closing = "no investigation is needed; resolving it is a change for a person to decide and approve."
+    assert items[:2] == [
+        "3 port-mirror services are Down on the fixed check's own reading, \"Not operational (source interface is "
+        f"also a destination)\", on `amst-data-sw` and `cern-data-sw`: {closing} Services: `a1`, `a2`, `c1`.",
+        "`c2` is Down on the fixed check's own reading, \"TF0/0/0/22/0: Not operational (source same as "
+        f"destination)\": {closing}",
+    ]
+    assert "Investigate collection-reported fault" not in "\n".join(items)
+
+
+def test_follow_up_names_a_few_services_of_a_large_group_and_counts_the_rest():
+    from diagnostic_mas.case import open_issue
+    from diagnostic_mas.operator_report import format_followup_operator
+
+    records = [_decided(f"m{n:02d}", f"pe{n % 5}-data-sw", f"TF0/0/0/10/{n}: {ALSO}") for n in range(24)]
+    case = CaseFile(budget=Budget(0, 0))
+    add_evidence(case, {"kind": "spine", "role": "service", "layer": "services", "payload": {"extra": {
+        "services": {f"port-mirror/{r['name']}": r for r in records}}}})
+    for r in records:
+        open_issue(case, code="service_down", severity="high", layer="services", edge_id=r["name"], devices=[],
+                   message="down", evidence_ids=[])
+
+    item = format_followup_operator(case)[0].split(". ", 1)[1]
+
+    assert item.startswith("24 port-mirror services are Down on the fixed check's own reading, ")
+    assert ", on 5 devices: " in item
+    assert item.endswith("Services: `m00`, `m01`, `m02`, `m03`, `m04`, `m05`, +18 more (see Services).")
+
+
 def test_long_list_of_single_faults_is_capped_with_a_count_of_the_rest():
     rows = [_row(f"s{n}", source="llm", exact=True) for n in range(8)]
 

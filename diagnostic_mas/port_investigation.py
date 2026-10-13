@@ -56,8 +56,13 @@ def _down_links(case: CaseFile) -> dict[str, list[str]]:
     return out
 
 
+def _physical(link: str) -> bool:
+    """True for a port with a slot position (``HundredGigE0/0/0/14``); a BVI or loopback has none."""
+    return bool(re.search(r"\d+/\d+/\d+/\d+", link))
+
+
 def _faulted_links(record: dict[str, Any], down: dict[str, list[str]]) -> set[tuple[str, str]]:
-    """(device, link) behind each faulted check; empty unless every fault is on a down link."""
+    """(device, physical link) behind the faulted checks; empty unless every fault is on a down interface."""
     links: set[tuple[str, str]] = set()
     basic = record.get("basic_checks") or {}
     if basic.get("status") != "down":
@@ -70,7 +75,9 @@ def _faulted_links(record: dict[str, Any], down: dict[str, list[str]]) -> set[tu
         link = next((name for name in down.get(device, []) if named and interfaces_match(named, name)), None)
         if link is None:
             return set()
-        links.add((device, link))
+        # A logical interface is down with its member ports; it has no port of its own to investigate.
+        if _physical(link):
+            links.add((device, link))
     return links
 
 

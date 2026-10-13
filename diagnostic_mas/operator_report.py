@@ -1680,14 +1680,39 @@ def format_followup_operator(case: CaseFile) -> list[str]:
             "(human must approve any configuration/state change). Services: "
             + ", ".join(f"`{n}`" for n in names) + "."
         )
+    from diagnostic_mas.open_faults import decided_reason, shared_reason
+
+    # Faults the fixed check decided need no investigation; those with one reason are one action.
+    decided: dict[tuple[str, str], tuple[int, list[str]]] = {}
     for issue in case.issues:
         name = str(issue.get("edge_id") or "").strip()
         if (name and name not in fault_names and name not in dp_findings
                 and issue.get("code") in {"service_down", "service_degraded"}
                 and issue.get("status") in {None, "open", "needs_human", "escalated"}):
             fault_names.add(name)
+            reason = decided_reason(records.get(name))
+            if reason:
+                key = (str(records[name].get("service_type") or "service"), shared_reason(reason))
+                if key not in decided:
+                    decided[key] = (len(items), [])
+                    items.append("")
+                decided[key][1].append(name)
+                continue
             items.append(f"Investigate collection-reported fault on `{name}` "
                          "before remediation (see Services for evidence).")
+    closing = "no investigation is needed; resolving it is a change for a person to decide and approve."
+    for (kind, reason), (slot, names) in decided.items():
+        if len(names) == 1:
+            items[slot] = (f"`{names[0]}` is Down on the fixed check's own reading, "
+                           f"\"{decided_reason(records[names[0]])}\": {closing}")
+            continue
+        devices = sorted({str(d) for n in names for d in records[n].get("devices") or [] if d})
+        place = " and ".join(f"`{d}`" for d in devices) if len(devices) <= 2 else f"{len(devices)} devices"
+        shown = ", ".join(f"`{n}`" for n in names[:6])
+        if len(names) > 6:
+            shown += f", +{len(names) - 6} more (see Services)"
+        items[slot] = (f"{len(names)} {kind} services are Down on the fixed check's own reading, \"{reason}\", "
+                       f"on {place}: {closing} Services: {shown}.")
     from diagnostic_mas.service_presence import disappeared
     absent_names = {r.get("name") for r in services_from_case(case).values() if disappeared(r)}
     for row in case.last_known_service_faults:

@@ -140,7 +140,9 @@ is treated as Established.
   digest starts with the same changes.
 - A device whose automated live queries timed out or failed. Further live queries to it are skipped
   for the rest of the run. NSO configuration may still be present and manual access may still work,
-  so this is not proof that the device is down. If NSO itself stopped answering, the scan stops
+  so this is not proof that the device is down. A single read that ran out of time while the
+  device was still printing its answer does not count: only that read fails, and later reads
+  still go to the device. If NSO itself stopped answering, the scan stops
   instead and produces no report; see
   [When NSO stops answering during a scan](DIAGNOSTIC_RUNNER.md#when-nso-stops-answering-during-a-scan).
 
@@ -195,6 +197,13 @@ itself, with "Down — decided by the fixed check", and its section names the se
 the address. The holder stays Up and its section notes the shared address. If the device's route
 cannot be read, the shared configuration alone decides nothing and the service is investigated as
 usual. Only l3rt services have a gateway address, so no other type is affected.
+
+A port mirror the device itself calls not operational needs no investigation either. The basic
+check reads `show monitor-session status detail`; when a source of the service's session is shown
+as "Not operational (reason)", for example because the source port is also the destination of
+another session, the service is reported Down with "Down — decided by the fixed check" and the
+device's reason. If the source port itself is down, the port is still investigated once, like any
+other down port.
 
 ### Why is a service Unknown when it looks fine?
 

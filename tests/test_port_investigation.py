@@ -127,6 +127,27 @@ def test_targets_are_down_ports_whose_services_they_fully_explain():
     ]
 
 
+def _routed_on_a_dark_port(*, port_down: bool) -> CaseFile:
+    """An l3rt as kans-data-sw had on 13 October 2026: its gateway interface is down with its only member port."""
+    port = "HundredGigE0/0/0/14" if port_down else "HundredGigE0/0/0/13"
+    checks = [("attachment", "fault" if port_down else "pass", f"{port}.0"), ("gateway", "fault", "BVI4219")]
+    case = _case(_service("routed", "l3rt", MICH, checks))
+    edges = case.evidence[0]["payload"]["extra"]["physical_operational_edges"]
+    edges += [{"id": f"if:{MICH}:{name}", "state": {"admin": "down", "oper": "down"}}
+              for name in ("HundredGigE0/0/0/14", "BVI4219")]
+    return case
+
+
+def test_logical_interface_that_is_down_with_its_port_is_not_investigated_as_a_port():
+    targets = pi.port_targets(_routed_on_a_dark_port(port_down=True))
+
+    assert [(t["port"], t["links"]) for t in targets] == [("HundredGigE0/0/0/14", {"HundredGigE0/0/0/14": ["routed"]})]
+
+
+def test_service_whose_only_fault_is_on_a_logical_interface_keeps_its_own_investigation():
+    assert pi.port_targets(_routed_on_a_dark_port(port_down=False)) == []
+
+
 @pytest.mark.asyncio
 async def test_each_port_is_investigated_once_and_its_services_are_explained():
     from diagnostic_mas.service_final_status import final_service_counts
