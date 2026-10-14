@@ -224,7 +224,8 @@ persistence and configured delivery.
 sensitive device configuration, so do not commit them.
 
 `--check-connection` starts the MCP server, asks NSO for its device list and, unless
-`--skip-llm` is given, checks the LLM key and model with a one-token request. It prints one
+`--skip-llm` is given, checks the LLM key and model with a one-token request. When the
+provider reports spend, it also prints the LLM budget that is left. It prints one
 line per check and exits with a non-zero status if any check fails; nothing is scanned,
 saved or published. A blank `FABRIC_AI_API_KEY` is reported as not configured, not as a
 failure.

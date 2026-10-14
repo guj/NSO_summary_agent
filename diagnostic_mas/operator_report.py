@@ -2250,6 +2250,9 @@ def format_run_details(
             f"{b.deep_checks_used}/{b.max_deep_checks} · "
             f"{b.handoffs_used}/{b.max_handoffs}"
         )
+    from agent.llm_usage import usage_lines
+
+    lines.extend(usage_lines(getattr(case, "llm_usage", None)))
     timed = [(name, dx.get("investigation")) for name, dx in _dataplane_by_name(case).items()
              if isinstance(dx.get("investigation"), dict)]
     if timed:

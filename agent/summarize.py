@@ -82,4 +82,6 @@ def fabric_openai_client(
         "timeout": httpx.Timeout(bound, connect=llm_connect_timeout_seconds(s)),
         "max_retries": retries,
     }
-    return OpenAI(**kwargs)
+    from agent.llm_usage import count_usage
+
+    return count_usage(OpenAI(**kwargs))

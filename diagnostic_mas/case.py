@@ -68,6 +68,8 @@ class CaseFile:
     last_known_service_faults: list[dict[str, Any]] = field(default_factory=list)
     # What each rule the operators have not decided would change; reporting only.
     undecided_rules: dict[str, Any] = field(default_factory=dict)
+    # Token counts for the scan, and its cost and the budget when the provider reports them.
+    llm_usage: dict[str, Any] = field(default_factory=dict)
     llm_halt_reason: str | None = None
     _evidence_seq: int = 0
     _issue_seq: int = 0

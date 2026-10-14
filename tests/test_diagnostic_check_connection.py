@@ -170,6 +170,28 @@ def test_check_connection_reports_the_working_llm_model(capsys, monkeypatch):
     assert "LLM: OK (model m1)" in capsys.readouterr().out
 
 
+def test_check_connection_shows_the_llm_budget_when_the_provider_reports_it(capsys, monkeypatch):
+    monkeypatch.setenv("FABRIC_AI_API_KEY", "sk-test")
+    # The fake answers every address but /key/info with the second payload, so it also serves /user/info.
+    _fake_llm(monkeypatch, key_info={"info": {"spend": 444.05}}, chat={"model": "m1", "user_info": {
+        "spend": 280.54, "max_budget": 500.0, "budget_duration": "1mo", "budget_reset_at": "2026-11-01T00:00:00Z"}})
+
+    code, _, _ = _check()
+
+    assert code == 0
+    assert "  LLM budget: $280.54 of $500.00 used (1mo), $219.46 left, resets 2026-11-01." in capsys.readouterr().out
+
+
+def test_check_connection_says_when_the_provider_reports_no_spend(capsys, monkeypatch):
+    monkeypatch.setenv("FABRIC_AI_API_KEY", "sk-test")
+    _fake_llm(monkeypatch, chat={"model": "m1"})
+
+    code, _, _ = _check()
+
+    assert code == 0
+    assert "  LLM spend: this provider does not report spend or budget." in capsys.readouterr().out
+
+
 def test_check_connection_fails_when_the_llm_rejects_the_request(capsys, monkeypatch):
     monkeypatch.setenv("FABRIC_AI_API_KEY", "sk-bad")
     _fake_llm(monkeypatch, chat=401)

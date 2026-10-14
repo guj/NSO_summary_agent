@@ -163,6 +163,36 @@ def test_api_preferred_over_env(monkeypatch):
     assert lifetime.expires_at == datetime(2026, 8, 1, 0, 0, tzinfo=UTC)
 
 
+def test_key_information_is_asked_at_the_provider_root_when_the_url_ends_in_v1():
+    import urllib.error
+    from agent.fabric_key import _fetch_key_lifetime_from_api
+
+    asked = []
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps({"info": {"spend": 444.05, "max_budget": None}}).encode()
+
+    def urlopen(req, timeout=None):
+        asked.append(req.full_url)
+        # As a LiteLLM proxy answers: its own information sits at the root, not under the chat API's /v1.
+        if req.full_url != "https://llm.example/key/info":
+            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", hdrs=None, fp=None)
+        return FakeResp()
+
+    with patch("urllib.request.urlopen", side_effect=urlopen):
+        lifetime = _fetch_key_lifetime_from_api(_settings(fabric_api_url="https://llm.example/v1"))
+
+    assert asked[0] == "https://llm.example/key/info"
+    assert (lifetime.spend, lifetime.max_budget) == (444.05, None)
+
+
 def test_expired_warning_days_remaining():
     expires = datetime.now(UTC) - timedelta(days=2)
     lifetime = FabricKeyLifetime(expires_at=expires, source="api")

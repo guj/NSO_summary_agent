@@ -56,6 +56,17 @@ def test_a_long_name_is_not_read_as_an_abbreviation():
     assert expand_interface_name("Bundle-Ether100") == "Bundle-Ether100"
 
 
+def test_only_bvi_loopback_and_null_have_no_port_of_their_own():
+    from nso_facts.topology.interfaces import has_own_port
+
+    for name in ("BVI4219", "BV4219", "Loopback0", "Lo0", "Null0", "Nu0"):
+        assert not has_own_port(name), name
+    # Ethernet ports, breakout lanes and bundles can be inspected; so can any type the table does not know.
+    for name in ("HundredGigE0/0/0/14", "Hu0/0/0/14", "TwentyFiveGigE0/0/0/10/2", "FourHundredGigE0/0/0/26",
+                 "Bundle-Ether100", "BE100", "MgmtEth0/RP0/CPU0/0", "tunnel-te1"):
+        assert has_own_port(name), name
+
+
 def test_canonical_interface_name_from_physical():
     physical = [
         {

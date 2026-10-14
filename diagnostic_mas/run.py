@@ -25,6 +25,9 @@ from agent.fabric_key import (  # noqa: E402
     prepare_fabric_llm,
     resolve_fabric_model,
 )
+from agent.llm_usage import (  # noqa: E402
+    begin_llm_accounting, budget_line, end_llm_accounting, read_llm_spend,
+)
 from agent.publish import publish_all  # noqa: E402
 from diagnostic_mas.case import Budget, CaseFile  # noqa: E402
 from diagnostic_mas.coordinator import (  # noqa: E402
@@ -183,6 +186,7 @@ def _check_llm(settings) -> bool:
             ):
                 if line:
                     print(f"  {line}")
+            print(f"  {budget_line(read_llm_spend(settings))}")
             return True
         reason = model.detail or "model check failed"
     print(f"LLM: FAILED — {reason}", file=sys.stderr)
@@ -227,6 +231,8 @@ async def _run(args: argparse.Namespace) -> int:
     settings = load_settings(require_llm_key=not args.skip_llm)
     force_skip_llm = False
     if not args.skip_llm:
+        # Before the first request, so the scan's cost includes the start-up probe.
+        print(begin_llm_accounting(settings), file=sys.stderr)
         _, force_skip_llm = prepare_fabric_llm(settings)
     skip_llm = bool(args.skip_llm or force_skip_llm or not settings.fabric_api_key)
     dry_run = resolve_dry_run(
@@ -658,6 +664,8 @@ async def _run_after_accounting(
         except Exception as exc:  # noqa: BLE001
             reporting_notes.append(f"Final LLM summary failed: {exc}")
             narrative = ""
+        # After the last request: what the scan used, and its cost when the provider reports it.
+        case.llm_usage = report_case.llm_usage = end_llm_accounting(settings)
     duration = time.monotonic() - t0
     report = render_report(
         report_case,

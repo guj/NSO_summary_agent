@@ -31,6 +31,7 @@ def case_to_dict(case: CaseFile) -> dict[str, Any]:
         "service_coverage": dict(case.service_coverage),
         "last_known_service_faults": list(case.last_known_service_faults),
         "undecided_rules": dict(case.undecided_rules),
+        "llm_usage": dict(case.llm_usage),
     }
 
 

@@ -62,6 +62,15 @@ def expand_interface_name(name: str) -> str:
     return name
 
 
+# Interface types that are not a port and have none of their own to inspect.
+_NO_PORT_OF_ITS_OWN = ("BVI", "Loopback", "Null")
+
+
+def has_own_port(name: str) -> bool:
+    """False for a BVI, Loopback or Null interface; True for every other name, a bundle included."""
+    return not expand_interface_name(name).startswith(_NO_PORT_OF_ITS_OWN)
+
+
 def canonical_interface_name(
     device: str,
     interface: str,

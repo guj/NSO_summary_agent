@@ -69,7 +69,8 @@ exposes a similar `/key/info`). If you substituted a different OpenAI-compatible
 URL/key, follow that provider’s key-rotation docs instead.
 
 Every LLM-enabled run prints key expiry **and** spend allowance to **stderr**
-before collection (from `GET {FABRIC_AI_API_URL}/key/info`):
+before collection (from `GET /key/info` at the provider's root, so a
+`FABRIC_AI_API_URL` that ends in `/v1` works too):
 
 ```text
 FABRIC AI API key lifetime: expires 2027-01-21 00:00 UTC — 125 days remaining (/key/info)
@@ -87,7 +88,7 @@ already expired, auth-invalid, or spend-budget exhausted.
 
 Lookup order:
 
-1. `**GET {FABRIC_AI_API_URL}/key/info**` (LiteLLM; uses your `FABRIC_AI_API_KEY` as Bearer token) — use the `**expires**`, `**spend**`, and `**max_budget**` fields
+1. `**GET /key/info**` at the provider's root, which is `FABRIC_AI_API_URL` without a trailing `/v1` (LiteLLM; uses your `FABRIC_AI_API_KEY` as Bearer token) — use the `**expires**`, `**spend**`, and `**max_budget**` fields
 2. `**.env` fallback** when `/key/info` is unavailable:
   - `FABRIC_AI_KEY_EXPIRES=2026-07-01`, or
   - `FABRIC_AI_KEY_CREATED=2026-06-25` + `FABRIC_AI_KEY_LIFETIME_DAYS=30` (approximate only)
@@ -113,12 +114,15 @@ LLM API keys are issued with a fixed TTL (**1–30 days**, max **30** per key). 
 ```bash
 set -a && source .env && set +a
 
+# The provider's root: the URL without a trailing slash or /v1
+ROOT="${FABRIC_AI_API_URL%/}"; ROOT="${ROOT%/v1}"
+
 # Preferred: server metadata (FABRIC AI / LiteLLM)
-curl -s "${FABRIC_AI_API_URL%/}/key/info" \
+curl -s "$ROOT/key/info" \
   -H "Authorization: Bearer $FABRIC_AI_API_KEY" | python3 -m json.tool
 
 # Sanity check the key still works
-curl -s "${FABRIC_AI_API_URL%/}/v1/models" \
+curl -s "$ROOT/v1/models" \
   -H "Authorization: Bearer $FABRIC_AI_API_KEY" | python3 -m json.tool
 ```
 
@@ -687,6 +691,29 @@ the border-route line only when its count differs from the previous scan. The co
 are saved with the scan as `undecided_rules`. All of this lives in
 `diagnostic_mas/undecided_rules.py`; remove a rule's count there once the rule is
 decided and built into the fixed checks.
+
+### LLM usage, cost and budget
+
+A scan that uses the LLM reports what it used, in two layers.
+
+- **Token counts, with any OpenAI-compatible endpoint.** Every answer carries its
+  input and output token counts; the scan adds them up, the start-up model probe
+  included. Run details show `LLM usage: N requests · X input tokens · Y output tokens`.
+- **Cost and budget, when the provider reports them.** A LiteLLM proxy serves
+  `GET /key/info` and `GET /user/info` at its root. The scan reads them before its
+  first request and after its last. The start of the scan prints one line to stderr,
+  for example `LLM budget: $280.54 of $500.00 used (1mo), $219.46 left, resets 2026-11-01.`
+  Run details then show the scan's cost, which is the key's spend at the end less
+  its spend at the start, and the budget that is left. The budget is the key's own
+  when it has one, otherwise its user's.
+
+With any other provider the cost line reads `LLM cost: not reported by this provider`
+and the token counts are still shown. Two limits: the cost is the key's spend, so
+anything else using the same key during the scan is included, and a proxy records
+spend shortly after each request, so the last requests may not be counted yet.
+The record is saved with the scan as `llm_usage` in `case.json`.
+`nso-diagnostic-run --check-connection` prints the budget line too. A failed
+read never stops a scan.
 
 ### Dataplane investigation gaps and timing
 

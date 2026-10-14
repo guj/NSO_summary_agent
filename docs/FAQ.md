@@ -177,12 +177,23 @@ within the limits set by `--max-dataplane-per-category` and `--max-dataplane-ser
 Per-service sections appear only for services that were investigated or have a fault; add
 `--services-detail` to list every instance.
 
-A down port is investigated once, before the services. It qualifies when a service whose basic
-check is Down attaches to a link recorded as down, and every failed check of that service is on
-such a link. Those services keep the Down from their own basic check, show "Down — port
-investigated once" in the table, and are not investigated individually; the port's finding is
-printed under its device. A port investigation that does not finish explains nothing, and its
-services are investigated as usual. `--max-port-investigations` sets the ceiling (default 6).
+A down port is investigated once, before the services. It explains a service when the
+service's basic check is Down, every failed check of that service is on a link recorded as down,
+and what is still up cannot carry traffic: a side of the service has no attachment up, or fewer
+than two of its ends are up in all. Those services keep the Down from their own basic check,
+show "Down — port investigated once" in the table, and are not investigated individually; the
+port's finding is printed under its device.
+
+A service with an attachment up on every side, and two ends up in all, is impaired, not down:
+the port does not explain it, and it keeps its own investigation, which can report it Degraded.
+The sides come from the service's configuration; a site-to-site service has two, so one with
+nothing up at one site is Down however many are up at the other. For a routed service a working
+gateway counts as an end. One with a single attachment left and its gateway up is therefore left
+to its own investigation as well: whether that is Degraded or Down has not been decided. A BVI, Loopback or Null
+interface is never investigated as a port: it has no port of its own, and a BVI is down because
+its member port is down. A bundle is investigated like any other port. A port investigation that
+does not finish explains nothing, and its services are investigated as usual.
+`--max-port-investigations` sets the ceiling (default 6).
 
 A cut-off device is handled the same way. A device is cut off when it answered the scan's
 routing queries and has no IS-IS adjacency and no BGP session up. It is investigated once, and

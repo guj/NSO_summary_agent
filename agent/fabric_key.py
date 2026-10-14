@@ -255,6 +255,9 @@ def resolve_fabric_model(settings: Settings) -> FabricModelResolve:
             detail=f"error ({exc})",
         )
 
+    from agent.llm_usage import record_llm_usage
+
+    record_llm_usage(payload)
     resolved = payload.get("model") if isinstance(payload, dict) else None
     if isinstance(resolved, str) and resolved.strip():
         return FabricModelResolve(
@@ -307,10 +310,14 @@ def get_fabric_api_key_lifetime(settings: Settings) -> FabricKeyLifetime:
 
 
 def _fetch_key_lifetime_from_api(settings: Settings) -> FabricKeyLifetime:
+    from agent.llm_usage import provider_root
+
     base = settings.fabric_api_url.rstrip("/")
+    # A proxy serves its own information at its root, not under the chat API's /v1; ask there first.
+    root = provider_root(base)
     auth_seen = False
-    for path in ("/key/info", "/v1/key/info"):
-        url = f"{base}{path}"
+    for url in dict.fromkeys((f"{root}/key/info", f"{base}/key/info", f"{base}/v1/key/info")):
+        path = url[len(root):]
         req = urllib.request.Request(
             url,
             headers={"Authorization": f"Bearer {settings.fabric_api_key}"},

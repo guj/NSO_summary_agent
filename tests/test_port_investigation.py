@@ -148,6 +148,107 @@ def test_service_whose_only_fault_is_on_a_logical_interface_keeps_its_own_invest
     assert pi.port_targets(_routed_on_a_dark_port(port_down=False)) == []
 
 
+def _two_of_three_up(name: str = "tri") -> dict:
+    """As kans-data-sw had on 13 October 2026: one of three attachments on a dark lane, the other two up."""
+    return _service(name, "l2sts", MICH, [
+        ("attachment", "fault", "Hu0/0/0/25/0.0"),
+        ("attachment", "pass", "Hu0/0/0/13.2081"),
+        ("attachment", "pass", "Hu0/0/0/13.2082"),
+        ("membership", "fault", f"Hu0/0/0/25/0.0 in bg-{name}:bd-{name}"),
+    ])
+
+
+def test_service_with_two_attachments_still_up_is_not_one_the_dark_port_explains():
+    # Alone on the port, it leaves no port to investigate.
+    assert pi.port_targets(_case(_two_of_three_up())) == []
+    # Beside a service the port does explain, it is left out of the port's list.
+    shared = _case(_two_of_three_up(), _on_dark_lane("c", "Hu0/0/0/25/0"))
+    assert [(t["port"], t["links"]) for t in pi.port_targets(shared)] == [
+        ("HundredGigE0/0/0/25", {"HundredGigE0/0/0/25/0": ["c"]})]
+
+
+@pytest.mark.asyncio
+async def test_service_with_two_attachments_still_up_keeps_its_own_investigation():
+    from diagnostic_mas.dataplane_verify import select_dataplane_candidates
+
+    case = _case(_two_of_three_up(), _on_dark_lane("c", "Hu0/0/0/25/0"))
+    explained = await _run(case, _loop([]))
+
+    assert explained == {"c"}
+    picked = select_dataplane_candidates(case, per_category=30, exclude=explained)
+    # Two of its three ends still connect: whether it is Degraded is for its own investigation to say.
+    assert [rec["name"] for _ev, rec in picked] == ["tri"]
+
+
+def _sided(name: str, kind: str, sides: list[tuple[str, list[tuple[str, str]]]], *, gateway: str | None = None) -> dict:
+    """A service with its configured sides: (device, [(attachment, pass or fault)]); a routed one has a gateway."""
+    checks = [{"check": "attachment", "status": status, "device": device, "observation": ac}
+              for device, attachments in sides for ac, status in attachments]
+    checks += [{"check": "membership", "status": "fault", "device": device, "observation": f"{ac} in bg-{name}:bd-{name}"}
+               for device, attachments in sides for ac, status in attachments if status == "fault"]
+    if gateway:
+        checks.append({"check": "gateway", "status": gateway, "device": sides[0][0], "observation": "BVI4219"})
+
+    def side(device: str, attachments: list[tuple[str, str]]) -> dict:
+        return {"device": device, "interface": [
+            {"type": "HundredGigE", "id": ac.removeprefix("Hu").split(".")[0], "outervlan": int(ac.split(".")[1])}
+            for ac, _status in attachments]}
+
+    intent = ({"site-a": side(*sides[0]), "site-z": side(*sides[1])} if len(sides) == 2 else side(*sides[0]))
+    devices = [device for device, _ in sides]
+    return {"name": name, "service_type": kind, "devices": devices, "in_sync": True,
+            "device_sync": {d: "in-sync" for d in devices}, "system_status": "up",
+            "dataplane_status": "not_checked", "status": "down",
+            "basic_checks": {"status": "down", "needs_investigation": True, "checks": checks, "intent": intent}}
+
+
+DARK = [("Hu0/0/0/24/0.0", "fault"), ("Hu0/0/0/24/1.0", "fault"), ("Hu0/0/0/25/0.0", "fault")]
+LIT = [("Hu0/0/0/1.11", "pass"), ("Hu0/0/0/1.12", "pass"), ("Hu0/0/0/1.13", "pass")]
+
+
+def test_side_with_nothing_up_makes_the_service_down_however_many_are_up_at_the_other():
+    # Three attachments up at one end and none at the other: nothing crosses.
+    targets = pi.port_targets(_case(_sided("split", "l2sts", [(MICH, DARK), (FIU, LIT)])))
+
+    # It is listed on each dark lane it attaches to: two on port 24, one on port 25.
+    assert {t["port"]: t["links"] for t in targets} == {
+        "HundredGigE0/0/0/24": {"HundredGigE0/0/0/24/0": ["split"], "HundredGigE0/0/0/24/1": ["split"]},
+        "HundredGigE0/0/0/25": {"HundredGigE0/0/0/25/0": ["split"]}}
+
+
+def test_service_with_an_attachment_up_on_every_side_keeps_its_own_investigation():
+    # As at kans on 13 October 2026: one of two down at one end, the other end up.
+    one_each = _sided("tri", "l2sts", [(MICH, [("Hu0/0/0/25/0.0", "fault"), ("Hu0/0/0/13.2081", "pass")]),
+                                       (FIU, [("Hu0/0/0/1.11", "pass")])])
+
+    assert pi.port_targets(_case(one_each)) == []
+
+
+def test_bridge_on_one_device_with_a_single_attachment_left_is_down():
+    alone = _sided("b", "l2bridge", [(MICH, [("Hu0/0/0/25/0.0", "fault"), ("Hu0/0/0/13.2055", "pass")])])
+
+    assert [t["port"] for t in pi.port_targets(_case(alone))] == ["HundredGigE0/0/0/25"]
+
+
+def test_routed_service_with_an_attachment_and_its_gateway_up_is_not_decided_by_the_port():
+    host_left = [(MICH, [("Hu0/0/0/25/0.0", "fault"), ("Hu0/0/0/13.2055", "pass")])]
+    # Whether one host left makes it Degraded or Down is not settled: the rule stays out.
+    assert pi.port_targets(_case(_sided("routed", "l3rt", host_left, gateway="pass"))) == []
+    # With no attachment up there is nothing to doubt.
+    none_left = [(MICH, [("Hu0/0/0/25/0.0", "fault")])]
+    assert [t["port"] for t in pi.port_targets(_case(_sided("routed", "l3rt", none_left, gateway="pass")))] == [
+        "HundredGigE0/0/0/25"]
+
+
+def test_bundle_that_is_down_under_a_service_is_still_investigated_once():
+    case = _case(_service("bundled", "l2sts", MICH, [("attachment", "fault", "BE100.3913")]))
+    case.evidence[0]["payload"]["extra"]["physical_operational_edges"].append(
+        {"id": f"if:{MICH}:Bundle-Ether100", "state": {"admin": "down", "oper": "down"}})
+
+    assert [(t["port"], t["links"]) for t in pi.port_targets(case)] == [
+        ("Bundle-Ether100", {"Bundle-Ether100": ["bundled"]})]
+
+
 @pytest.mark.asyncio
 async def test_each_port_is_investigated_once_and_its_services_are_explained():
     from diagnostic_mas.service_final_status import final_service_counts

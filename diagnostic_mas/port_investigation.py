@@ -16,7 +16,7 @@ from typing import Any
 
 from diagnostic_mas.case import CaseFile, DrillSession, add_evidence, open_issue, set_issue_status
 from nso_facts.mcp_client import successful_live_devices
-from nso_facts.topology.interfaces import interfaces_match
+from nso_facts.topology.interfaces import has_own_port, interfaces_match
 
 SOURCE = "port_investigation"
 COVERAGE = "port_investigated"
@@ -56,16 +56,59 @@ def _down_links(case: CaseFile) -> dict[str, list[str]]:
     return out
 
 
-def _physical(link: str) -> bool:
-    """True for a port with a slot position (``HundredGigE0/0/0/14``); a BVI or loopback has none."""
-    return bool(re.search(r"\d+/\d+/\d+/\d+", link))
+def _sides(intent: Any) -> list[set[tuple[str, str]]]:
+    """The service's configured sides, each as its (device, attachment) pairs: two for site-to-site, else one."""
+    from diagnostic_mas.operational_checks.probe import attachments
+
+    sides: list[set[tuple[str, str]]] = []
+
+    def visit(node: Any) -> None:
+        if isinstance(node, dict):
+            if isinstance(node.get("device"), str) and "interface" in node:
+                sides.append({(end["device"], end["ac"]) for end in attachments(node)})
+                return
+            for value in node.values():
+                visit(value)
+        elif isinstance(node, list):
+            for value in node:
+                visit(value)
+
+    visit(intent)
+    return [side for side in sides if side]
+
+
+def _still_carries(basic: dict[str, Any]) -> bool:
+    """True when what is still up may carry traffic: an attachment up on every side, and two ends up in all.
+
+    A gateway that is up is an end, so a routed service with one attachment left is not called Down here:
+    whether that is Down or Degraded is not settled, and its own investigation says.
+    """
+    checks = basic.get("checks") or []
+    up = {(str(c.get("device") or ""), str(c.get("observation") or "")) for c in checks
+          if c.get("check") == "attachment" and c.get("status") == "pass"}
+    # Without the configuration, each device that has attachments is taken as a side.
+    sides = _sides(basic.get("intent")) or [
+        {(d, ac) for d, ac in ((str(c.get("device") or ""), str(c.get("observation") or ""))
+                               for c in checks if c.get("check") == "attachment") if d == device}
+        for device in sorted({str(c.get("device") or "") for c in checks if c.get("check") == "attachment"})]
+    for side in sides:
+        if not any(device == d and interfaces_match(ac, a) for device, ac in up for d, a in side):
+            return False
+    gateway = any(c.get("check") == "gateway" and c.get("status") == "pass" for c in checks)
+    return len(up) + gateway >= 2
 
 
 def _faulted_links(record: dict[str, Any], down: dict[str, list[str]]) -> set[tuple[str, str]]:
-    """(device, physical link) behind the faulted checks; empty unless every fault is on a down interface."""
+    """(device, port) behind the faulted checks; empty unless the down interfaces alone leave the service Down.
+
+    Every fault must be on a down interface, and what is left up must not be able to carry traffic.
+    """
     links: set[tuple[str, str]] = set()
     basic = record.get("basic_checks") or {}
     if basic.get("status") != "down":
+        return links
+    # Still carrying on what is left: impaired, not down. Its own investigation says how far.
+    if _still_carries(basic):
         return links
     for check in basic.get("checks") or []:
         if check.get("status") != "fault":
@@ -75,8 +118,8 @@ def _faulted_links(record: dict[str, Any], down: dict[str, list[str]]) -> set[tu
         link = next((name for name in down.get(device, []) if named and interfaces_match(named, name)), None)
         if link is None:
             return set()
-        # A logical interface is down with its member ports; it has no port of its own to investigate.
-        if _physical(link):
+        # A BVI is down with its member port and has no port of its own to investigate.
+        if has_own_port(link):
             links.add((device, link))
     return links
 
