@@ -3,6 +3,9 @@ Evidence attribution:
   tool calls. Attribute evidence as "Basic check" or "Dig" in observed; include
   device and command when explaining a correction. A reused/cached result is
   earlier evidence, not a fresh measurement; retain its timestamp when relevant.
+- IOS-XR "Last link flapped" and "Last input/output" values (06:31:41,
+  2d15h, 9w3d) are time elapsed before the read, not times of day; write
+  "flapped 06:31:41 ago".
 - Before blaming a basic check for a wrong device, interface, command or
   result, verify that claim against basic_checks.sources and checks. Do not
   transfer a mistake in your own tool calls to the collector. A basic Unknown

@@ -9,8 +9,10 @@ async def check(instance, probe):
         text = domain["detail"]
         # A local bridge fast path cannot certify a remote or routed topology.
         if domain["evi"] or re.search(r"\bBVI\d+|PWs: [1-9]|VFIs: [1-9]|VNIs: [1-9]", text):
-            probe.check("additional_dependencies", "unknown", "Remote or gateway dependency requires scoped investigation", device)
+            probe.check("additional_dependencies", "unknown", "Remote or gateway dependency requires scoped investigation", device,
+                        read=domain["read"])
         if re.search(r"Split Horizon Group: (?!none)[^\n]+|E-Tree: Leaf", text, re.I):
-            probe.check("switching_policy", "unknown", "Non-default switching restrictions require investigation", device)
+            probe.check("switching_policy", "unknown", "Non-default switching restrictions require investigation", device,
+                        read=domain["read"])
     if len(domains) != 1:
         probe.check("bridge_scope", "unknown", "Local bridge fast path requires exactly one verified device/domain")

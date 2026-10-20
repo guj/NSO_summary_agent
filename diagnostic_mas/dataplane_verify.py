@@ -1743,6 +1743,65 @@ def empty_mcp_tool_name_error(params: dict[str, Any] | None) -> str:
     )
 
 
+def _json_body(body: str) -> Any:
+    """The tool answer as JSON (dict or list), or None for CLI text."""
+    if body.lstrip()[:1] not in ("{", "["):
+        return None
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, (dict, list)) else None
+
+
+def _compact_json(value: Any) -> str:
+    return json.dumps(value, separators=(",", ":"), ensure_ascii=False, default=str)
+
+
+def _clip_json_body(tname: str, data: Any, *, service_name: str, limit: int) -> str:
+    """JSON for the dig LLM: whole if it fits compact, else whole list entries that concern the service.
+
+    Filtering line by line would keep a matching field and drop its siblings, such as an
+    entry's name, which the LLM then cannot read or copy.
+    """
+    compact = _compact_json(data)
+    if len(compact) <= limit:
+        return compact
+    bits = [p.lower() for p in re.split(r"[-_]", str(service_name or "")) if len(p) >= 4][:4]
+    kept_total = [0, 0]
+
+    def prune(node: Any) -> Any:
+        if isinstance(node, dict):
+            out = {}
+            for key, value in node.items():
+                pruned = prune(value)
+                if pruned in ([], {}) and value not in ([], {}):
+                    continue  # emptied by the filter
+                out[key] = pruned
+            return out
+        if isinstance(node, list) and node and all(isinstance(e, dict) for e in node):
+            texts = [_compact_json(e).lower() for e in node]
+            chosen = [e for e, t in zip(node, texts) if bits and any(b in t for b in bits)]
+            if not chosen:
+                chosen = [e for e, t in zip(node, texts) if _CONFIG_KEEP_RE.search(t)]
+            kept_total[0] += len(chosen)
+            kept_total[1] += len(node)
+            return chosen
+        return node
+
+    filtered = _compact_json(prune(data))
+    note = f"kept {kept_total[0]} of {kept_total[1]} list entries; body {len(compact)} chars"
+    if kept_total[0] and len(filtered) <= limit:
+        return f"[filtered {tname}: {note}]\n{filtered}"
+    source = filtered if kept_total[0] else compact
+    keep = max(0, limit - 96)
+    return (
+        f"[truncated {tname}: {note + '; ' if kept_total[0] else ''}showing {keep} of {len(source)} chars]\n"
+        + source[:keep]
+        + f"\n\n[truncated: output cut at {keep} of {len(source)} chars]"
+    )
+
+
 def clip_dataplane_tool_content(
     tool_name: str,
     text: str,
@@ -1760,6 +1819,9 @@ def clip_dataplane_tool_content(
     except (json.JSONDecodeError, TypeError):
         parsed = raw_in
     body = unwrap_mcp_result_text(parsed)
+    data = _json_body(body)
+    if data is not None:
+        return _clip_json_body(tname, data, service_name=service_name, limit=limit)
     original_len = len(body)
 
     config_like = tname in {

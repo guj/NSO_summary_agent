@@ -254,6 +254,77 @@ def _routing_count_prose(count: str) -> str:
     return f"{s} up"
 
 
+# Per layer: a working session's state, its display word, and the routers at the far end.
+_ROUTING_WORDS = {"routing": ("established", "Established", "peers"),
+                  "underlay": ("up", "up", "neighbors")}
+_UNREAD = frozenset({"", "unknown", "none"})
+
+
+def _one_sided_routing(case: CaseFile, device: str, layer: str) -> str | None:
+    """A device's BGP or IS-IS line when some sessions were read from one end only; else None.
+
+    Up still means confirmed from both ends. A session only this device could
+    read shows this end's state; one only the far end could read shows the
+    peer's, so an unread device is not shown as if its sessions were down.
+    """
+    from nso_facts.fleet_rollups import merged_edges, operational_layers, static_layers
+
+    topology = topology_from_case(case)
+    op = operational_layers(topology)
+    if op is None:
+        return None
+    ok_state, ok_word, others = _ROUTING_WORDS[layer]
+    up = total = 0
+    here: dict[str, list[str]] = {}   # this end's state -> far ends not read
+    far: dict[str, list[str]] = {}    # far end's state -> far ends, this end not read
+    rest: dict[str, list[str]] = {}   # status -> far ends, both ends read (or neither)
+    for edge in merged_edges(op, static_layers(topology), layer):
+        ends = [(edge.get(side) or {}).get("device") for side in ("local", "remote")]
+        if device not in ends:
+            continue
+        total += 1
+        state = edge.get("state") or {}
+        status = str(state.get("status") or "unknown").lower()
+        if status == "up":
+            up += 1
+            continue
+        mine, theirs = ("local", "remote") if ends[0] == device else ("remote", "local")
+        peer = str(ends[1] if mine == "local" else ends[0])
+        own = str(state.get(mine) or "").lower()
+        other = str(state.get(theirs) or "").lower()
+        if own not in _UNREAD and other in _UNREAD:
+            here.setdefault(own, []).append(peer)
+        elif own in _UNREAD and other not in _UNREAD:
+            far.setdefault(other, []).append(peer)
+        else:
+            rest.setdefault(status, []).append(peer)
+    if not here and not far:
+        return None
+
+    def word(state: str) -> str:
+        return ok_word if state == ok_state else state.capitalize()
+
+    def groups(by_state: dict[str, list[str]], fmt: str) -> list[str]:
+        order = sorted(by_state, key=lambda s: (s != ok_state, s))
+        return [fmt.format(n=len(by_state[s]), word=word(s), names=", ".join(sorted(by_state[s])))
+                for s in order]
+
+    if far and not (up or here or rest):
+        seen = far.pop(ok_state, [])
+        line = f"not read on {device}; its {others} report {len(seen)} of {total} {ok_word}"
+        if seen:
+            line += f" ({', '.join(sorted(seen))})"
+        return line + "".join(", " + g for g in groups(far, "{n} {word} ({names})"))
+    parts = [f"{up}/{total} up"]
+    for state in sorted(here, key=lambda s: (s != ok_state, s)):
+        names = ", ".join(sorted(here[state]))
+        parts.append(f"{len(here[state])} {word(state)} here, far end not read ({names})"
+                     if state == ok_state else f"{len(here[state])} {word(state)} ({names})")
+    parts += groups(far, "{n} not read here, {word} at the far end ({names})")
+    parts += [f"{len(peers)} {status} ({', '.join(sorted(peers))})" for status, peers in sorted(rest.items())]
+    return "; ".join(parts)
+
+
 _BGP_EDGE_ID_RE = re.compile(
     r"^bgp:(?P<a>\d+\.\d+\.\d+\.\d+):(?P<b>\d+\.\d+\.\d+\.\d+):"
     r"(?P<dev_a>[^:]+):(?P<dev_b>.+)$"
@@ -354,7 +425,8 @@ def _bgp_routing_qualification(
     Distinguishes spine ``0/N`` from incomplete peer live checks vs later
     drill evidence that the reachable side is Established.
     """
-    base = _routing_count_prose(bgp_count)
+    one_sided = _one_sided_routing(case, device, "routing")
+    base = one_sided or _routing_count_prose(bgp_count)
     incomplete = _bgp_incomplete_peer_issues(case, device)
     if not incomplete:
         return base, None
@@ -376,7 +448,7 @@ def _bgp_routing_qualification(
             up_peers.append(peer)
 
     # Qualify spine count whenever bidirectional live verification was incomplete.
-    if base != "N/A":
+    if base != "N/A" and not one_sided:
         bgp_prose = f"{base} (initial; peer live checks unavailable)"
     else:
         bgp_prose = base
@@ -835,7 +907,8 @@ def format_devices_operator(case: CaseFile) -> list[str]:
         bgp_prose, drill_line = _bgp_routing_qualification(
             case, device, str(row.get("bgp") or "—")
         )
-        isis = _routing_count_prose(str(row.get("isis") or "—"))
+        isis = (_one_sided_routing(case, device, "underlay")
+                or _routing_count_prose(str(row.get("isis") or "—")))
         lines.append(f"**Routing:** BGP {bgp_prose} · IS-IS {isis}")
         if drill_line:
             lines.append(drill_line)
@@ -1735,6 +1808,7 @@ def format_followup_operator(case: CaseFile) -> list[str]:
     # 1) One action per device for live-MCP quarantine and/or sync unknowns.
     from nso_facts.mcp_client import (
         live_mcp_failure_kind,
+        nso_could_not_connect,
         parse_live_mcp_collection_phase,
         parse_live_mcp_read_timeout_sec,
     )
@@ -1778,6 +1852,14 @@ def format_followup_operator(case: CaseFile) -> list[str]:
                 f"to restore automated live checks for `{device}` and clear "
                 f"collection gaps for up to {services_n} unknown "
                 f"service{'s' if services_n != 1 else ''} attributed here"
+            )
+        if nso_could_not_connect(msg):
+            # NSO's own session to the device failed; MCP and the NSO CLI would meet the same wall.
+            return (
+                f"Check NSO's management connection to `{device}` {resolve}: NSO's own "
+                f"attempt to connect to the device timed out during {site} {phase}; "
+                f"`devices device {device} connect` in the NSO CLI shows whether NSO can "
+                "reach it (not device down)."
             )
         if timeout:
             what = (

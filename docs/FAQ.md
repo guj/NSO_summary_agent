@@ -125,7 +125,22 @@ The count comes from the first collection pass, but for at least one session the
 not be checked live in this run, so the session was not verified from both sides. When a follow-up
 check confirms the session from the reachable side, a **Drill:** line says so. Under a device that
 could not be read, that line names the peer that reported the session. An unverified far
-end is a gap in evidence, not a sign that the session is down.
+end is a gap in evidence, not a sign that the session is down. When one end did read the
+session, the line shows that reading instead (next question).
+
+### What do "Established here, far end not read" and "not read on <device>" mean?
+
+```text
+**Routing:** BGP 17/21 up; 3 Established here, far end not read (brist-data-sw, cien-data-sw, prin-data-sw); 1 Idle (cape-data-sw) · IS-IS 10/10 up
+**Routing:** BGP not read on prin-data-sw; its peers report 2 of 2 Established (star-data-sw, wash-data-sw) · IS-IS not read on prin-data-sw; its neighbors report 1 of 1 up (newy-data-sw)
+```
+
+`up` counts only sessions confirmed from both ends. When the device at one end could not be read
+this run, the line shows what the other end reported instead of leaving the session uncounted:
+on the device that was read, as "Established here, far end not read" or the state it saw, such as
+`Idle`; on the device that could not be read, as what its peers or IS-IS neighbors report. An
+IS-IS adjacency toward a device that could not be read keeps that device's interface as `?`,
+because only that device can name it.
 
 ### How is BGP peer state read from the device?
 
@@ -174,6 +189,14 @@ Each service is counted once, and the four status columns add up to Total.
 In the HTML report, expand a count to see what produced it, for example a basic operational pass
 or an LLM conclusion. The "basic operational checks" lines under the table report the deterministic
 checks for each service type; they are separate from LLM dataplane investigation.
+
+### Which command did a Collector detail line come from?
+
+In the HTML report, click the line. Each `Basic check …` line under **Collector detail** opens to
+the `show` command or commands its verdict was read from, with the device and the time of the read;
+"(no output)" marks a command that returned nothing. A line with nothing to open was decided from
+the service's own definition, not from a command. The command is shown, not its output; run it
+again on the device, or keep the outputs with `--save-mcp-results`.
 
 ### Why did only some services get an LLM investigation?
 

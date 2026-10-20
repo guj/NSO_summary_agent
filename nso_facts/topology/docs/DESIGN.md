@@ -155,6 +155,8 @@ Implemented in `nso_facts/topology/underlay.py`. Static edges come from configur
 
 Underlay edges are **relationships between two devices** — unlike physical interfaces, they have both **`local`** and **`remote`** (device + interface on each end).
 
+When one device reports an adjacency toward a device whose `check_isis_adjacencies` failed, the edge is kept one-sided: status `unknown`, the unread end's state `unknown` and its interface `?`, since only that device can name it. A one-sided static edge that is not seen again is not marked down.
+
 ### Static vs operational
 
 | Version | Question | MCP tool(s) |

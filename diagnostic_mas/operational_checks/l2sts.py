@@ -41,21 +41,22 @@ async def check(instance, probe):
     domains = await collect(instance, probe)
     if len(domains) < 2:
         probe.check("pe_scope", "unknown", "Both service PE identities are required")
-    views = {}
+    views, evpn_reads = {}, {}
     for device, domain in domains.items():
         evi, bd = domain["evi"], domain["identity"][1]
         if not evi:
-            probe.check("evi_identity", "unknown", "No service EVI in scoped bridge evidence", device)
+            probe.check("evi_identity", "unknown", "No service EVI in scoped bridge evidence", device, read=domain["read"])
             continue
         text = await probe.show(device, f"evpn evi vpn-id {evi} detail")
         data = evpn(text, evi, bd)
         if not data or not data["imports"] or not data["exports"] or not data["peer"] or not data["label"]:
-            probe.check("effective_evpn", "unknown", "Effective RTs, PE identity or label missing", device)
+            probe.check("effective_evpn", "unknown", "Effective RTs, PE identity or label missing", device, read=text)
             continue
         data["replication"] = await probe.show(device, f"evpn evi vpn-id {evi} inclusive-multicast detail")
         data["evi"] = evi
-        views[device] = data
-        probe.check("effective_evpn", "pass", {k: sorted(v) if isinstance(v, set) else v for k,v in data.items() if k != "replication"}, device)
+        views[device], evpn_reads[device] = data, text
+        probe.check("effective_evpn", "pass", {k: sorted(v) if isinstance(v, set) else v for k,v in data.items() if k != "replication"}, device,
+                    read=text)
     for src, left in views.items():
         for dst, right in views.items():
             if src == dst:
@@ -63,12 +64,15 @@ async def check(instance, probe):
             direction = f"{src} -> {dst}"
             # Import at source enables forwarding toward destination's advertised MACs.
             compatible = bool(left["imports"] & right["exports"])
-            probe.check("rt_compatibility", "pass" if compatible else "fault", direction + ": destination export vs source import", src)
+            probe.check("rt_compatibility", "pass" if compatible else "fault", direction + ": destination export vs source import", src,
+                        read=[evpn_reads[src], evpn_reads[dst]])
             replicated = replication(left["replication"], left["evi"], right["peer"], right["label"])
-            probe.check("replication", "pass" if replicated else "unknown", direction + ": matching remote label and nexthop", src)
+            probe.check("replication", "pass" if replicated else "unknown", direction + ": matching remote label and nexthop", src,
+                        read=[left["replication"], evpn_reads[dst]])
             if replicated:
                 prefix = right["peer"] + "/32"
                 cef = await probe.show(src, f"cef {prefix}")
-                probe.check("transport", "pass" if cef_ready(cef, prefix, labeled=True) else "unknown", direction + ": resolved labeled transport", src)
+                probe.check("transport", "pass" if cef_ready(cef, prefix, labeled=True) else "unknown", direction + ": resolved labeled transport", src,
+                            read=cef)
     if len(views) != len(domains):
         probe.check("direction_coverage", "unknown", "Not all service PEs have usable EVPN evidence")

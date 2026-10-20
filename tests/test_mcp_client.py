@@ -551,6 +551,26 @@ def test_live_mcp_failure_kind_timeout_vs_unreachable():
     assert "live unreachable" in format_live_mcp_quarantine_prose("star-data-sw", strong)
 
 
+def test_nso_connect_failure_points_at_nsos_connection_to_the_device():
+    from nso_facts.mcp_client import (
+        format_live_mcp_quarantine_prose,
+        live_mcp_failure_kind,
+        parse_live_mcp_failed_operation,
+    )
+
+    reason = ("check_isis_adjacencies: RESTCONF 500: Failed to connect to device prin-data-sw: "
+              "connection refused: NEDCOM CONNECT: Connect timed out in new state")
+    prose = format_live_mcp_quarantine_prose("prin-data-sw", reason)
+
+    # Still handled as a timeout: quarantine, counts and parsing are unchanged.
+    assert live_mcp_failure_kind(reason) == "timeout"
+    assert parse_live_mcp_failed_operation(prose) == "check_isis_adjacencies"
+    assert "NSO itself could not connect to the device" in prose
+    assert "check NSO's management connection to it" in prose
+    assert "does not prove the device is down" in prose
+    assert "automated collection path" not in prose
+
+
 @pytest.mark.parametrize(
     ("reason", "operation"),
     [

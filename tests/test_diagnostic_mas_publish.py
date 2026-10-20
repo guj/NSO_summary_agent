@@ -153,10 +153,10 @@ def test_nso_address_is_masked_keeping_its_last_two_characters():
     text = (f"brist-data-sw: RESTCONF 500 at https://{NSO}:443/restconf/data/tailf-ncs:devices/device=x; "
             f"peers 192.0.2.14 and 10.148.0.1; again {NSO}.")
     assert mask_nso_address(text, NSO) == (
-        "brist-data-sw: RESTCONF 500 at https://***.*.*.*46:443/restconf/data/tailf-ncs:devices/device=x; "
-        "peers 192.0.2.14 and 10.148.0.1; again ***.*.*.*46.")
+        "brist-data-sw: RESTCONF 500 at https://xxx.x.x.x46:443/restconf/data/tailf-ncs:devices/device=x; "
+        "peers 192.0.2.14 and 10.148.0.1; again xxx.x.x.x46.")
     assert mask_nso_address(text, None) == text and mask_nso_address(text, "") == text
-    assert mask_nso_address("at https://nso.lab.example:443/", "nso.lab.example") == "at https://***.***.*****le:443/"
+    assert mask_nso_address("at https://nso.lab.example:443/", "nso.lab.example") == "at https://xxx.xxx.xxxxxle:443/"
 
 
 def test_saved_reports_mask_the_nso_address_and_the_case_keeps_it(tmp_path: Path):
@@ -168,6 +168,18 @@ def test_saved_reports_mask_the_nso_address_and_the_case_keeps_it(tmp_path: Path
 
     for name in ("report.md", "report.html"):
         text = (out.parent / name).read_text(encoding="utf-8")
-        assert NSO not in text and "***.*.*.*46" in text, name
+        assert NSO not in text and "xxx.x.x.x46" in text, name
     # Local state only: the next scan compares problems by their exact message.
     assert NSO in out.read_text(encoding="utf-8")
+
+
+def test_an_already_masked_report_renders_intact_in_html(tmp_path: Path):
+    # The runner masks the report before it is saved, so the HTML is rendered from masked Markdown.
+    from agent.publish import mask_nso_address
+
+    report = mask_nso_address(f"# Report\n\n- RESTCONF 500 at https://{NSO}:443/restconf\n", NSO)
+    out = persist_case(tmp_path / "diagnostic_mas", run_id="r1", case=CaseFile(budget=Budget(max_deep_checks=1, max_handoffs=1)),
+                       report=report, nso_address=NSO)
+
+    html = (out.parent / "report.html").read_text(encoding="utf-8")
+    assert "https://xxx.x.x.x46:443/restconf" in html and NSO not in html

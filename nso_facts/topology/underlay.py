@@ -91,6 +91,7 @@ async def collect_static_underlay(
             observations,
             device_names,
             physical_by_device=physical_by_device,
+            unread_devices=_unread_devices(live_issues),
         )
         issues.extend(pair_issues)
         for edge in paired:
@@ -132,6 +133,7 @@ async def collect_operational_underlay(
         observations,
         device_names,
         physical_by_device=physical_by_device,
+        unread_devices=_unread_devices(issues),
     )
     issues.extend(pair_issues)
 
@@ -148,7 +150,8 @@ async def collect_operational_underlay(
 
     paired_ids = {edge["id"] for edge in paired}
     for static_id, static_edge in static_by_id.items():
-        if static_id in paired_ids:
+        # A one-sided edge only stood for a far end that could not be read.
+        if static_id in paired_ids or _is_one_sided(static_edge):
             continue
         operational.append(
             {
@@ -205,8 +208,14 @@ def pair_adjacency_observations(
     device_names: list[str],
     *,
     physical_by_device: dict[str, set[str]] | None = None,
+    unread_devices: set[str] | frozenset[str] = frozenset(),
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Pair one-way IS-IS observations into bidirectional underlay edges."""
+    """Pair one-way IS-IS observations into bidirectional underlay edges.
+
+    An adjacency toward a device whose own IS-IS could not be read is kept
+    one-sided: this end's reading, the far end ``unknown``, and the far
+    interface written ``?`` because only that device could name it.
+    """
     issues: list[dict[str, Any]] = []
     by_device: dict[str, list[AdjacencyObservation]] = {}
     for obs in observations:
@@ -241,6 +250,10 @@ def pair_adjacency_observations(
             used_remote=used_remote,
         )
         if obs_b is None:
+            if remote_device in unread_devices:
+                edge = _one_sided_edge(obs_a, remote_device, physical_by_device)
+                if not any(existing["id"] == edge["id"] for existing in edges):
+                    edges.append(edge)
             continue
 
         if_a = canonical_interface_name(
@@ -259,8 +272,12 @@ def pair_adjacency_observations(
         if any(existing["id"] == edge_id for existing in edges):
             continue
 
-        state_a = _normalize_isis_state(obs_a.state)
-        state_b = _normalize_isis_state(obs_b.state)
+        # Each state stays with its own device once the ends are ordered.
+        states = {
+            obs_a.local_device: _normalize_isis_state(obs_a.state),
+            obs_b.local_device: _normalize_isis_state(obs_b.state),
+        }
+        state_a, state_b = states[dev_a], states[dev_b]
         status = _bidirectional_status(state_a, state_b)
         edges.append(
             {
@@ -555,6 +572,52 @@ def _interface_name_from_entry(entry: Any) -> str | None:
     return None
 
 
+# Stands for the far interface of an adjacency whose far device was not read.
+UNREAD_INTERFACE = "?"
+
+
+def _unread_devices(issues: list[dict[str, Any]]) -> set[str]:
+    """Devices whose check_isis_adjacencies failed, from this module's own issue messages."""
+    return {
+        str(issue.get("message") or "").split(":", 1)[0].strip()
+        for issue in issues
+        if issue.get("code") == "collection_error"
+        and "check_isis_adjacencies failed" in str(issue.get("message") or "")
+    }
+
+
+def _one_sided_edge(
+    obs: AdjacencyObservation,
+    remote_device: str,
+    physical_by_device: dict[str, set[str]] | None,
+) -> dict[str, Any]:
+    interface = canonical_interface_name(obs.local_device, obs.local_interface, physical_by_device)
+    (dev_a, if_a), (dev_b, if_b) = ordered_isis_endpoints(
+        obs.local_device, interface, remote_device, UNREAD_INTERFACE
+    )
+    seen = _normalize_isis_state(obs.state)
+    near_is_a = dev_a == obs.local_device
+    return {
+        "id": isis_edge_id(dev_a, if_a, dev_b, if_b),
+        "type": "isis_adjacency",
+        "local": {"device": dev_a, "interface": if_a},
+        "remote": {"device": dev_b, "interface": if_b},
+        "state": {
+            "local": seen if near_is_a else "unknown",
+            "remote": "unknown" if near_is_a else seen,
+            "status": "unknown",
+            "detail": "far end not read this scan",
+        },
+    }
+
+
+def _is_one_sided(edge: dict[str, Any]) -> bool:
+    return UNREAD_INTERFACE in {
+        (edge.get("local") or {}).get("interface"),
+        (edge.get("remote") or {}).get("interface"),
+    }
+
+
 def _find_reverse_observation(
     rows: list[AdjacencyObservation],
     *,
@@ -602,8 +665,10 @@ def _edge_allowed_by_config(
     remote_set = isis_interfaces.get(str(remote_dev), set())
     if not local_set and not remote_set:
         return True
-    return _interface_in_isis_set(str(local_if), local_set) and _interface_in_isis_set(
-        str(remote_if), remote_set
+    # The unread end has no interface to check against its config.
+    return all(
+        interface == UNREAD_INTERFACE or _interface_in_isis_set(str(interface), configured)
+        for interface, configured in ((local_if, local_set), (remote_if, remote_set))
     )
 
 

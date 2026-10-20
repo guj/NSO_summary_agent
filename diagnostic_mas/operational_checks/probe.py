@@ -39,6 +39,26 @@ def attachments(instance):
     return out
 
 
+class Reading(str):
+    """A command's output that also names the device and command it came from."""
+
+    def __new__(cls, text, device, command, collected_at):
+        reading = super().__new__(cls, text)
+        reading.source = {"device": device, "command": command,
+                          "collected_at": collected_at, "available": bool(text)}
+        return reading
+
+
+def _sources(read):
+    """The distinct reads behind one verdict, from a Reading or a list of them."""
+    found = []
+    for item in read if isinstance(read, (list, tuple)) else [read]:
+        source = getattr(item, "source", None)
+        if source and source not in found:
+            found.append(source)
+    return found
+
+
 class Probe:
     def __init__(self, client, call, cache, max_calls=24):
         self.client, self.call, self.cache = client, call, cache
@@ -63,8 +83,9 @@ class Probe:
         key = (device, command)
         if key not in self.cache:
             if self.calls >= self.max_calls:
-                self.check("collection_budget", "unknown", "Basic-check tool allowance exhausted", device)
-                return ""
+                unread = Reading("", device, command, None)
+                self.check("collection_budget", "unknown", "Basic-check tool allowance exhausted", device, read=unread)
+                return unread
             self.calls += 1
             try:
                 raw = await self.call(self.client, "exec_show", {"device_name": device, "input_command": command})
@@ -80,15 +101,24 @@ class Probe:
         text, stamp = self.cache[key]
         self.sources.append({"device": device, "tool": "exec_show", "command": command,
                              "collected_at": stamp, "available": bool(text)})
+        reading = Reading(text, device, command, stamp)
         if not text and required:
-            self.check("collection", "unknown", "Unavailable/unsupported response: " + command, device)
-        return text
+            self.check("collection", "unknown", "Unavailable/unsupported response: " + command, device, read=reading)
+        return reading
 
-    def check(self, name, status, observation, device=None, *, conclusive=False):
-        """Record one observation; ``conclusive`` marks a fault this run's readings show in full."""
+    def check(self, name, status, observation, device=None, *, conclusive=False, read=None):
+        """Record one observation; ``conclusive`` marks a fault this run's readings show in full.
+
+        ``read`` is the output (or outputs) the verdict was taken from, as returned
+        by ``show``; their commands are kept with it. A verdict from the service
+        definition alone has none.
+        """
         record = {"check": name, "status": status, "device": device, "observation": observation}
         if conclusive:
             record["conclusive"] = True
+        sources = _sources(read)
+        if sources:
+            record["sources"] = sources
         self.checks.append(record)
 
 

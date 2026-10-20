@@ -82,16 +82,18 @@ Collection / quarantine / sync timeouts:
 - State the failing automated operation, read timeout, and per-device
   affected unknown-service counts when known.
 - Headline that manual NSO connectivity may still succeed — investigate
-  the automated live-MCP collection path. Do NOT claim remaining open
-  items are only "collector/telemetry artifacts" or "not service faults."
-  Unchecked devices/services may still be faulty — say unconfirmed, not
-  ruled out.
+  the automated live-MCP collection path. When NSO's own error says it
+  failed to connect to the device, point at NSO's management connection to
+  that device instead. Do NOT claim remaining open items are only
+  "collector/telemetry artifacts" or "not service faults." Unchecked
+  devices/services may still be faulty — say unconfirmed, not ruled out.
 
 Follow-up / Next discipline:
 - Each action must name the target and what resolving it achieves.
 - Prefer: investigate the NSO live-MCP timeout (name the read timeout in
   seconds when known, else say connect/timeout failure) during SITE PHASE;
-  compare the same operation through MCP and the NSO CLI.
+  compare the same operation through MCP and the NSO CLI. If NSO failed to
+  connect to the device, prefer checking NSO's management connection to it.
   Do not write placeholder text like "N-second".
 - Avoid generic "retry everything," repeated inconclusive service-sync
   checks, or configuration changes unsupported by Evidence.

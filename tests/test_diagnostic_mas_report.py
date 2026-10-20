@@ -486,8 +486,10 @@ def test_followup_connect_timeout_omits_n_second_placeholder():
     )
     text = "\n".join(format_followup_operator(case))
     assert "N-second" not in text
-    assert "connect/timeout failure" in text
-    assert "scm-data-sw" in text
+    # NSO's own connection to the device failed: the MCP path and the NSO CLI are not the gap.
+    assert "Check NSO's management connection to `scm-data-sw`" in text
+    assert "`devices device scm-data-sw connect`" in text
+    assert "compare the same operation through MCP" not in text
     assert "IS-IS collection" in text or "live MCP collection" in text
 
 

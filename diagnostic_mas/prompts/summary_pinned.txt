@@ -89,7 +89,8 @@ Collection / quarantine / sync timeouts:
 - Actionable collection findings: name the failing automated operation,
   read timeout, and affected unknown-service counts. Manual NSO access
   may still succeed — point at the automated live-MCP path, not
-  "devices down."
+  "devices down." When NSO's own error says it failed to connect to the
+  device, point at NSO's management connection to that device instead.
 - Leave service-fault uncertainty. Do NOT claim remaining open items are
   only "collector/telemetry artifacts" or "not service faults."
   Unchecked devices/services may still be faulty — say unconfirmed, not

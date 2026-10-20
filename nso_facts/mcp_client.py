@@ -331,6 +331,14 @@ def is_strong_device_unreachability(message: str) -> bool:
     return "unreachable" in lowered
 
 
+def nso_could_not_connect(message: str) -> bool:
+    """NSO's own attempt to reach the device failed, in NSO's words as the MCP server passes them on.
+
+    The agent's path to NSO worked; NSO could not open its session to the device.
+    """
+    return "failed to connect to device" in (message or "").lower()
+
+
 def live_mcp_failure_kind(message: str) -> str:
     """Classify a quarantine/live-MCP failure: unreachable | timeout | other."""
     if is_strong_device_unreachability(message):
@@ -436,11 +444,18 @@ def format_live_mcp_quarantine_prose(
         timeout = parse_live_mcp_read_timeout_sec(detail)
         timeout_bit = f" (read timeout={timeout}s)" if timeout else ""
         head = f"{device}: {_QUARANTINE_TIMEOUT_HEAD} {op}{timeout_bit}"
-        action = (
-            "manual NSO connectivity may still succeed — this does not prove "
-            "the device is down; investigate the automated collection path; "
-            "further live MCP to this device was skipped for the rest of the run"
-        )
+        if nso_could_not_connect(detail):
+            action = (
+                "NSO itself could not connect to the device — this does not prove "
+                "the device is down; check NSO's management connection to it; "
+                "further live MCP to this device was skipped for the rest of the run"
+            )
+        else:
+            action = (
+                "manual NSO connectivity may still succeed — this does not prove "
+                "the device is down; investigate the automated collection path; "
+                "further live MCP to this device was skipped for the rest of the run"
+            )
     else:
         head = f"{device}: live query failed this run"
         action = "further live MCP to this device was skipped for the rest of the run"

@@ -27,6 +27,9 @@ Conclude with conclude_investigation:
 - observed: one line per link with its readings and the command used. Keep
   links apart; never carry a reading from one link to another. Give times
   as the device prints them; do not add a year or date it does not show.
+  IOS-XR "Last link flapped" and "Last input/output" values (06:31:41,
+  2d15h, 9w3d) are time elapsed before the read, not times of day; write
+  "flapped 06:31:41 ago".
 - cause: at most three sentences on what the readings establish on this
   device, per link where they differ; the readings themselves belong in
   observed. No received light with normal transmit points away from this

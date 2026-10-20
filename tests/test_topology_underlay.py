@@ -333,3 +333,104 @@ async def test_collect_static_and_operational_underlay():
     assert len(op_edges) == 1
     assert op_edges[0]["state"]["status"] == "up"
     assert not any(i["code"] == "configured_no_adjacency" for i in issues)
+
+
+NEWY_SEES_PRIN = [
+    AdjacencyObservation("newy-data-sw", "HundredGigE0/0/0/20.3000", "prin-data-sw", "Up")
+]
+ONE_SIDED = "isis:newy-data-sw:HundredGigE0/0/0/20.3000:prin-data-sw:?"
+
+
+def test_pair_keeps_a_one_sided_reading_when_the_far_end_was_not_read():
+    devices = ["newy-data-sw", "prin-data-sw"]
+    edges, issues = pair_adjacency_observations(NEWY_SEES_PRIN, devices, unread_devices={"prin-data-sw"})
+
+    assert edges == [{
+        "id": ONE_SIDED,
+        "type": "isis_adjacency",
+        "local": {"device": "newy-data-sw", "interface": "HundredGigE0/0/0/20.3000"},
+        "remote": {"device": "prin-data-sw", "interface": "?"},
+        "state": {"local": "up", "remote": "unknown", "status": "unknown",
+                  "detail": "far end not read this scan"},
+    }]
+    assert issues == []
+    # A far end that answered but does not report the adjacency is not a one-sided reading.
+    assert pair_adjacency_observations(NEWY_SEES_PRIN, devices)[0] == []
+
+
+def test_adjacency_states_follow_their_endpoints():
+    devices = ["amst-data-sw", "wash-data-sw"]
+    wash = AdjacencyObservation("wash-data-sw", "Hu0/0/0/1.1", "amst-data-sw", "Up")
+    amst = AdjacencyObservation("amst-data-sw", "Hu0/0/0/2.1", "wash-data-sw", "Init")
+
+    # amst sorts first, so wash's reading belongs to the remote end.
+    one, _ = pair_adjacency_observations([wash], devices, unread_devices={"amst-data-sw"})
+    assert one[0]["local"]["device"] == "amst-data-sw"
+    assert (one[0]["state"]["local"], one[0]["state"]["remote"]) == ("unknown", "up")
+
+    two, issues = pair_adjacency_observations([wash, amst], devices)
+    assert (two[0]["state"]["local"], two[0]["state"]["remote"]) == ("init", "up")
+    assert any("amst-data-sw HundredGigE0/0/0/2.1 (init) ↔ wash-data-sw HundredGigE0/0/0/1.1 (up)" in i["message"]
+               for i in issues)
+
+
+ISIS_RENC_UNREACHABLE = {
+    "status": "error",
+    "error_message": "RESTCONF 500: Failed to connect to device renc-data-sw: connection refused: "
+                     "NEDCOM CONNECT: Connect timed out in new state",
+}
+
+
+async def _collect(handlers: dict, static_edges: list | None = None):
+    import nso_facts.topology.underlay as underlay_mod
+
+    async def call_mcp(client_arg, tool, params=None):
+        from nso_facts.mcp_client import _tool_data
+
+        return _tool_data(await client_arg.call_tool(tool, {"params": params or {}}))
+
+    client = FakeClient(handlers)
+    devices = ["lbnl-data-sw", "renc-data-sw"]
+    original = underlay_mod.call_mcp
+    underlay_mod.call_mcp = call_mcp
+    try:
+        if static_edges is None:
+            static_edges, _, _ = await collect_static_underlay(client, devices)
+        op_edges, issues, _ = await collect_operational_underlay(client, devices, static_edges)
+    finally:
+        underlay_mod.call_mcp = original
+    return static_edges, op_edges, issues
+
+
+@pytest.mark.asyncio
+async def test_unread_far_end_keeps_the_near_end_reading():
+    static_edges, op_edges, issues = await _collect({
+        ("get_device_config", "lbnl-data-sw"): IOS_XR_ISIS_CONFIG,
+        ("get_device_config", "renc-data-sw"): IOS_XR_ISIS_CONFIG,
+        ("check_isis_adjacencies", "lbnl-data-sw"): ISIS_ADJ_LBNL,
+        ("check_isis_adjacencies", "renc-data-sw"): ISIS_RENC_UNREACHABLE,
+    })
+
+    edge_id = "isis:lbnl-data-sw:HundredGigE0/0/0/0.2402:renc-data-sw:?"
+    assert [e["id"] for e in static_edges] == [edge_id]
+    assert op_edges == [{"id": edge_id, "state": {
+        "local": "up", "remote": "unknown", "status": "unknown", "detail": "far end not read this scan"}}]
+    assert not any(i["code"] in {"configured_no_adjacency", "live_adjacency_not_in_config"} for i in issues)
+
+
+@pytest.mark.asyncio
+async def test_a_one_sided_static_edge_is_not_marked_down_once_both_ends_answer():
+    one_sided = {
+        "id": "isis:lbnl-data-sw:HundredGigE0/0/0/0.2402:renc-data-sw:?",
+        "type": "isis_adjacency",
+        "local": {"device": "lbnl-data-sw", "interface": "HundredGigE0/0/0/0.2402"},
+        "remote": {"device": "renc-data-sw", "interface": "?"},
+        "meta": {},
+    }
+    _, op_edges, issues = await _collect({
+        ("check_isis_adjacencies", "lbnl-data-sw"): ISIS_ADJ_LBNL,
+        ("check_isis_adjacencies", "renc-data-sw"): ISIS_ADJ_RENC,
+    }, static_edges=[one_sided])
+
+    assert [e["state"]["status"] for e in op_edges] == ["up"]
+    assert not any(i["code"] == "configured_no_adjacency" for i in issues)

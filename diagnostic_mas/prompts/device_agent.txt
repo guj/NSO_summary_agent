@@ -23,7 +23,9 @@ output cannot establish a reading.
 Conclude with conclude_investigation:
 - observed: one line per link with its readings and the command used, then
   the BGP states. Give times as the device prints them; do not add a year
-  or date it does not show.
+  or date it does not show. IOS-XR "Last link flapped" and "Last
+  input/output" values (06:31:41, 2d15h, 9w3d) are time elapsed before the
+  read, not times of day; write "flapped 06:31:41 ago".
 - cause: at most three sentences on what the readings establish on this
   device, in order: link, adjacency, sessions. The far end cannot be read
   from here; say so. A link shut down by configuration is not a link fault.

@@ -545,3 +545,67 @@ def test_drill_line_does_not_count_a_device_as_read_when_its_bgp_collection_fail
     assert _bgp_routing_qualification(case, "star-data-sw", "0/1")[1] == (
         "**Drill:** BGP Established on `star-data-sw` toward `cien-data-sw` "
         "(reachable side only; peer devices not live-checked this run)")
+
+
+def _routing_case():
+    """test51's readings: star, dall and newy answered; brist, prin, cien and cape could not be read."""
+    from diagnostic_mas.case import Budget, CaseFile, add_evidence
+
+    def bgp(a, b, la, lb, status):
+        edge_id = f"bgp:10.0.0.1:10.0.0.2:{a}:{b}"
+        return ({"id": edge_id, "local": {"device": a}, "remote": {"device": b}},
+                {"id": edge_id, "state": {"local": la, "remote": lb, "status": status}})
+
+    def isis(a, if_a, b, if_b, la, lb, status):
+        edge_id = f"isis:{a}:{if_a}:{b}:{if_b}"
+        return ({"id": edge_id, "local": {"device": a, "interface": if_a},
+                 "remote": {"device": b, "interface": if_b}},
+                {"id": edge_id, "state": {"local": la, "remote": lb, "status": status}})
+
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    sessions = [
+        bgp("star-data-sw", "wash-data-sw", "established", "established", "up"),
+        bgp("star-data-sw", "prin-data-sw", "established", "unknown", "unknown"),
+        bgp("star-data-sw", "brist-data-sw", "established", "unknown", "unknown"),
+        bgp("star-data-sw", "cien-data-sw", "established", "unknown", "unknown"),
+        bgp("star-data-sw", "cape-data-sw", "idle", "unknown", "down"),
+        bgp("dall-data-sw", "cien-data-sw", "idle", "unknown", "down"),
+    ]
+    adjacencies = [
+        isis("newy-data-sw", "Bundle-Ether101.3001", "star-data-sw", "Bundle-Ether101.3001", "up", "up", "up"),
+        isis("newy-data-sw", "HundredGigE0/0/0/20.3000", "prin-data-sw", "?", "up", "unknown", "unknown"),
+    ]
+    for role, layer, edges in (("bgp", "routing", sessions), ("isis", "underlay", adjacencies)):
+        add_evidence(case, {"kind": "spine", "role": role, "layer": layer, "payload": {
+            "static_edges": [s for s, _ in edges], "operational_edges": [o for _, o in edges]}})
+    return case
+
+
+def test_routing_lines_show_what_each_end_read():
+    from diagnostic_mas.operator_report import format_devices_operator
+
+    text = "\n".join(format_devices_operator(_routing_case()))
+    lines = {}
+    device = None
+    for line in text.splitlines():
+        if line.startswith("### "):
+            device = line[4:]
+        elif line.startswith("**Routing:**"):
+            lines[device] = line
+
+    assert lines["star-data-sw"] == (
+        "**Routing:** BGP 1/5 up; 3 Established here, far end not read "
+        "(brist-data-sw, cien-data-sw, prin-data-sw); 1 Idle (cape-data-sw) · IS-IS 1/1 up")
+    assert lines["prin-data-sw"] == (
+        "**Routing:** BGP not read on prin-data-sw; its peers report 1 of 1 Established (star-data-sw)"
+        " · IS-IS not read on prin-data-sw; its neighbors report 1 of 1 up (newy-data-sw)")
+    assert lines["cien-data-sw"].startswith(
+        "**Routing:** BGP not read on cien-data-sw; its peers report 1 of 2 Established (star-data-sw), "
+        "1 Idle (dall-data-sw) · ")
+    assert lines["cape-data-sw"].startswith(
+        "**Routing:** BGP not read on cape-data-sw; its peers report 0 of 1 Established, 1 Idle (star-data-sw) · ")
+    assert lines["dall-data-sw"].startswith("**Routing:** BGP 0/1 up; 1 Idle (cien-data-sw) · ")
+    assert lines["newy-data-sw"] == (
+        "**Routing:** BGP N/A · IS-IS 1/2 up; 1 up here, far end not read (prin-data-sw)")
+    # Sessions read from both ends keep the plain count.
+    assert lines["wash-data-sw"] == "**Routing:** BGP 1/1 up · IS-IS N/A"

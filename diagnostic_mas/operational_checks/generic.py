@@ -32,7 +32,8 @@ def interfaces(instance):
 
 async def check_interfaces(probe, pairs):
     for device, name in pairs:
-        probe.check("interface", interface_state(await probe.show(device, f"interfaces {name}"), name), name, device)
+        text = await probe.show(device, f"interfaces {name}")
+        probe.check("interface", interface_state(text, name), name, device, read=text)
 
 
 async def check(instance, probe):

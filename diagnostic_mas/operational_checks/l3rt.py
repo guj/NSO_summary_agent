@@ -46,19 +46,20 @@ async def check(instance, probe):
     domain = domains.get(local)
     bvis = set(re.findall(r"AC: (BVI\d+), state is", domain["detail"])) if domain else set()
     if len(bvis) != 1:
-        probe.check("gateway_identity", "unknown", "One exact gateway binding not established; direct/routed variants need investigation", local)
+        probe.check("gateway_identity", "unknown", "One exact gateway binding not established; direct/routed variants need investigation", local,
+                    read=domain["read"] if domain else None)
         return
     gateway = bvis.pop()
     text = await probe.show(local, f"interfaces {gateway}")
-    probe.check("gateway", interface_state(text, gateway), gateway, local)
+    probe.check("gateway", interface_state(text, gateway), gateway, local, read=text)
     config = await probe.show(local, f"running-config interface {gateway}")
     if not re.search(rf"^interface {re.escape(gateway)}\s*$", config, re.M):
-        probe.check("routing_context", "unknown", "Scoped gateway configuration unavailable", local)
+        probe.check("routing_context", "unknown", "Scoped gateway configuration unavailable", local, read=config)
         return
     vrf = re.search(r"^\s+vrf (\S+)\s*$", config, re.M)
     context = vrf[1] if vrf else None
     if context and not safe(context):
-        probe.check("routing_context", "unknown", "Unsupported VRF identifier", local)
+        probe.check("routing_context", "unknown", "Unsupported VRF identifier", local, read=config)
         return
     targets = {}
     gateways = {}
@@ -74,7 +75,7 @@ async def check(instance, probe):
                 # Exact configured address, not a similarly named gateway.
                 addresses = re.findall(r"\b[0-9a-fA-F:.]+(?:/\d+)?", config)
                 present = any(value.split("/")[0] == str(net.ip) for value in addresses)
-                probe.check("gateway_address", "pass" if present else "unknown", str(net), local)
+                probe.check("gateway_address", "pass" if present else "unknown", str(net), local, read=config)
             except (ValueError, KeyError, TypeError):
                 probe.check("gateway_intent", "unknown", f"IPv{version} gateway prefix incomplete", local)
     external = instance.get("external-access") or {}
@@ -119,7 +120,7 @@ async def check(instance, probe):
                 # Default-only coverage is not evidence of the customer return route.
                 if prefix and ipaddress.ip_network(prefix).prefixlen == 0 and target not in {"0.0.0.0/0", "::/0"}:
                     prefix = None
-                probe.check("rib", "pass" if prefix else "unknown", f"IPv{version} {target} in {context or 'global'}", dev)
+                probe.check("rib", "pass" if prefix else "unknown", f"IPv{version} {target} in {context or 'global'}", dev, read=route)
                 if not prefix:
                     continue
                 cef = await probe.show(dev, f"cef {ctx}{'ipv6 ' if version == 6 else ''}{prefix}")
@@ -135,13 +136,14 @@ async def check(instance, probe):
                             and held and held[1] != gateway):
                         probe.check("gateway_unique", "fault",
                                     f"{shared}; {prefix} is bound to {held[1]}, not this service's {gateway}",
-                                    dev, conclusive=True)
+                                    dev, conclusive=True, read=route)
                     else:
-                        probe.check("gateway_route_binding", "pass" if connected else "unknown", f"{prefix} bound to {gateway}", dev)
+                        probe.check("gateway_route_binding", "pass" if connected else "unknown", f"{prefix} bound to {gateway}", dev,
+                                    read=route)
                         if others and connected:
                             probe.check("gateway_shared", "pass",
-                                        f"{shared}; {prefix} is bound to this service's {gateway}", dev)
+                                        f"{shared}; {prefix} is bound to this service's {gateway}", dev, read=route)
                 ok = cef_ready(cef, prefix, connected=connected)
                 if connected:
                     ok = ok and gateway in cef
-                probe.check("fib", "pass" if ok else "unknown", f"IPv{version} {prefix} in {context or 'global'}", dev)
+                probe.check("fib", "pass" if ok else "unknown", f"IPv{version} {prefix} in {context or 'global'}", dev, read=cef)

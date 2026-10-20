@@ -48,20 +48,20 @@ async def check(instance, probe):
     text = await probe.show(device, STATUS)
     session = next((s for s in sessions(text) if interfaces_match(destination, s["destination"])), None)
     if session is None:
-        probe.check("session", "unknown", f"No mirror session to {destination} in the device's answer", device)
+        probe.check("session", "unknown", f"No mirror session to {destination} in the device's answer", device, read=text)
     else:
-        probe.check("session", "pass", f"{session['name']} to {destination}", device)
+        probe.check("session", "pass", f"{session['name']} to {destination}", device, read=text)
         wanted = DIRECTIONS.get(str(instance.get("direction") or "both"))
         for source in sources:
             row = next((r for r in session["sources"] if interfaces_match(source, r[0])), None)
             if row is None:
-                probe.check("source", "unknown", f"{source} is not listed under {session['name']}", device)
+                probe.check("source", "unknown", f"{source} is not listed under {session['name']}", device, read=text)
             elif not row[2].lower().startswith("operational"):
                 # "Not operational (reason)" is the device's own verdict on its session: nothing is left to investigate.
                 probe.check("source", "fault", f"{source}: {row[2]}", device,
-                            conclusive=row[2].lower().startswith("not operational"))
+                            conclusive=row[2].lower().startswith("not operational"), read=text)
             elif row[1] != wanted:
-                probe.check("source", "unknown", f"{source} is mirrored {row[1]}, intended {wanted}", device)
+                probe.check("source", "unknown", f"{source} is mirrored {row[1]}, intended {wanted}", device, read=text)
             else:
-                probe.check("source", "pass", f"{source} {row[1]}: {row[2]}", device)
+                probe.check("source", "pass", f"{source} {row[1]}: {row[2]}", device, read=text)
     await check_interfaces(probe, [(device, name) for name in (destination, *sources)])

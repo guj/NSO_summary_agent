@@ -22,6 +22,10 @@ async def evaluate(record, instance, client, call, cache, *, force=False, fleet=
     # Every required observation must pass; queries themselves never imply health.
     states = [check["status"] for check in probe.checks]
     status = "down" if "fault" in states else "up" if states and all(s == "pass" for s in states) else "unknown"
+    if status == "up":
+        # A passing service is not listed in the report, so its verdicts need not keep their commands.
+        for check in probe.checks:
+            check.pop("sources", None)
     reasons = [str(c["observation"]) for c in probe.checks if c["status"] != "pass"]
     reason = "; ".join(reasons[:4]) if reasons else "All required basic PE-side checks passed"
     out = result(record, status, reason, probe.checks)

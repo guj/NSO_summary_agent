@@ -19,6 +19,7 @@ def evaluate(record, *, force=False):
     endpoints = (record.get("live_l2") or {}).get("endpoints") or []
     checks = [{"check": "xconnect", "tool": "exec_show",
                "command": "l2vpn xconnect", "observation": dict(ep),
+               "sources": [{"device": ep.get("device"), "command": "l2vpn xconnect"}],
                "status": ("unknown" if ep.get("error") else
                           "pass" if ep.get("st") == "UP" and ep.get("xconnect")
                           and all(ep.get(k) in (None, "", "UP") for k in ("ac_st", "seg2_st")) else
@@ -58,7 +59,7 @@ async def _label_paths(endpoints, probe):
     # Nothing to follow unless the circuit runs between two devices.
     if len(endpoints) != 2 or len({ep.get("device") for ep in endpoints}) != 2:
         return
-    views = {}
+    views, texts = {}, {}
     for ep in endpoints:
         device, group, name = ep.get("device"), ep.get("group"), ep.get("xconnect")
         if not (safe(group) and safe(name)):
@@ -67,31 +68,34 @@ async def _label_paths(endpoints, probe):
         text = await probe.show(device, f"l2vpn xconnect group {group} xc-name {name} detail")
         view = xc_labels(text, ep.get("ac") or "")
         if view:
-            views[device] = view
+            views[device], texts[device] = view, text
         elif text:
-            probe.check("service_labels", "unknown", "Service labels not readable in the xconnect detail", device)
+            probe.check("service_labels", "unknown", "Service labels not readable in the xconnect detail", device, read=text)
     if len(views) != 2:
         return
     (a, left), (b, right) = views.items()
     if left["evi"] != right["evi"] or (left["ac_id"] and right["ac_id"] and left["ac_id"] != right["ac_id"][::-1]):
-        probe.check("service_labels", "unknown", "The two ends do not describe one circuit (EVI or AC IDs differ)")
+        probe.check("service_labels", "unknown", "The two ends do not describe one circuit (EVI or AC IDs differ)",
+                    read=[texts[a], texts[b]])
         return
     for src, dst in ((a, b), (b, a)):
         sent, want, evi = views[src]["remote"], views[dst]["local"], views[src]["evi"]
         direction = f"{src} -> {dst}: "
+        details = [texts[src], texts[dst]]
         if sent == want:
-            probe.check("label_path", "pass", direction + f"sender uses the receiver's label {want}", src)
+            probe.check("label_path", "pass", direction + f"sender uses the receiver's label {want}", src, read=details)
             continue
-        entry = forwarded(await probe.show(src, f"mpls forwarding labels {sent}", required=False), sent)
+        table = await probe.show(src, f"mpls forwarding labels {sent}", required=False)
+        entry = forwarded(table, sent)
         if not entry or (evi and entry[1] != f"EVPN:{evi}"):
             probe.check("label_path", "unknown", direction + f"sender label {sent} differs from the receiver's "
-                        f"label {want} and its forwarding entry was not read", src)
+                        f"label {want} and its forwarding entry was not read", src, read=details + [table])
         elif entry[0] == want:
             probe.check("label_path", "pass", direction + f"sender label {sent} is sent as {want}, "
-                        "the receiver's label", src)
+                        "the receiver's label", src, read=details + [table])
         else:
             probe.check("label_path", "unknown", direction + f"sender label {sent} is sent as {entry[0]}; "
-                        f"the receiver's label is {want}", src)
+                        f"the receiver's label is {want}", src, read=details + [table])
 
 
 async def evaluate_with_labels(record, probe, *, force=False):

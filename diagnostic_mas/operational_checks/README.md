@@ -73,6 +73,10 @@ Normal persistence/dry-run rules apply; raw full output archival remains opt-in.
 Both dataplane and drill prompts receive these observations; LLM conclusions
 remain separate. The report lists basic operational counts per type and includes
 checks in service detail. Sync and LLM dataplane table counts remain independent.
+A check read from device output also names the command or commands it came from
+(`sources` on the check), and the HTML report opens each Collector detail line to
+them. A service that passes keeps only its overall command list, since the report
+does not list it.
 
 Offline tests cover healthy paths, missing identities, RT mismatch, reverse-path
 gaps, both address families, border coverage, sync gating, cache reuse and budgets.

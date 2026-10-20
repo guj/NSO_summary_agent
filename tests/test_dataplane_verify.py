@@ -3538,3 +3538,40 @@ async def test_service_deleted_before_its_investigation_gets_no_llm_request(monk
     listing.assert_awaited_once()
     assert listing.await_args.args[1:] == ("get_services", {"service_type": "l2bridge"})
     assert listing.await_args.kwargs == {"bypass_cache": True}
+
+
+# Flow points as cien-data-sw listed them in test48: 50 entries, two of them this service's.
+SERVICE = "net1-a073fb5d-63d0-4bf7-82d8-b9ba594abcdc"
+
+
+def _flow_points(count: int) -> dict:
+    def fp(port: int, vlan: int, fd: str) -> dict:
+        return {"name": f"fp-{port}_{vlan}", "fd-name": fd, "logical-port": str(port), "mtu-size": 9216,
+                "classifier-list": [f"vlan-{vlan}-of-{port}"], "stats-collection": "on"}
+    entries = [fp(11, 0, "bd-net1-a073fb5d-63d0-4bf7-"), fp(12, 0, "bd-net1-a073fb5d-63d0-4bf7-")]
+    entries += [fp(14, 2000 + n, f"bd-lan-{n:04d}aaaa-bbbb-cccc-") for n in range(count - 2)]
+    return {"status": "success", "data": {"path": "tailf-ncs:devices/device=cien-data-sw/config/ciena-mef-fp:fps",
+                                          "depth": 3, "payload": {"ciena-mef-fp:fps": {"fp": entries}}}}
+
+
+def test_json_answer_that_fits_when_compact_arrives_whole():
+    from diagnostic_mas.dataplane_verify import clip_dataplane_tool_content
+
+    out = clip_dataplane_tool_content("explore_nso_path", json.dumps(_flow_points(50)), service_name=SERVICE)
+
+    assert not out.startswith("[") and out.count('"name":') == 50
+    assert '"name":"fp-11_0","fd-name":"bd-net1-a073fb5d-63d0-4bf7-"' in out
+    assert '"name":"fp-12_0"' in out
+
+
+def test_large_json_answer_keeps_whole_entries_for_the_service():
+    from diagnostic_mas.dataplane_verify import clip_dataplane_tool_content
+
+    out = clip_dataplane_tool_content("explore_nso_path", json.dumps(_flow_points(400)), service_name=SERVICE)
+    header, _, body = out.partition("\n")
+
+    assert header.startswith("[filtered explore_nso_path: kept 2 of 400 list entries")
+    kept = json.loads(body)["ciena-mef-fp:fps"]["fp"]
+    # Each kept flow point arrives with every field, not just the line that matched.
+    assert [(fp["name"], fp["logical-port"], fp["classifier-list"]) for fp in kept] == [
+        ("fp-11_0", "11", ["vlan-0-of-11"]), ("fp-12_0", "12", ["vlan-0-of-12"])]

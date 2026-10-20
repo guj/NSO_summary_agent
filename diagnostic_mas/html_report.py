@@ -106,6 +106,48 @@ def _device_details(case: dict | None) -> dict[str, str]:
     }
 
 
+def _check_sources(case: dict | None) -> dict[str, list[dict]]:
+    """Service name -> its fixed-check verdicts, in the order the report lists them."""
+    found: dict[str, list[dict]] = {}
+    for ev in (case or {}).get("evidence") or []:
+        if ev.get("kind") == "spine" and ev.get("role") == "service":
+            for record in (((ev.get("payload") or {}).get("extra") or {}).get("services") or {}).values():
+                if isinstance(record, dict):
+                    found[str(record.get("name"))] = list((record.get("basic_checks") or {}).get("checks") or [])
+    return found
+
+
+def _source_item(source: dict) -> str:
+    when = re.search(r"T(\d\d:\d\d:\d\d)", str(source.get("collected_at") or ""))
+    return (f'<li><code>show {html.escape(str(source.get("command")))}</code> on {html.escape(str(source.get("device")))}'
+            + (f", read {when[1]} UTC" if when else "")
+            + (" (no output)" if source.get("available") is False else "") + "</li>")
+
+
+def _link_check_lines(body: str, checks: list[dict]) -> str:
+    """Collector detail lines that open to the commands their verdict was read from.
+
+    The report writes one ``Basic check`` line per verdict, in order; when the
+    lines and the recorded verdicts do not line up, the lines stay plain.
+    """
+    match = re.search(r"<p><strong>Collector detail:</strong><br>\n(.*?)</p>", body, re.S)
+    if not match or not checks:
+        return body
+    lines = match[1].split("<br>\n")
+    basic = [i for i, line in enumerate(lines) if line.startswith("Basic check ")]
+    if len(basic) != len(checks) or any(
+            not lines[i].startswith(html.escape(f"Basic check {c.get('check')} ({c.get('status')}): "))
+            for i, c in zip(basic, checks)):
+        return body
+    items = [f'<div class="check">{line}</div>' for line in lines]
+    for i, check in zip(basic, checks):
+        if check.get("sources"):
+            items[i] = (f'<details class="check"><summary>{lines[i]}</summary><ul>'
+                        + "".join(_source_item(s) for s in check["sources"]) + "</ul></details>")
+    return (body[:match.start()] + '<p><strong>Collector detail:</strong></p><div class="collector">'
+            + "".join(items) + "</div>" + body[match.end():])
+
+
 def _technician_lines(finding: dict, evidence: list) -> list[str]:
     """For the person at the panel: each link, where its service goes, and the commands that were read."""
     from diagnostic_mas.port_investigation import other_attachments
@@ -183,6 +225,7 @@ def render_html_report(report: str, run_id: str, *, case: dict | None = None) ->
     from diagnostic_mas.service_topology import render_service_topology
     service_topology = render_service_topology(case)
     device_details = _device_details(case)
+    check_sources = _check_sources(case)
     nav, blocks = [], []
     if service_topology:
         nav.append('<a href="#service-topology">Service topology</a>')
@@ -206,8 +249,12 @@ def render_html_report(report: str, run_id: str, *, case: dict | None = None) ->
                       'passed' if 'passed pe-side' in lower else 'basic')
             label = html.escape(name)
             badge = f'<span class="badge">{html.escape(result)}</span>' if result else ''
+            body = _body(text)
+            service_id = re.search(r"^\*Service ID: `([^`]+)`\*", text, re.M)
+            if title == "Services" and service_id:
+                body = _link_check_lines(body, check_sources.get(service_id[1]) or [])
             record = (f'<details class="record" data-status="{status}" data-service="{str(title == "Services").lower()}">'
-                      f'<summary>{label}{badge}</summary>{_body(text)}'
+                      f'<summary>{label}{badge}</summary>{body}'
                       f'{device_details.get(name.strip(), "") if title == "Devices" else ""}</details>')
             records.append(({'down':0,'degraded':1,'unknown':2,'passed':3,'basic':4}[status],j,record))
         if title == 'Services':
@@ -223,7 +270,7 @@ header{padding:24px 32px;background:#172536;color:white}header h1{margin:0;font-
 nav{position:sticky;top:0;background:white;padding:12px 24px;border-bottom:1px solid #dce2e8;display:flex;gap:16px;flex-wrap:wrap;z-index:1}a{color:#155d98}
 main{max-width:1200px;margin:auto;padding:24px}.controls{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}input,select,button{font:inherit;padding:8px;border:1px solid #adb9c4;border-radius:4px}input{flex:1;min-width:220px}
 .section{background:white;border:1px solid #dce2e8;margin:16px 0;padding:16px}.section>summary{font-size:20px;font-weight:650;cursor:pointer}.record{border-top:1px solid #dce2e8;padding:12px 0}.record>summary{cursor:pointer;overflow-wrap:anywhere;font-weight:600}
-.device-detail{margin-top:8px}.device-detail>summary{font-size:14px;font-weight:600;cursor:pointer}.badge{display:block;font-weight:400;font-size:13px;color:#526071}pre{overflow:auto;background:#f1f4f7;padding:12px}table{border-collapse:collapse;width:100%;font-size:14px}td,th{padding:6px 10px;border-bottom:1px solid #dce2e8;text-align:left}.status-definitions{margin:12px 0;font-size:14px}.status-definitions>summary{cursor:pointer;font-weight:600}code{overflow-wrap:anywhere}[hidden]{display:none!important}#count{color:#526071}
+.device-detail{margin-top:8px}.device-detail>summary{font-size:14px;font-weight:600;cursor:pointer}.badge{display:block;font-weight:400;font-size:13px;color:#526071}pre{overflow:auto;background:#f1f4f7;padding:12px}table{border-collapse:collapse;width:100%;font-size:14px}td,th{padding:6px 10px;border-bottom:1px solid #dce2e8;text-align:left}.status-definitions{margin:12px 0;font-size:14px}.status-definitions>summary{cursor:pointer;font-weight:600}code{overflow-wrap:anywhere}.collector .check{margin:1px 0;overflow-wrap:anywhere}.collector div.check{padding-left:1.1em}.collector details.check>summary{cursor:pointer}.collector ul{margin:2px 0 6px 1.1em;padding-left:1.2em;font-size:14px}[hidden]{display:none!important}#count{color:#526071}
 </style></head><body><header><h1>NSO diagnostic report</h1><div>''' + html.escape(run_id) + '''</div></header><nav>''' + ''.join(nav) + '''</nav><main>''' + _body(sections[0]) + '''
 <div class="controls"><input id="search" aria-label="Search report details" placeholder="Search service ID, device, type or evidence">
 <select id="status" aria-label="Service status"><option value="all">All service statuses</option><option value="down">Down</option><option value="degraded">Degraded</option><option value="unknown">Unknown / incomplete</option><option value="passed">PE-readiness passed</option><option value="basic">Basic checks only</option></select>

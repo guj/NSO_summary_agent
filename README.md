@@ -263,7 +263,7 @@ a webhook cannot attach files; with a bot token the HTML report is uploaded to t
 
 Error messages quote NSO's RESTCONF URLs, so everything a scan prints or sends (the report on
 screen, `report.md`, `report.html` and the digest) shows `NSO_ADDRESS` masked except for its last
-two characters, for example `192.0.2.146` as `***.*.*.*46`. The local `case.json` keeps the messages as
+two characters, for example `192.0.2.146` as `xxx.x.x.x46`. The local `case.json` keeps the messages as
 collected, so the next scan can compare them.
 
 ### Slack (incoming webhook)
