@@ -30,8 +30,8 @@ def case_to_dict(case: CaseFile) -> dict[str, Any]:
         "focus_devices": list(case.focus_devices),
         "service_coverage": dict(case.service_coverage),
         "last_known_service_faults": list(case.last_known_service_faults),
-        "undecided_rules": dict(case.undecided_rules),
         "llm_usage": dict(case.llm_usage),
+        "mcp_calls": dict(case.mcp_calls),
     }
 
 
@@ -41,6 +41,7 @@ def persist_case(
     run_id: str,
     case: CaseFile,
     report: str | None = None,
+    nso_address: str | None = None,
 ) -> Path:
     state_dir = Path(state_dir)
     run_dir = state_dir / "runs" / str(run_id).replace(":", "-")
@@ -51,11 +52,14 @@ def persist_case(
     )
     report_path: Path | None = None
     if report is not None:
-        report_path = run_dir / "report.md"
-        report_path.write_text(report, encoding="utf-8")
+        from agent.publish import mask_nso_address
         from diagnostic_mas.html_report import render_html_report
 
-        (run_dir / "report.html").write_text(render_html_report(report, run_id, case=case_to_dict(case)), encoding="utf-8")
+        # The reports are shared; case.json stays as collected, for the next scan's comparison.
+        report_path = run_dir / "report.md"
+        report_path.write_text(mask_nso_address(report, nso_address), encoding="utf-8")
+        html = render_html_report(report, run_id, case=case_to_dict(case))
+        (run_dir / "report.html").write_text(mask_nso_address(html, nso_address), encoding="utf-8")
     latest = state_dir / "latest.json"
     meta: dict[str, Any] = {
         "run_id": run_id,

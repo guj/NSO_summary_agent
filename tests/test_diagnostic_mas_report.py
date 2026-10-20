@@ -662,9 +662,29 @@ def test_report_run_details_includes_drills():
     assert "(tools used 1)" in text
     assert "**Dataplane dig tools:** 63 used · 40 allowed per dig" in text
     assert "**Drill investigations:** 1 / 2 (tools used 1)" in text
+    assert "ended without a conclusion" not in text
     assert "Dataplane tool budget:" not in text
     assert "## Budget" not in text
     assert "Evidence records:" in text
+
+
+def test_run_details_count_the_mcp_calls_and_those_the_llm_asked_for():
+    # As test36 on 14 Oct 2026: 9,407 calls, 261 from the run's cache, 62 made during LLM investigations.
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    case.mcp_calls = {"total": 9407, "wire": 9146, "cache_hits": 261, "during_llm": 62}
+    text = render_report(case)
+    assert ("**MCP calls:** 9,407 (9,146 sent to NSO, 261 from cache): 9,345 by the program's own checks, "
+            "62 during LLM investigations") in text
+    assert "MCP calls" not in render_report(CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0)))
+
+
+def test_run_details_say_how_many_follow_ups_ended_without_a_conclusion():
+    # 14 Oct 2026: the LLM proxy refused both follow-ups, which then read "2 / 2 (tools used 0)" as if done.
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0, max_drill_issues=2))
+    case.budget.drill_issues_used = 2
+    case.budget.drill_issues_unconcluded = 2
+    text = render_report(case)
+    assert "**Drill investigations:** 2 / 2 (tools used 0); 2 ended without a conclusion" in text
 
 
 def test_incomplete_timeout_next_action_not_tool_budget():

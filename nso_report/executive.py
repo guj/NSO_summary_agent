@@ -89,11 +89,13 @@ def device_interfaces_label(
     phys: list,
     mismatch_by_edge: dict[str, dict[str, Any]],
 ) -> str:
+    recorded = False
     for e in phys:
         if not isinstance(e, dict):
             continue
         if (e.get("local") or {}).get("device") != device:
             continue
+        recorded = True
         pair = _iface_pair_status(e)
         if pair in {"up/down", "unknown"}:
             return INVENTORY_REVIEW_STATUS
@@ -107,7 +109,8 @@ def device_interfaces_label(
             continue
         if issue.get("device") == device:
             return INVENTORY_REVIEW_STATUS
-    return "Healthy"
+    # No interface on record for the device (none in NSO, nothing read): nothing was checked.
+    return "Healthy" if recorded else "—"
 
 
 def device_notes_label(

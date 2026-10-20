@@ -285,6 +285,25 @@ Watch progress from another terminal with `tail -f log/test.txt`. Logs may conta
 network details; keep them outside version control. These limits are ceilings,
 not targets, and higher concurrency does not guarantee proportional speedup.
 
+## Claude Code commands
+
+The repository ships five slash commands in `.claude/commands/`. Each one runs
+`nso-diagnostic-run` with the matching flags and has Claude Code summarize the output.
+
+| Command | What it runs | Arguments |
+|---|---|---|
+| `/nso-report` | Full diagnostic report | `[llm] [publish] [max-…=N …] [device1,device2]` |
+| `/nso-service` | Services only, filtered by type, ID and/or device | `[llm] [l3rt\|type=…] [id=…] [device…]` |
+| `/nso-device` | One or more devices: sync and hardware only; a device name is required | `[llm] device\|device1,device2` |
+| `/nso-bgp` | BGP only | `[llm] [device\|device1,device2]` |
+| `/nso-isis` | IS-IS only | `[llm] [device\|device1,device2]` |
+
+All five run without the agent's own LLM (`--skip-llm`) unless you add the word
+`llm`; Claude Code then summarizes the fixed-check output itself. Only `/nso-report`
+can publish, and only with the word `publish`; otherwise it runs with `--dry-run`.
+The other four never publish. A dry run still contacts NSO and the devices, and with
+`llm` it also uses the configured LLM endpoint and its budget.
+
 ## Workflow and concurrency
 
 1. Collect inventory and endpoint fleet sync. Inconclusive sync is retried once
@@ -309,6 +328,9 @@ not targets, and higher concurrency does not guarantee proportional speedup.
 4. Report final OpUp/Down/Degraded/Unknown and verification gaps. OpUp establishes
    PE-side readiness, not customer traffic delivery. Disappeared services are
    freshly rechecked and excluded from active counts when absence is confirmed.
+   Each LLM investigation starts with a fresh, uncached service listing; a service
+   its owner deleted after the scan began is reported as no longer present and is
+   not investigated. During an investigation the service list is always read fresh.
 
 `--spine-concurrent-devices` and `--dataplane-concurrent_works` both default to 1.
 The former bounds concurrent operational device calls, with per-device locking

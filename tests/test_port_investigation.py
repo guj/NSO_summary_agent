@@ -158,26 +158,45 @@ def _two_of_three_up(name: str = "tri") -> dict:
     ])
 
 
-def test_service_with_two_attachments_still_up_is_not_one_the_dark_port_explains():
-    # Alone on the port, it leaves no port to investigate.
-    assert pi.port_targets(_case(_two_of_three_up())) == []
-    # Beside a service the port does explain, it is left out of the port's list.
+def test_service_that_can_still_carry_traffic_is_listed_under_its_dark_port():
+    # Alone on the port, its port is investigated for it.
+    assert [(t["port"], t["links"]) for t in pi.port_targets(_case(_two_of_three_up()))] == [
+        ("HundredGigE0/0/0/25", {"HundredGigE0/0/0/25/0": ["tri"]})]
+    # Beside a service the port leaves Down, both are on the port's list.
     shared = _case(_two_of_three_up(), _on_dark_lane("c", "Hu0/0/0/25/0"))
     assert [(t["port"], t["links"]) for t in pi.port_targets(shared)] == [
-        ("HundredGigE0/0/0/25", {"HundredGigE0/0/0/25/0": ["c"]})]
+        ("HundredGigE0/0/0/25", {"HundredGigE0/0/0/25/0": ["c", "tri"]})]
 
 
 @pytest.mark.asyncio
-async def test_service_with_two_attachments_still_up_keeps_its_own_investigation():
+async def test_service_the_dark_port_leaves_carrying_traffic_is_degraded_on_the_ports_investigation():
+    # The admins' answer to Question 3, 14 Oct 2026: one port dark, the rest still up, is Degraded.
     from diagnostic_mas.dataplane_verify import select_dataplane_candidates
+    from diagnostic_mas.service_final_status import final_service_counts
 
     case = _case(_two_of_three_up(), _on_dark_lane("c", "Hu0/0/0/25/0"))
     explained = await _run(case, _loop([]))
 
-    assert explained == {"c"}
-    picked = select_dataplane_candidates(case, per_category=30, exclude=explained)
-    # Two of its three ends still connect: whether it is Degraded is for its own investigation to say.
-    assert [rec["name"] for _ev, rec in picked] == ["tri"]
+    assert explained == {"c", "tri"}
+    by_name = {d["subject"]["name"]: d for d in case.diagnoses}
+    assert (by_name["c"]["status"], by_name["tri"]["status"]) == ("down", "degraded")
+    assert "still carries traffic" in by_name["tri"]["cause"] and "still carries traffic" not in by_name["c"]["cause"]
+    assert select_dataplane_candidates(case, per_category=30, exclude=explained) == []
+    assert final_service_counts(case)["l2sts"]["sources"]["degraded"]["Degraded — port investigated once"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_port_with_down_and_degraded_services_is_one_row_for_each_status():
+    from diagnostic_mas.open_faults import format_open_faults, open_fault_groups
+
+    case = _case(_two_of_three_up(), _on_dark_lane("c", "Hu0/0/0/25/0"))
+    await _run(case, _loop([]))
+    rows = [{"service": "c", "service_type": "l2bridge", "status": "down", "source": pi.SOURCE},
+            {"service": "tri", "service_type": "l2sts", "status": "degraded", "source": pi.SOURCE}]
+
+    lines = format_open_faults(open_fault_groups(case, rows))
+    assert lines == [f"- `{MICH}` port HundredGigE0/0/0/25: 1 l2bridge Down.",
+                     f"- `{MICH}` port HundredGigE0/0/0/25: 1 l2sts Degraded."]
 
 
 def _sided(name: str, kind: str, sides: list[tuple[str, list[tuple[str, str]]]], *, gateway: str | None = None) -> dict:
@@ -216,12 +235,12 @@ def test_side_with_nothing_up_makes_the_service_down_however_many_are_up_at_the_
         "HundredGigE0/0/0/25": {"HundredGigE0/0/0/25/0": ["split"]}}
 
 
-def test_service_with_an_attachment_up_on_every_side_keeps_its_own_investigation():
+def test_service_with_an_attachment_up_on_every_side_is_listed_under_its_dark_port():
     # As at kans on 13 October 2026: one of two down at one end, the other end up.
     one_each = _sided("tri", "l2sts", [(MICH, [("Hu0/0/0/25/0.0", "fault"), ("Hu0/0/0/13.2081", "pass")]),
                                        (FIU, [("Hu0/0/0/1.11", "pass")])])
 
-    assert pi.port_targets(_case(one_each)) == []
+    assert [t["port"] for t in pi.port_targets(_case(one_each))] == ["HundredGigE0/0/0/25"]
 
 
 def test_bridge_on_one_device_with_a_single_attachment_left_is_down():
@@ -230,10 +249,11 @@ def test_bridge_on_one_device_with_a_single_attachment_left_is_down():
     assert [t["port"] for t in pi.port_targets(_case(alone))] == ["HundredGigE0/0/0/25"]
 
 
-def test_routed_service_with_an_attachment_and_its_gateway_up_is_not_decided_by_the_port():
+def test_routed_service_with_an_attachment_and_its_gateway_up_is_listed_under_its_dark_port():
     host_left = [(MICH, [("Hu0/0/0/25/0.0", "fault"), ("Hu0/0/0/13.2055", "pass")])]
-    # Whether one host left makes it Degraded or Down is not settled: the rule stays out.
-    assert pi.port_targets(_case(_sided("routed", "l3rt", host_left, gateway="pass"))) == []
+    # An attachment and the gateway still up: the port investigation decides it, Degraded.
+    assert [t["port"] for t in pi.port_targets(_case(_sided("routed", "l3rt", host_left, gateway="pass")))] == [
+        "HundredGigE0/0/0/25"]
     # With no attachment up there is nothing to doubt.
     none_left = [(MICH, [("Hu0/0/0/25/0.0", "fault")])]
     assert [t["port"] for t in pi.port_targets(_case(_sided("routed", "l3rt", none_left, gateway="pass")))] == [

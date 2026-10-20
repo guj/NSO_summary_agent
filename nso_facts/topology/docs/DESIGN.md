@@ -43,7 +43,7 @@ Bottom-up troubleshooting order:
 
 | Layer key | Layer | Static (config) | Operational (live) |
 |-----------|-------|-----------------|---------------------|
-| `physical` | 0 — Physical | Configured interfaces | `exec_show` (`interfaces brief`): admin and line-protocol state |
+| `physical` | 0 — Physical | Configured interfaces | `exec_show` (`interfaces brief`): admin and line-protocol state; `get_interface_health` when the device has no CLI (`exec_unavailable`) |
 | `underlay` | 1 — Underlay IGP | Configured IS-IS interfaces/neighbors | `check_isis_adjacencies`: neighbor state |
 | `routing` | 2 — Routing (BGP) | Configured BGP peers | `exec_show` (`bgp ipv4 unicast summary`): session state |
 | `services` | 3 — Services | Service endpoint pairs | Left empty by the diagnostic runner; service evidence lives in the case and is drawn in the report's service topology |
@@ -325,7 +325,7 @@ Per device, **primary source is full device config**:
 get_device_config(device_name)
 ```
 
-The collector walks the returned YANG tree for `router/bgp` → `neighbor[]` (`id`, `remote-as`) and `router-id`. One MCP call per device.
+The collector walks the returned YANG tree for `router/bgp` → `neighbor[]` (`id`, `remote-as`) and `router-id`. One MCP call per device. On a Ciena SAOS device the same instance lists its neighbors as `peer[]` (`address`, `remote-as`) under `ciena-bgp:bgp`.
 
 **Fallback** (only if `get_device_config` fails or returns no BGP): targeted `explore_nso_path` on `…/router/bgp` (IOS-XR: `tailf-ned-cisco-ios-xr:router/bgp`).
 
@@ -469,7 +469,7 @@ svc:l2ptp:customer-a:pe-chi1:pe-den1
 | Layer | Static (config) | Operational (live) |
 |-------|-----------------|--------------------|
 | Inventory | `list_devices` | — |
-| Physical | `explore_nso_path`, fallback `get_device_config` | `exec_show` (`interfaces brief`) |
+| Physical | `explore_nso_path`, fallback `get_device_config` | `exec_show` (`interfaces brief`); `get_interface_health` on `exec_unavailable` |
 | Underlay | `explore_nso_path`, fallback `get_device_config` | `check_isis_adjacencies` |
 | Routing | `get_device_config`, fallback `explore_nso_path` | `exec_show` (`bgp ipv4 unicast summary`, fallback `bgp summary`) |
 

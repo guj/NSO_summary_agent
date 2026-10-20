@@ -29,8 +29,9 @@ Tools:
   "show"); service tools use service_type + service_name; explore_nso_path
   uses path (+ optional depth) — path MUST be module-qualified RESTCONF
   (e.g. tailf-ncs:devices/device=<name>); never bare /services/… (prefer
-  get_services / check_service_sync). get_interface_health is device-wide —
-  pass only device_name (no interface filter).
+  get_services / check_service_sync). get_interface_health takes
+  device_name plus interface for one port; without interface it reads the
+  whole device, which is large and may be cut off.
 - conclude_dataplane — end when ready. Required: dataplane_status
   (up|down|degraded|unknown), observed, cause. Optional: fix_suggestion,
   confidence.

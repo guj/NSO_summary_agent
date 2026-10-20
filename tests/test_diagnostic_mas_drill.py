@@ -179,6 +179,34 @@ async def test_run_drill_phase_skip_when_max_zero(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_follow_ups_that_end_without_a_conclusion_are_counted(monkeypatch):
+    from diagnostic_mas import drill
+    from diagnostic_mas.drill import run_drill_phase
+
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0, max_drill_issues=3, max_tools_per_drill=2))
+    issues = [{"id": f"i{n}", "edge_id": f"bgp:{n}"} for n in range(3)]
+    outcomes = iter([(0, False), (2, True), (0, False)])   # LLM refused, concluded, LLM refused
+
+    async def loop(*a, **k):
+        return next(outcomes)
+
+    async def no_fallback(*a, **k):
+        return None
+
+    monkeypatch.setattr(drill, "select_drill_issues", lambda case, limit: issues[:limit])
+    monkeypatch.setattr(drill, "llm_drill_tool_loop", loop)
+    monkeypatch.setattr(drill, "run_heuristic_drill_fallback", no_fallback)
+
+    class S:
+        fabric_api_key = "k"
+        fabric_model = "m"
+
+    await run_drill_phase(object(), S(), case, device_names={"star-data-sw"}, skip_llm=False)
+    assert case.budget.drill_issues_used == 3
+    assert case.budget.drill_issues_unconcluded == 2
+
+
+@pytest.mark.asyncio
 async def test_run_drill_phase_uses_tool_loop(monkeypatch):
     from diagnostic_mas.drill import execute_one_drill_call, run_drill_phase
 
@@ -1409,3 +1437,14 @@ def test_prior_exploration_lists_dataplane_probes_and_filters_plans():
     kept = _filter_plans_already_run(case, plans, focus_issue=issue)
     assert len(kept) == 1
     assert kept[0]["args"]["device_name"] == "sunn-data-sw"
+
+
+
+def test_drill_finding_keeps_a_valid_session_state_only():
+    from diagnostic_mas.drill import parse_drill_finding
+
+    base = {"observed": "neighbor 10.148.128.1 Idle", "cause": "no route to multi-hop neighbor"}
+    assert parse_drill_finding(base | {"session_state": "Not_Established"})["session_state"] == "not_established"
+    assert parse_drill_finding(base | {"session_state": "established"})["session_state"] == "established"
+    assert "session_state" not in parse_drill_finding(base | {"session_state": "up-ish"})
+    assert "session_state" not in parse_drill_finding(base)

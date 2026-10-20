@@ -646,7 +646,8 @@ def test_interface_that_went_down_is_listed_with_its_sub_interfaces_folded_in():
     newer = _interface_scan({UPLINK: ("down", "down"), UPLINK + ".3000": ("down", "down"), ACCESS: ("up", "up")})
 
     assert compute_case_delta(older, newer)["interfaces_lost"] == [
-        {"device": "pe1-data-sw", "interface": "HundredGigE0/0/0/23", "now": "down", "sub_interfaces": 1}]
+        {"device": "pe1-data-sw", "interface": "HundredGigE0/0/0/23", "now": "down", "sub_interfaces": 1,
+         "services_deleted": 0}]
 
 
 def test_sub_interface_down_under_a_working_port_and_a_shut_port_are_listed_as_such():
@@ -655,8 +656,10 @@ def test_sub_interface_down_under_a_working_port_and_a_shut_port_are_listed_as_s
                              ACCESS: ("admin-down", "admin-down")})
 
     assert compute_case_delta(older, newer)["interfaces_lost"] == [
-        {"device": "pe1-data-sw", "interface": "HundredGigE0/0/0/23.3000", "now": "down", "sub_interfaces": 0},
-        {"device": "pe1-data-sw", "interface": "HundredGigE0/0/0/5", "now": "admin-down", "sub_interfaces": 0}]
+        {"device": "pe1-data-sw", "interface": "HundredGigE0/0/0/23.3000", "now": "down", "sub_interfaces": 0,
+         "services_deleted": 0},
+        {"device": "pe1-data-sw", "interface": "HundredGigE0/0/0/5", "now": "admin-down", "sub_interfaces": 0,
+         "services_deleted": 0}]
 
 
 def test_interface_is_not_called_lost_without_a_down_state_this_run():
@@ -688,6 +691,59 @@ def test_changes_section_and_summary_input_list_interfaces_that_went_down():
             "HundredGigE0/0/0/5 (admin-down)") in text
     assert compact_delta_for_llm(delta)["interfaces_lost"]["count"] == 2
 
+
+
+LANE0, LANE1 = "HundredGigE0/0/0/64/0", "HundredGigE0/0/0/64/1"
+
+
+def _ports_scan(on_ports: dict[str, str], states: dict[str, str]) -> dict:
+    """A full scan: l2bridge services on pe1-data-sw (name -> port) and port oper states (port -> state)."""
+    case = _scan({name: "l2bridge" for name in on_ports})
+    extra = case["evidence"][0]["payload"]["extra"]
+    for name, port in on_ports.items():
+        kind, number = port.split("0/", 1)
+        extra["services"][f"l2bridge/{name}"]["basic_checks"] = {"intent": {
+            "device": "pe1-data-sw", "interface": [{"type": kind, "id": "0/" + number, "outervlan": 0}]}}
+    extra["physical_operational_edges"] = [
+        {"id": f"if:pe1-data-sw:{port}", "state": {"admin": state, "oper": state}} for port, state in states.items()]
+    return case
+
+
+def _lanes_after_deletions() -> dict:
+    """Three ports went down: lane 0 lost its only service, lane 1 kept one of two, port 5 had none."""
+    older = _ports_scan({"s1": LANE0, "s2": LANE1, "s3": LANE1},
+                        {LANE0: "up", LANE1: "up", "HundredGigE0/0/0/5": "up"})
+    newer = _ports_scan({"s3": LANE1}, {LANE0: "down", LANE1: "down", "HundredGigE0/0/0/5": "down"})
+    return compute_case_delta(older, newer)
+
+
+def test_interface_that_went_down_after_all_its_services_were_deleted_is_marked():
+    marked = {row["interface"]: row["services_deleted"] for row in _lanes_after_deletions()["interfaces_lost"]}
+
+    assert marked == {LANE0: 1, LANE1: 0, "HundredGigE0/0/0/5": 0}
+
+
+def test_changes_section_and_summary_input_say_the_services_were_deleted():
+    from diagnostic_mas.case_delta import compact_delta_for_llm, format_changes_since_previous
+
+    delta = _lanes_after_deletions()
+    delta["interfaces_lost"].append({"device": "pe2-data-sw", "interface": "HundredGigE0/0/0/7",
+                                     "now": "down", "sub_interfaces": 0, "services_deleted": 2})
+    text = "\n".join(format_changes_since_previous(delta, previous_run_id="run-1"))
+    summary_input = compact_delta_for_llm(delta)["interfaces_lost"]
+
+    assert f"- `pe1-data-sw`: HundredGigE0/0/0/5, {LANE0} (its service was deleted), {LANE1}" in text
+    assert "- `pe2-data-sw`: HundredGigE0/0/0/7 (its 2 services were deleted)" in text
+    assert f"pe1-data-sw: HundredGigE0/0/0/5, {LANE0} (its service was deleted), {LANE1}" in summary_input["by_device"]
+    assert "deleted" in summary_input["note"]
+
+
+def test_interface_is_not_marked_when_the_newer_scan_was_narrowed():
+    older = _ports_scan({"s1": LANE0}, {LANE0: "up"})
+    newer = _ports_scan({}, {LANE0: "down"})
+    newer["run_configuration"]["Device filter"] = "pe1-data-sw"
+
+    assert [row["services_deleted"] for row in compute_case_delta(older, newer)["interfaces_lost"]] == [0]
 
 def _fault_then(newer_status: str | None, *, checked: bool = True) -> tuple[dict, dict]:
     """Older run: `svc` is a last-known Down. Newer run: its fixed check gives ``newer_status``."""

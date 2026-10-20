@@ -260,6 +260,26 @@ def build_phase1_metrics(
     for layer, n in sorted(issue_counts.items()):
         lines.append(g("nso_topology_issues", float(n), {"layer": layer}))
 
+    # Leads, not a status: a rate is the average over the gap since the previous scan.
+    # Each push replaces the last, so a link that stops gaining errors drops off.
+    crc_rates: list[str] = []
+    state_changes: list[str] = []
+    for row in snapshot.get("links_gaining_errors") or []:
+        if not isinstance(row, dict):
+            continue
+        labels = {"device": str(row.get("device")), "port": str(row.get("port"))}
+        crc = _intish((row.get("gained") or {}).get("crc"))
+        minutes = _intish(row.get("minutes"))
+        if crc > 0 and minutes > 0:
+            crc_rates.append(g("nso_link_crc_per_minute", crc / minutes, labels))
+        changes = _intish(row.get("state_changes"))
+        if changes > 0:
+            state_changes.append(g("nso_link_state_changes", float(changes), labels))
+    if crc_rates:
+        lines += ["# TYPE nso_link_crc_per_minute gauge", *crc_rates]
+    if state_changes:
+        lines += ["# TYPE nso_link_state_changes gauge", *state_changes]
+
     return lines
 
 

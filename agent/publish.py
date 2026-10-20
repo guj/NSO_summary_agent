@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import smtplib
 import ssl
 from email.message import EmailMessage
@@ -14,6 +15,20 @@ import urllib.request
 
 from agent.config import Settings, email_configured, load_settings, validate_email_settings
 from agent.report_format import ReportOutputs
+
+
+def mask_nso_address(text: str, address: str | None) -> str:
+    """Hide the NSO management address in text that is printed or sent out.
+
+    Every character but the last two becomes ``*`` (dots and colons kept), so
+    ``192.0.2.146`` reads ``***.*.*.*46``. Only the whole address is replaced, never
+    part of a longer address or name.
+    """
+    if not text or not address or len(address) <= 2:
+        return text
+    masked = re.sub(r"[^.:]", "*", address[:-2]) + address[-2:]
+    pattern = r"(?<![\w.-])" + re.escape(address) + r"(?![\w-]|\.\w)"
+    return re.sub(pattern, masked, text, flags=re.IGNORECASE)
 
 
 def save_run_artifacts(

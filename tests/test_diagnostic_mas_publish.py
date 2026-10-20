@@ -141,3 +141,33 @@ async def test_run_publish_persists_and_publishes(tmp_path: Path):
     assert runs
     assert (runs[0] / "report.md").read_text(encoding="utf-8") == "# report\n"
     assert (runs[0] / "case.json").exists()
+
+
+# A documentation address stands in for the NSO address, which must not appear in the repo.
+NSO = "192.0.2.146"
+
+
+def test_nso_address_is_masked_keeping_its_last_two_characters():
+    from agent.publish import mask_nso_address
+
+    text = (f"brist-data-sw: RESTCONF 500 at https://{NSO}:443/restconf/data/tailf-ncs:devices/device=x; "
+            f"peers 192.0.2.14 and 10.148.0.1; again {NSO}.")
+    assert mask_nso_address(text, NSO) == (
+        "brist-data-sw: RESTCONF 500 at https://***.*.*.*46:443/restconf/data/tailf-ncs:devices/device=x; "
+        "peers 192.0.2.14 and 10.148.0.1; again ***.*.*.*46.")
+    assert mask_nso_address(text, None) == text and mask_nso_address(text, "") == text
+    assert mask_nso_address("at https://nso.lab.example:443/", "nso.lab.example") == "at https://***.***.*****le:443/"
+
+
+def test_saved_reports_mask_the_nso_address_and_the_case_keeps_it(tmp_path: Path):
+    case = CaseFile(budget=Budget(max_deep_checks=1, max_handoffs=1))
+    case.issues = [{"code": "collection_error", "layer": "routing", "status": "open",
+                    "message": f"brist-data-sw: RESTCONF 500 at https://{NSO}:443/restconf/data/x"}]
+    out = persist_case(tmp_path / "diagnostic_mas", run_id="r1", case=case,
+                       report=f"# Report\n\nRESTCONF 500 at https://{NSO}:443/restconf\n", nso_address=NSO)
+
+    for name in ("report.md", "report.html"):
+        text = (out.parent / name).read_text(encoding="utf-8")
+        assert NSO not in text and "***.*.*.*46" in text, name
+    # Local state only: the next scan compares problems by their exact message.
+    assert NSO in out.read_text(encoding="utf-8")

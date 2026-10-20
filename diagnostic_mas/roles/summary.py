@@ -608,7 +608,8 @@ async def summary_narrative(
     except Exception as exc:  # noqa: BLE001
         note = _format_summary_llm_failure(settings, exc)
         print(note, file=sys.stderr)
+        # The note is a paragraph of its own, not the tail of the last finding.
         if deterministic:
-            return scrub_internal_ids(deterministic) + " " + note
-        return _template_narrative(case, skip_llm=False) + " " + note
+            return scrub_internal_ids(deterministic) + "\n\n" + note
+        return _template_narrative(case, skip_llm=False) + "\n\n" + note
     return _template_narrative(case, skip_llm=False)

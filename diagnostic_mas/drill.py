@@ -99,6 +99,14 @@ DRILL_CONCLUDE_TOOL = {
                     "type": "string",
                     "enum": ["high", "medium", "low"],
                 },
+                "session_state": {
+                    "type": "string",
+                    "enum": ["established", "not_established", "unknown"],
+                    "description": (
+                        "BGP session Issues only: the session as the device you could "
+                        "read reports it now. Omit for other Issues."
+                    ),
+                },
             },
             "required": ["observed", "cause"],
         },
@@ -900,7 +908,7 @@ def parse_drill_finding(data: Any) -> dict[str, Any] | None:
     conf = str(data.get("confidence") or "medium").lower()
     if conf not in {"high", "medium", "low"}:
         conf = "medium"
-    return {
+    finding = {
         "observed": observed.strip(),
         "cause": cause.strip(),
         "fix_suggestion": fix.strip() if isinstance(fix, str) and fix.strip() else None,
@@ -909,6 +917,10 @@ def parse_drill_finding(data: Any) -> dict[str, Any] | None:
         ),
         "confidence": conf,
     }
+    state = str(data.get("session_state") or "").strip().lower()
+    if state in {"established", "not_established", "unknown"}:
+        finding["session_state"] = state
+    return finding
 
 
 def record_drill_finding(
@@ -1507,6 +1519,8 @@ async def run_drill_phase(
                 break
         if getattr(case, "llm_halt_reason", None):
             break
+        if not concluded:
+            case.budget.drill_issues_unconcluded += 1
         if not concluded and session.tools_used <= before:
             await run_heuristic_drill_fallback(
                 client,

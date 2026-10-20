@@ -2409,6 +2409,37 @@ async def test_summary_narrative_deterministic_opt_in(capsys):
     assert "should not appear" not in text
 
 
+@pytest.mark.asyncio
+async def test_a_failed_summary_chat_is_noted_on_its_own_line(capsys):
+    # 14 Oct 2026: the note was stuck onto the end of the last summary bullet.
+    from diagnostic_mas.case import add_diagnosis
+    from diagnostic_mas.roles.summary import summary_narrative
+
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    add_diagnosis(
+        case,
+        kind="dataplane",
+        source="llm",
+        status="down",
+        subject={"service_type": "l2ptp", "name": "svc1"},
+        observed="AC DN",
+        cause="attachment down",
+    )
+
+    class S:
+        fabric_api_key = "k"
+        fabric_model = "m"
+        llm_timeout = 200
+
+    def refused(_s, _c):
+        raise RuntimeError("upstream connect error")
+
+    text = await summary_narrative(case, S(), skip_llm=False, llm_summary_fn=refused)  # type: ignore[arg-type]
+    body, _, note = text.rpartition("\n\n")
+    assert "attachment down" in body
+    assert note.startswith("LLM summary failed: upstream connect error")
+
+
 def test_record_dataplane_finding_dual_writes_diagnosis():
     from diagnostic_mas.dataplane_verify import _record_dataplane_finding
 
@@ -3469,3 +3500,41 @@ async def test_empty_tool_turn_nudge_then_still_empty(monkeypatch, capsys):
     assert "nudging once: force conclude_dataplane" in err
     assert "stop (after nudge)" in err
     assert "prose round" in err
+
+
+@pytest.mark.asyncio
+async def test_service_deleted_before_its_investigation_gets_no_llm_request(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from diagnostic_mas import service_presence as sp
+    from diagnostic_mas.dataplane_verify import llm_dataplane_verify_one
+
+    class NoLLM:
+        def __init__(self):
+            self.chat = self
+            self.completions = self
+
+        def create(self, **kwargs):
+            raise AssertionError("no LLM request for a service that is gone")
+
+    listing = AsyncMock(return_value={"status": "success", "data": {"services": [{"name": "other"}]}})
+    monkeypatch.setattr(sp, "call_mcp", listing)
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0, max_drill_issues=2, max_tools_per_drill=5))
+    rec = {"name": "svc1", "service_type": "l2bridge", "system_status": "up",
+           "dataplane_status": "not_checked", "status": "up", "devices": ["cern-data-sw"]}
+    session = DrillSession(max_tools=40, issue_edge_id="svc1")
+
+    class S:
+        fabric_model = "m"
+        fabric_api_key = "k"
+        fabric_api_url = "http://x"
+
+    ok = await llm_dataplane_verify_one(object(), S(), case, record=rec, device_names={"cern-data-sw"},
+                                        session=session, openai_client=NoLLM())
+
+    assert ok is True
+    assert sp.disappeared(rec) and case.service_coverage["svc1"] == "disappeared"
+    assert session.tools_used == 0
+    listing.assert_awaited_once()
+    assert listing.await_args.args[1:] == ("get_services", {"service_type": "l2bridge"})
+    assert listing.await_args.kwargs == {"bypass_cache": True}

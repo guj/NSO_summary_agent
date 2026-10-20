@@ -147,11 +147,10 @@ def test_scan_cost_is_the_keys_spend_at_the_end_less_its_spend_at_the_start():
                       "cost": 2.24, "spend_before": 444.04702, "spend_after": 446.28702,
                       "budget_spend": 282.77905, "budget_max": 500.0, "budget_left": 217.22095,
                       "budget_period": "1mo", "budget_reset_at": "2026-11-01"}
+    # One line for this scan; the budget is shown at the start of the scan, not here (14 Oct 2026).
     assert usage_lines(record) == [
-        "**LLM usage:** 27 requests · 1,234,567 input tokens · 45,678 output tokens",
-        "**LLM cost this scan:** $2.24, the provider's spend for this key ($444.05 → $446.29); "
-        "the last requests may not be counted yet",
-        "**LLM budget:** $282.78 of $500.00 used (1mo), $217.22 left, resets 2026-11-01",
+        "**LLM this scan:** $2.24 · 27 requests · 1,234,567 input and 45,678 output tokens. "
+        "The last request may not be counted yet.",
     ]
 
 
@@ -160,11 +159,32 @@ def test_provider_without_spend_still_gets_its_token_counts():
 
     assert record["cost"] is None and "budget_max" not in record
     assert usage_lines(record) == [
-        "**LLM usage:** 27 requests · 1,234,567 input tokens · 45,678 output tokens · 2 answers gave no token counts",
-        "**LLM cost:** not reported by this provider",
+        "**LLM this scan:** 27 requests · 1,234,567 input and 45,678 output tokens · "
+        "2 answers gave no token counts; no spend reading from the provider.",
     ]
     # A scan that ran without the LLM has no record and adds no lines.
     assert usage_lines({}) == [] and usage_lines(None) == []
+
+
+def test_a_reading_that_failed_at_the_end_is_not_taken_for_a_provider_without_spend():
+    # 14 Oct 2026: the proxy refused connections at the end of the scan, after reporting at the start.
+    record = usage_record(BEFORE, None, TOTALS)
+
+    assert record["cost"] is None and record["missing_reading"] == "end"
+    assert usage_lines(record) == [
+        "**LLM this scan:** 27 requests · 1,234,567 input and 45,678 output tokens; "
+        "cost unknown: the provider gave no spend reading at the end of the scan.",
+    ]
+
+
+def test_a_reading_that_failed_at_the_start_is_said_too():
+    record = usage_record(None, AFTER, TOTALS)
+
+    assert record["cost"] is None and record["missing_reading"] == "start"
+    assert usage_lines(record) == [
+        "**LLM this scan:** 27 requests · 1,234,567 input and 45,678 output tokens; "
+        "cost unknown: the provider gave no spend reading at the start of the scan.",
+    ]
 
 
 def test_cost_is_not_guessed_when_only_one_reading_exists_or_the_total_went_back():
@@ -173,7 +193,7 @@ def test_cost_is_not_guessed_when_only_one_reading_exists_or_the_total_went_back
     # With a budget and no running total on the key, the account's spend is the measure.
     by_account = usage_record(LlmSpend(budget_spend=10.0, budget_max=50.0), LlmSpend(budget_spend=10.5, budget_max=50.0), TOTALS)
     assert by_account["cost"] == 0.5
-    assert "the provider's spend for this account ($10.00 → $10.50)" in usage_lines(by_account)[1]
+    assert usage_lines(by_account)[0].startswith("**LLM this scan:** $0.50 (from the account's spend) · 27 requests")
 
 
 def test_accounting_starts_the_counts_afresh_and_ends_with_the_record():
@@ -211,11 +231,11 @@ def test_record_is_saved_with_the_scan_and_shown_under_run_details():
     assert case_to_dict(case)["llm_usage"]["cost"] == 2.24
     report = render_report(case, summary="s", duration_seconds=1, dry_run=True, llm_model="m")
     details = report[report.index("## Run details"):]
-    assert "**LLM usage:** 27 requests · 1,234,567 input tokens · 45,678 output tokens" in details
-    assert "**LLM cost this scan:** $2.24" in details and "**LLM budget:** $282.78 of $500.00 used" in details
+    assert "**LLM this scan:** $2.24 · 27 requests · 1,234,567 input and 45,678 output tokens." in details
+    assert "LLM budget" not in details
 
     plain = render_report(CaseFile(budget=Budget(0, 0)), summary="s", duration_seconds=1, dry_run=True, llm_model="m")
-    assert "LLM usage" not in plain
+    assert "LLM this scan" not in plain
 
 
 async def test_scan_shows_the_budget_at_the_start_and_keeps_what_it_used(tmp_path, capsys):
@@ -255,7 +275,7 @@ async def test_scan_shows_the_budget_at_the_start_and_keeps_what_it_used(tmp_pat
     assert "LLM budget: $280.54 of $500.00 used." in capsys.readouterr().err
     saved = next((tmp_path / "diagnostic_mas" / "runs").iterdir())
     assert json.loads((saved / "case.json").read_text())["llm_usage"]["cost"] == 2.24
-    assert "**LLM cost this scan:** $2.24" in (saved / "report.md").read_text()
+    assert "**LLM this scan:** $2.24" in (saved / "report.md").read_text()
 
 
 async def test_scan_without_the_llm_asks_the_provider_nothing(tmp_path):

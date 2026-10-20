@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 from copy import copy
 import sys
 from datetime import datetime, timezone
@@ -28,7 +29,7 @@ from agent.fabric_key import (  # noqa: E402
 from agent.llm_usage import (  # noqa: E402
     begin_llm_accounting, budget_line, end_llm_accounting, read_llm_spend,
 )
-from agent.publish import publish_all  # noqa: E402
+from agent.publish import mask_nso_address, publish_all  # noqa: E402
 from diagnostic_mas.case import Budget, CaseFile  # noqa: E402
 from diagnostic_mas.coordinator import (  # noqa: E402
     run_autonomous_loop,
@@ -61,6 +62,8 @@ from nso_facts.mcp_client import (  # noqa: E402
     nso_watch,
 )
 from nso_facts.mcp_accounting import (  # noqa: E402
+    current_mcp_stats,
+    mcp_call_record,
     print_mcp_accounting,
     set_mcp_stage,
     start_mcp_accounting,
@@ -608,11 +611,6 @@ async def _run_after_accounting(
         previous_run_id=previous_run_id, run_id=run_id,
     )
     first_seen_from_saved_scans(case.last_known_service_faults, Path(state_dir) / "runs", before=run_id)
-    # What each rule the operators have not decided would change in this scan; reporting only.
-    from diagnostic_mas import undecided_rules
-    from nso_facts.mcp_client import successful_live_devices
-
-    case.undecided_rules = undecided_rules.undecided_rule_counts(case, answered=set(successful_live_devices()))
     case_delta = None
     if previous_case is not None:
         case_delta = compute_case_delta(previous_case, case_to_dict(case))
@@ -666,6 +664,8 @@ async def _run_after_accounting(
             narrative = ""
         # After the last request: what the scan used, and its cost when the provider reports it.
         case.llm_usage = report_case.llm_usage = end_llm_accounting(settings)
+    # The MCP calls so far; the full per-call list is still printed when the run ends.
+    case.mcp_calls = report_case.mcp_calls = mcp_call_record(current_mcp_stats())
     duration = time.monotonic() - t0
     report = render_report(
         report_case,
@@ -680,6 +680,9 @@ async def _run_after_accounting(
         case_delta=case_delta,
         previous_run_id=previous_run_id,
     )
+    # Error messages carry NSO's RESTCONF URLs; nothing printed or sent shows its address.
+    nso_address = os.environ.get("NSO_ADDRESS")
+    report = mask_nso_address(report, nso_address)
     print(report)
 
     # A channel that cannot deliver must not stop the others, the saved report or metrics.
@@ -690,6 +693,7 @@ async def _run_after_accounting(
             run_id=run_id,
             case=case,
             report=report,
+            nso_address=nso_address,
         )
         from diagnostic_mas.html_report import notification_digest
         from urllib.parse import quote
@@ -699,11 +703,8 @@ async def _run_after_accounting(
             report_url = (settings.diagnostic_report_base_url.rstrip("/") + "/"
                           + quote(out.parent.name, safe="") + "/report.html")
         channels = publish_all(
-            notification_digest(report, run_id, changes=[
-                *digest_changes(case_delta, previous_run_id, open_faults),
-                *(["", *rules] if (rules := undecided_rules.digest_undecided_rules(
-                    case.undecided_rules, (previous_case or {}).get("undecided_rules"))) else []),
-            ]),
+            mask_nso_address(notification_digest(
+                report, run_id, changes=list(digest_changes(case_delta, previous_run_id, open_faults))), nso_address),
             run_id,
             settings,
             attachment_path=out.parent / "report.html",
@@ -722,7 +723,9 @@ async def _run_after_accounting(
             print(f"Delivery failed: {channel} — {reason}", file=sys.stderr)
         if not bool(getattr(args, "skip_metrics", False)):
             duration = time.monotonic() - t0
-            snapshot = metrics_snapshot_from_case(case, run_id=run_id, report_url=report_url)
+            snapshot = metrics_snapshot_from_case(
+                case, run_id=run_id, report_url=report_url,
+                links_gaining_errors=(case_delta or {}).get("links_gaining_errors"))
             if push_phase1_metrics(
                 snapshot,
                 settings,

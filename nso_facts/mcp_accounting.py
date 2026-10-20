@@ -175,6 +175,21 @@ def stop_mcp_accounting() -> McpCallStats:
     return McpCallStats(list(records or []))
 
 
+def current_mcp_stats() -> McpCallStats:
+    """The calls recorded so far, without stopping the count."""
+    return McpCallStats(list(_active.get() or []))
+
+
+# Stages in which an LLM investigation chooses the calls.
+_LLM_STAGES = frozenset({"dataplane", "autonomous", "drill"})
+
+
+def mcp_call_record(stats: McpCallStats) -> dict[str, int]:
+    """What is kept with the scan: all calls, those answered from cache, and those made during LLM investigations."""
+    return {"total": stats.total, "wire": stats.wire, "cache_hits": stats.cache_hits,
+            "during_llm": sum(1 for r in stats.records if r.stage in _LLM_STAGES)}
+
+
 def set_mcp_stage(stage: str | None) -> None:
     """Label subsequent ``record_mcp_call`` entries (e.g. spines, dataplane)."""
     if stage is None:

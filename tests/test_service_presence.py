@@ -54,3 +54,36 @@ async def test_normal_link_fault_does_not_refresh_inventory(monkeypatch):
     f={"dataplane_status":"down","cause":"Attachment link down, receive power low"}
     assert await sp.reconcile_presence(None,CaseFile(Budget(0,0)),{},f)==f
     call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_service_gone_before_its_investigation_is_recorded_as_no_longer_present(monkeypatch):
+    call=AsyncMock(return_value={"status":"success","data":{"services":[{"name":"other"}]}})
+    monkeypatch.setattr(sp,"call_mcp",call)
+    r={"name":"svc","service_type":"l2bridge","devices":["a"],"basic_checks":{"checked_at":"earlier"}}
+    c=CaseFile(Budget(0,0));c.evidence=[{"kind":"spine","role":"service","payload":{"extra":{"services":{"l2bridge/svc":r}}}}]
+    c.issues=[{"layer":"services","edge_id":"svc","code":"service_down","status":"open"}]
+
+    assert await sp.gone_before_investigation(None,c,r) is True
+    call.assert_awaited_once_with(None,"get_services",{"service_type":"l2bridge"},bypass_cache=True)
+    assert sp.disappeared(r) and c.service_coverage["svc"]=="disappeared"
+    assert c.issues[0]["status"]=="explained"
+    assert "Services no longer present" in "\n".join(sp.disappearance_section(c))
+    assert final_service_counts(c)=={}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response",[
+ {"status":"success","data":{"services":[{"name":"svc"}]}},
+ {"status":"error","data":{"services":[]}},
+ {"status":"success","data":{"services":[],"has_more":True}},
+ TimeoutError(),
+])
+async def test_service_still_listed_or_unreadable_list_lets_the_investigation_run(monkeypatch,response):
+    if isinstance(response,Exception): call=AsyncMock(side_effect=response)
+    else: call=AsyncMock(return_value=response)
+    monkeypatch.setattr(sp,"call_mcp",call)
+    r={"name":"svc","service_type":"l2bridge"};c=CaseFile(Budget(0,0))
+
+    assert await sp.gone_before_investigation(None,c,r) is False
+    assert "presence_recheck" not in r and c.evidence==[] and "svc" not in c.service_coverage

@@ -261,6 +261,11 @@ Slack and email receive a compact digest. Email also carries the full HTML repor
 a webhook cannot attach files; with a bot token the HTML report is uploaded to the channel
 (see [Compact diagnostic notifications and HTML reports](#compact-diagnostic-notifications-and-html-reports)).
 
+Error messages quote NSO's RESTCONF URLs, so everything a scan prints or sends (the report on
+screen, `report.md`, `report.html` and the digest) shows `NSO_ADDRESS` masked except for its last
+two characters, for example `192.0.2.146` as `***.*.*.*46`. The local `case.json` keeps the messages as
+collected, so the next scan can compare them.
+
 ### Slack (incoming webhook)
 
 1. In Slack: **Apps → Incoming Webhooks → Add to channel**
@@ -552,7 +557,8 @@ Stdout / `report.md` use a concise operator layout (not the older Issues/Budget 
    of faulted services that share a service type and location; then one action per
    device (overlapping involvement counts; do not sum), then reassess distinct
    unknowns; endpoint combinations stay under Services  
-6. **Run details** — evidence counts, budgets, dry-run / reporting notes  
+6. **Run details** — evidence counts, budgets, MCP calls (all, from cache, and those made
+   during LLM investigations), LLM use, dry-run / reporting notes  
 
 In the HTML report, each device also has a collapsed **Interfaces and hardware** block (interface counts, hardware readings, exceptions). It is not part of the terminal or Slack text.
 
@@ -651,7 +657,8 @@ For a down link behind a port finding, the report adds the time the device itsel
 gives ("Last link flapped"), read from that scan's own port investigation and never
 from an earlier scan. **Changes since previous run** lists these under
 **Service faults still open**, one line per port or cut-off device that explains
-several services, and one line per reason for services the fixed check decided
+several services (a port that leaves some Down and others Degraded gets one line for
+each), and one line per reason for services the fixed check decided
 Down for the same reason. A fault found in the current scan is listed as new, not as still open.
 
 
@@ -672,25 +679,13 @@ were cleared in between, or when a counter went back. A read that fails leaves t
 without a reading and is not a fault. The first scan after enabling this has nothing to
 subtract.
 
-### Undecided rules
-
-Two rules for l3rt are waiting for the operators to decide. Until then the report
-shows how many services each would change, in an **Undecided rules** block after
-**Changes since previous run**. The block is left out when both counts are zero,
-and no status in the report depends on it.
-
-- **Border route:** l3rt that are Up on the LLM's conclusion where the fixed check's
-  only gap is the service's exact prefix on a border router. If the exact prefix is
-  required they become Unknown; if a covering route is enough they pass without the LLM.
-- **Cut-off device:** for a device with no IS-IS adjacency and no BGP session up, the
-  services its cut-off investigation marked Down, and the l3rt that name only that
-  device and are still Up. Those would be Down if an l3rt must reach other sites.
-
-The Slack and email digest shows the cut-off line whenever a device is cut off, and
-the border-route line only when its count differs from the previous scan. The counts
-are saved with the scan as `undecided_rules`. All of this lives in
-`diagnostic_mas/undecided_rules.py`; remove a rule's count there once the rule is
-decided and built into the fixed checks.
+A device without a CLI, such as a Ciena managed over NETCONF, answers `show` commands with
+`exec_unavailable`. Its interface states and port counters are then read with
+`get_interface_health` instead. A port the service model names `Generic14` is port `14` on
+the device. Those readings have CRC and input-error counts but no state-transition count and
+no clear time, so a reset is caught only by a counter that went back. Instead of a transition
+count, the device gives the time of its last state change: a port that is up now and changed
+after the previous scan's read is listed as having gone down and come back (count not reported).
 
 ### LLM usage, cost and budget
 
@@ -698,20 +693,25 @@ A scan that uses the LLM reports what it used, in two layers.
 
 - **Token counts, with any OpenAI-compatible endpoint.** Every answer carries its
   input and output token counts; the scan adds them up, the start-up model probe
-  included. Run details show `LLM usage: N requests · X input tokens · Y output tokens`.
+  included.
 - **Cost and budget, when the provider reports them.** A LiteLLM proxy serves
   `GET /key/info` and `GET /user/info` at its root. The scan reads them before its
-  first request and after its last. The start of the scan prints one line to stderr,
-  for example `LLM budget: $280.54 of $500.00 used (1mo), $219.46 left, resets 2026-11-01.`
-  Run details then show the scan's cost, which is the key's spend at the end less
-  its spend at the start, and the budget that is left. The budget is the key's own
-  when it has one, otherwise its user's.
+  first request and after its last. The start of the scan prints the budget on one
+  line to stderr, for example
+  `LLM budget: $280.54 of $500.00 used (1mo), $219.46 left, resets 2026-11-01.`
+  The budget is the key's own when it has one, otherwise its user's.
 
-With any other provider the cost line reads `LLM cost: not reported by this provider`
-and the token counts are still shown. Two limits: the cost is the key's spend, so
-anything else using the same key during the scan is included, and a proxy records
-spend shortly after each request, so the last requests may not be counted yet.
-The record is saved with the scan as `llm_usage` in `case.json`.
+Run details show one line for the scan itself, for example
+`LLM this scan: $2.71 · 34 requests · 440,044 input and 30,613 output tokens.`
+The cost is the key's spend at the end less its spend at the start. The budget and the
+provider's running totals are not repeated there, because readers took those totals for
+the scan's own figures. With any other provider the line gives the tokens and says
+`no spend reading from the provider`. When only one of the two readings fails, for example
+because the provider refused requests at the end of a scan, it says the cost is unknown and
+which reading is missing. Two limits: the cost is the key's spend, so anything else using
+the same key during the scan is included, and a proxy records spend shortly after each
+request, so the last request may not be counted yet. The record, with the running totals
+and the budget read at the end, is saved with the scan as `llm_usage` in `case.json`.
 `nso-diagnostic-run --check-connection` prints the budget line too. A failed
 read never stops a scan.
 

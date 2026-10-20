@@ -764,7 +764,9 @@ def _collect_bgp_neighbors(
             local_as = _as_int(inst.get("id") or inst.get("as"))
             vrf = inst.get("vrf")
             vrf_name = vrf.get("id") if isinstance(vrf, dict) else None
-            neighbor_rows = inst.get("neighbor") or inst.get("neighbors")
+            # IOS-XR: neighbor/id; Ciena SAOS: peer/address.
+            neighbor_rows = (inst.get("neighbor") or inst.get("neighbors")
+                             or inst.get("peer") or inst.get("peers"))
             if isinstance(neighbor_rows, dict):
                 neighbor_rows = [neighbor_rows]
             if not isinstance(neighbor_rows, list):
@@ -772,7 +774,7 @@ def _collect_bgp_neighbors(
             for row in neighbor_rows:
                 if not isinstance(row, dict):
                     continue
-                address = row.get("id") or row.get("neighbor-address")
+                address = row.get("id") or row.get("neighbor-address") or row.get("address")
                 if not isinstance(address, str) or not address.strip():
                     continue
                 remote_as = _as_int(row.get("remote-as") or row.get("remote_as"))

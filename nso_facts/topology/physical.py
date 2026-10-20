@@ -308,27 +308,34 @@ async def _operational_interfaces_for_device(
     )
     issues: list[dict[str, Any]] = []
     eq_map = equivalences or {}
+    unread: dict[str, str] = {}
 
     if isinstance(result, dict) and result.get("status") == "error":
         message = result.get("error_message", "exec_show interfaces brief failed")
-        return (
-            [_unknown_operational_edge(edge["id"], message) for edge in static_edges],
-            [
-                {
-                    "severity": "medium",
-                    "layer": "physical",
-                    "code": "collection_error",
-                    "edge_id": None,
-                    "message": f"{device}: {message}",
-                }
-            ],
-        )
-
-    data = unwrap_mcp_data(result)
-    brief_text = ""
-    if isinstance(data, dict):
-        brief_text = str(data.get("result") or "")
-    live = parse_interfaces_brief(brief_text)
+        live: dict[str, dict[str, str]] | None = None
+        if result.get("error_code") == "exec_unavailable":
+            # The device's driver has no CLI (a Ciena on NETCONF): read the same states
+            # through the structured tool, which picks the platform itself.
+            live, unread, message = await _states_from_interface_health(client, device, message)
+        if live is None:
+            return (
+                [_unknown_operational_edge(edge["id"], message) for edge in static_edges],
+                [
+                    {
+                        "severity": "medium",
+                        "layer": "physical",
+                        "code": "collection_error",
+                        "edge_id": None,
+                        "message": f"{device}: {message}",
+                    }
+                ],
+            )
+    else:
+        data = unwrap_mcp_data(result)
+        brief_text = ""
+        if isinstance(data, dict):
+            brief_text = str(data.get("result") or "")
+        live = parse_interfaces_brief(brief_text)
 
     static_entries: list[tuple[str, str]] = []
     for edge in static_edges:
@@ -375,6 +382,11 @@ async def _operational_interfaces_for_device(
 
     for static_iface, edge_id in static_entries:
         if edge_id in seen_ids:
+            continue
+        no_state = next((name for name in unread if interfaces_match(static_iface, name)), None)
+        if no_state is not None:
+            operational.append(_no_state_operational_edge(edge_id, unread[no_state]))
+            seen_ids.add(edge_id)
             continue
         box = resolve_equivalence(eq_map, device, static_iface)
         if box is not None:
@@ -441,6 +453,39 @@ async def _operational_interfaces_for_device(
         )
 
     return operational, issues
+
+
+async def _states_from_interface_health(
+    client: Any, device: str, exec_message: str
+) -> tuple[dict[str, dict[str, str]] | None, dict[str, str], str]:
+    """Interface states from ``get_interface_health``, in the ``interfaces brief`` vocabulary.
+
+    Returns (live, unread, message): ``live`` maps each port to Intf/LineP state as the brief
+    prints them; ``unread`` names ports the device gave no state for, with the reason. On a
+    failed call ``live`` is None and ``message`` says why both reads failed.
+    """
+    result = await call_mcp(client, "get_interface_health", {"device_name": device})
+    if not isinstance(result, dict) or result.get("status") != "success":
+        detail = result.get("error_message") if isinstance(result, dict) else "no answer"
+        return None, {}, f"{exec_message}; get_interface_health failed: {detail}"
+    data = unwrap_mcp_data(result)
+    live: dict[str, dict[str, str]] = {}
+    unread: dict[str, str] = {}
+    for row in (data.get("interfaces") if isinstance(data, dict) else None) or []:
+        name = row.get("name") if isinstance(row, dict) else None
+        if not isinstance(name, str) or not name:
+            continue
+        admin = str(row.get("admin_status") or "").lower()
+        oper = str(row.get("oper_status") or "").lower()
+        if row.get("read_ok") is False or admin not in ("up", "down") or not oper:
+            unread[name] = "no interface state from get_interface_health"
+        elif admin == "down":
+            live[name] = {"admin": "admin-down", "oper": "admin-down"}
+        elif oper == "up":
+            live[name] = {"admin": "up", "oper": "up"}
+        else:
+            live[name] = {"admin": "down", "oper": "down"}
+    return live, unread, ""
 
 
 def _mismatch_issue(
@@ -598,6 +643,14 @@ def _unknown_operational_edge(edge_id: str, detail: str) -> dict[str, Any]:
     return {
         "id": edge_id,
         "state": {"status": "unknown", "detail": detail},
+    }
+
+
+def _no_state_operational_edge(edge_id: str, detail: str) -> dict[str, Any]:
+    """On the device by name, but it reports no state: unknown, and not a naming mismatch."""
+    return {
+        "id": edge_id,
+        "state": {"status": "unknown", "detail": detail, "no_state": True},
     }
 
 

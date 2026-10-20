@@ -271,12 +271,34 @@ def _interface_states(case: dict[str, Any]) -> dict[tuple[str, str], dict[str, A
     return out
 
 
+def _services_on_ports(case: dict[str, Any]) -> dict[tuple[str, str], set[str]]:
+    """(device, port in its long spelling) -> the services attached there in that run."""
+    from diagnostic_mas.operational_checks.probe import attachments
+    from diagnostic_mas.port_counters import _parent_port
+
+    out: dict[tuple[str, str], set[str]] = {}
+    for extra in _service_extras(case):
+        for key, record in (extra.get("services") or {}).items():
+            if not isinstance(record, dict):
+                continue
+            name = str(record.get("name") or str(key).split("/", 1)[-1]).strip()
+            for end in attachments((record.get("basic_checks") or {}).get("intent") or {}):
+                out.setdefault((end["device"], _parent_port(end["ac"])), set()).add(name)
+    return out
+
+
 def _interfaces_lost(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[str, Any]]:
     """Interfaces up in the older run that the newer run recorded as down.
 
     Only a recorded down or admin-down state counts. An interface missing from
     the newer list, or without a collected state, is not evidence of a fault.
+    ``services_deleted`` counts the older run's services on the port when every
+    one of them is gone from the newer run; otherwise it is 0.
     """
+    from diagnostic_mas.port_counters import _parent_port
+
+    gone = set(_services_no_longer_present(older, newer))
+    riders = _services_on_ports(older)
     now = _interface_states(newer)
     lost = {
         key: str(now[key]["oper"])
@@ -289,17 +311,21 @@ def _interfaces_lost(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[
         if dot and unit.isdigit() and (device, parent) in lost:
             rows[device, parent]["sub_interfaces"] += 1   # the parent sorts first
         else:
+            on_port = riders.get((device, _parent_port(interface)), set())
             rows[device, interface] = {"device": device, "interface": interface,
-                                       "now": state, "sub_interfaces": 0}
+                                       "now": state, "sub_interfaces": 0,
+                                       "services_deleted": len(on_port) if on_port and on_port <= gone else 0}
     return list(rows.values())
 
 
 def _interface_lines(rows: list[dict[str, Any]], *, per_device: int = 6) -> list[str]:
     by_device: dict[str, list[str]] = {}
     for row in rows:
-        n = row["sub_interfaces"]
+        n, deleted = row["sub_interfaces"], row.get("services_deleted") or 0
         note = (" (admin-down)" if row["now"] == "admin-down" else "") + (
-            f" (+{n} sub-interface{'s' if n != 1 else ''})" if n else "")
+            f" (+{n} sub-interface{'s' if n != 1 else ''})" if n else "") + (
+            " (its service was deleted)" if deleted == 1
+            else f" (its {deleted} services were deleted)" if deleted else "")
         by_device.setdefault(row["device"], []).append(row["interface"] + note)
     return [
         f"`{device}`: " + ", ".join(names[:per_device])
@@ -1306,7 +1332,10 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
             "count": len(interfaces),
             "by_device": [line.replace("`", "") for line in _interface_lines(interfaces)][:12],
             "note": ("Up in the previous run and recorded down in this one. "
-                     "admin-down means shut down by configuration."),
+                     "admin-down means shut down by configuration. \"its service was deleted\" "
+                     "means every service the previous run had on it is gone from this run, "
+                     "deleted by its owner; the change most likely follows the deletion and is "
+                     "not evidence of a fault on its own."),
         }} if interfaces else {}),
         **({"routing_sessions_lost": {
             "count": len(lost),

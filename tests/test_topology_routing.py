@@ -405,3 +405,70 @@ async def test_exec_show_mcp_returns_bare_string():
         routing_mod.call_mcp = original
 
     assert not any(i["code"] == "missing_reverse_session" for i in issues)
+
+
+# The Ciena NED keeps the same instance list but names neighbours "peer", keyed by "address".
+CIENA_BGP_CONFIG = {
+    "status": "success",
+    "data": {"device": "cien-data-sw", "config": {
+        "ciena-bgp:bgp": {"instance": [{
+            "as": 398900,
+            "router-id": "10.148.0.1",
+            "address-family": [{"afi": "ipv4", "safi": "unicast"}],
+            "peer": [{"address": "10.129.128.1", "remote-as": 398900,
+                      "update-source-interface": "lb1"}],
+        }]},
+    }},
+}
+
+STAR_BGP_CONFIG = {
+    "status": "success",
+    "data": {"tailf-ned-cisco-ios-xr:bgp": {"bgp-no-instance": [{
+        "id": 398900, "router-id": "10.129.128.1",
+        "neighbor": [{"id": "10.148.0.1", "remote-as": 398900}],
+    }]}},
+}
+
+BGP_WITHOUT_NEIGHBORS = {
+    "status": "success",
+    "data": {"tailf-ned-cisco-ios-xr:bgp": {"bgp-no-instance": [{
+        "id": 398900, "router-id": "10.0.0.9"}]}},
+}
+
+
+def test_parse_configured_bgp_reads_ciena_peers():
+    neighbors, router_id = parse_configured_bgp(CIENA_BGP_CONFIG, device="cien-data-sw")
+
+    assert router_id == "10.148.0.1"
+    assert neighbors == [BgpNeighborConfig(device="cien-data-sw", neighbor_address="10.129.128.1",
+                                           remote_as=398900, local_as=398900)]
+
+
+@pytest.mark.asyncio
+async def test_only_a_device_with_no_neighbors_is_reported_as_having_none():
+    client = FakeClient({
+        ("get_device_config", "cien-data-sw"): CIENA_BGP_CONFIG,
+        ("get_device_config", "star-data-sw"): STAR_BGP_CONFIG,
+        ("get_device_config", "lbnl-data-sw"): BGP_WITHOUT_NEIGHBORS,
+    })
+
+    async def call_mcp(client_arg, tool, params=None):
+        from nso_facts.mcp_client import _tool_data
+
+        result = await client_arg.call_tool(tool, {"params": params or {}})
+        return _tool_data(result)
+
+    import nso_facts.topology.routing as routing_mod
+
+    original = routing_mod.call_mcp
+    routing_mod.call_mcp = call_mcp
+    try:
+        edges, issues, _ = await collect_static_routing(
+            client, ["cien-data-sw", "star-data-sw", "lbnl-data-sw"], seed_from_live=False)
+    finally:
+        routing_mod.call_mcp = original
+
+    assert [i["message"] for i in issues if i["code"] == "no_configured_bgp"] == [
+        "lbnl-data-sw: no BGP neighbors found in NSO config"]
+    assert [{edge["local"]["device"], edge["remote"]["device"]} for edge in edges] == [
+        {"cien-data-sw", "star-data-sw"}]

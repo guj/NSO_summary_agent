@@ -943,13 +943,123 @@
       }
     },
     {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Links gaining errors while up",
+      "description": "Links that are up but gained errors since the previous scan, as listed in the report. Solid lines: CRC errors per minute (left, log scale). Dashed lines: times the link went down or up (right). Each value is the average over the gap between two scans, so it shows the trend, not when the errors happened. A lead to follow up, not a service status. A link drops off once a scan finds it no longer gaining errors.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 27,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "nso_link_crc_per_minute{pipeline=\"diagnostic\"}",
+          "refId": "A",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{device}} {{port}} CRC/min"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "nso_link_state_changes{pipeline=\"diagnostic\"}",
+          "refId": "B",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{device}} {{port}} down/up changes"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "CRC errors per minute",
+            "scaleDistribution": {
+              "type": "log",
+              "log": 10
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "down/up changes"
+              },
+              {
+                "id": "custom.scaleDistribution",
+                "value": {
+                  "type": "linear"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
       "id": 17,
       "type": "row",
       "title": "Latest report and routing",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 27,
+        "y": 35,
         "w": 24,
         "h": 1
       },
@@ -966,7 +1076,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 28,
+        "y": 36,
         "w": 12,
         "h": 4
       },
@@ -1046,7 +1156,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 28,
+        "y": 36,
         "w": 4,
         "h": 4
       },
@@ -1112,7 +1222,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 28,
+        "y": 36,
         "w": 4,
         "h": 4
       },
@@ -1178,7 +1288,7 @@
       },
       "gridPos": {
         "x": 20,
-        "y": 28,
+        "y": 36,
         "w": 4,
         "h": 4
       },

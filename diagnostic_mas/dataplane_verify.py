@@ -48,8 +48,9 @@ DATAPLANE_MCP_CALL_TOOL = {
             + ". Never omit tool_name. For device CLI shows always set "
             "tool_name=exec_show with params.device_name + params.input_command "
             "(no leading 'show'). Other params: service tools need "
-            "service_type + service_name; get_interface_health is device-wide "
-            "(device_name only); explore_nso_path needs a module-qualified "
+            "service_type + service_name; get_interface_health takes device_name "
+            "plus interface for one port (without it the whole device, large and "
+            "may be cut off); explore_nso_path needs a module-qualified "
             "RESTCONF path (e.g. 'tailf-ncs:devices/device=<name>'); never "
             "'/services/…' — prefer get_services / check_service_sync for "
             "service instances. Do not call tools against "
@@ -2142,6 +2143,12 @@ async def _llm_dataplane_verify_one(
         return False
 
     name = record.get("name") or "?"
+    from diagnostic_mas.service_presence import gone_before_investigation
+
+    if await gone_before_investigation(client, case, record):
+        _log(f"skip service={name}: no longer listed in NSO")
+        investigation.stop_reason = "service_gone"
+        return True
     _log(f"start service={name} tools_budget={remaining}")
     ev_watermark = case._evidence_seq
 

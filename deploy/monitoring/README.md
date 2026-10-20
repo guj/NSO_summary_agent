@@ -231,12 +231,14 @@ The diagnostic runner also pushes:
 | `nso_services{service_type,status}` | The report's final status per service type: `up`, `down`, `degraded`, `unknown` |
 | `nso_service_faults{device,service_type,status}` | Services that are not OpUp, by the device their failed check points to |
 | `nso_fleet_devices_not_covered` | Devices dropped or not collected in the scan |
+| `nso_link_crc_per_minute{device,port}` | CRC errors per minute on a link that is up, averaged over the gap since the previous scan; only links that gained CRC errors |
+| `nso_link_state_changes{device,port}` | Times such a link went down or up since the previous scan; only links that changed |
 | `nso_scan_info{run_id,report_url}` | The scan the values come from; the link needs `DIAGNOSTIC_REPORT_BASE_URL` |
 | `nso_scan_last_attempt_success`, `nso_scan_last_attempt_nso_unreachable`, `nso_scan_last_attempt_timestamp_seconds` | How the most recent attempt ended |
 
 A scan that ends without a report (for example NSO became unreachable) posts only the last three, with success 0. The last good scan's values stay in the Pushgateway, so compare `nso_summary_last_run_timestamp_seconds` with the current time to see how old they are.
 
-Dashboard **NSO Diagnostic** (folder **NSO**, file `grafana/dashboards/nso-diagnostic.json`) charts these: scanner health, final status, services not OpUp by device, and the latest report.
+Dashboard **NSO Diagnostic** (folder **NSO**, file `grafana/dashboards/nso-diagnostic.json`) charts these: scanner health, final status, services not OpUp by device, links gaining errors while up, and the latest report.
 
 ## Stop / remove
 

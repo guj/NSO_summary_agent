@@ -5,7 +5,9 @@ Tools:
 - mcp_call — read-only NSO MCP (may issue SEVERAL in one turn as a batch).
 - conclude_investigation — end this Issue when the cause is clear (or evidence is
   insufficient). Required fields: observed, cause; optional fix_suggestion,
-  fix_requires_human_approval, confidence.
+  fix_requires_human_approval, confidence. For a BGP session Issue also set
+  session_state (established / not_established / unknown) as the device you
+  could read reports that session now.
 
 Workflow (Claude-like):
 1. Read the Issue and known Evidence (e.g. live_l2). Quote XC ST / AC ST / seg2

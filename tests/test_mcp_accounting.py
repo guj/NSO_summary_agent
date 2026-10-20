@@ -4,7 +4,9 @@ from io import StringIO
 
 from nso_facts.mcp_accounting import (
     classify_mcp_tool,
+    current_mcp_stats,
     format_mcp_accounting,
+    mcp_call_record,
     print_mcp_accounting,
     record_mcp_call,
     set_mcp_stage,
@@ -99,3 +101,27 @@ def test_print_mcp_accounting_to_stream():
     assert "[mcp] total=1 wire=1 cache_hits=0 wired_nso=1 wired_device=0 nso=1 device=0 other=0" in text
     assert "[mcp] stage focus=1" in text
     assert "[mcp] 1 focus nso list_devices" in text
+
+
+def test_counts_so_far_are_read_without_stopping_the_count():
+    start_mcp_accounting()
+    record_mcp_call("get_services", {"service_type": "l3rt"})
+    record_mcp_call("exec_show", {"device_name": "mich-data-sw"}, cached=True)
+    so_far = current_mcp_stats()
+    record_mcp_call("exec_show", {"device_name": "kans-data-sw"})
+
+    assert (so_far.total, so_far.cache_hits) == (2, 1)
+    assert stop_mcp_accounting().total == 3
+
+
+def test_record_kept_with_the_scan_counts_the_calls_made_during_llm_investigations():
+    start_mcp_accounting()
+    set_mcp_stage("spines")
+    for n in range(3):
+        record_mcp_call("exec_show", {"device_name": "mich-data-sw"}, cached=n == 0)
+    for stage in ("dataplane", "drill"):
+        set_mcp_stage(stage)
+        record_mcp_call("exec_show", {"device_name": "kans-data-sw"})
+    stats = stop_mcp_accounting()
+
+    assert mcp_call_record(stats) == {"total": 5, "wire": 4, "cache_hits": 1, "during_llm": 2}

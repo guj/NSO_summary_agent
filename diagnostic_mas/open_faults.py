@@ -113,9 +113,13 @@ def open_fault_groups(case: CaseFile, rows: list[dict[str, Any]], *, new: Any = 
         on_link = {link: [n for n in names if (left.get(n) or {}).get("source") == SOURCE]
                    for link, names in links.items()}
         members = [left.pop(name) for name in dict.fromkeys(n for names in on_link.values() for n in names)]
-        if members:
-            ages = [age for link, age in (finding.get("link_ages") or {}).items() if on_link.get(link)]
-            groups.append(_group(f"`{finding.get('device')}` port {finding.get('port')}", members, ages))
+        # One row per status: a port can leave some services Down and others Degraded.
+        for status in dict.fromkeys(str(m.get("status") or "") for m in members):
+            same = [m for m in members if str(m.get("status") or "") == status]
+            names = {str(m["service"]) for m in same}
+            ages = [age for link, age in (finding.get("link_ages") or {}).items()
+                    if names & set(on_link.get(link) or [])]
+            groups.append(_group(f"`{finding.get('device')}` port {finding.get('port')}", same, ages))
     for finding in device_findings(case):
         members = [left.pop(name) for name in dict.fromkeys(finding.get("services") or [])
                    if (left.get(name) or {}).get("source") == DEVICE_SOURCE]

@@ -189,9 +189,16 @@ def _health_prose(
         obs_unique.append(bit)
 
     if healthy_iface and healthy_hw and not obs_unique:
-        if hw_l in {"unavailable", "—", "-"} and iface in {"—", "-"}:
-            return "Interface and hardware status not collected for this run"
-        return "Interface and hardware checks reported healthy"
+        # "Unavailable" passes as healthy above but was not read: say so rather than call it healthy.
+        iface_read = iface not in {"—", "-"}
+        hw_read = hw_l not in {"unavailable", "—", "-"}
+        if iface_read and hw_read:
+            return "Interface and hardware checks reported healthy"
+        if iface_read:
+            return "Interface checks reported healthy; hardware status not collected"
+        if hw_read:
+            return "Hardware checks reported healthy; interface status not collected"
+        return "Interface and hardware status not collected for this run"
 
     if obs_unique or not healthy_iface or not healthy_hw:
         hint = "per-device details are in the HTML report"
@@ -339,33 +346,6 @@ def _drill_findings_by_issue_key(case: CaseFile) -> dict[str, dict[str, Any]]:
     return out
 
 
-def _drill_finding_is_reachable_side_up(payload: dict[str, Any]) -> bool:
-    """True when drill concludes BGP is up on the reachable endpoint."""
-    observed = str(payload.get("observed") or "").lower()
-    cause = str(payload.get("cause") or "").lower()
-    text = f"{observed} {cause}".strip()
-    if not text:
-        return False
-    # Strong positive markers from BGP drills against quarantined peers.
-    positive = (
-        "false positive" in text
-        or "no real bgp fault" in text
-        or "not a real routing fault" in text
-        or "reachable side" in text
-        or "is established" in text
-        or "session is established" in text
-        or ("establish" in text and "quarantine" in text)
-    )
-    # Only treat as negative when the conclusion itself is a confirmed down.
-    negative = (
-        "session is down" in text
-        or "confirmed down" in text
-        or "genuinely not established" in text
-        or text.startswith("down:")
-    )
-    return positive and not negative
-
-
 def _bgp_routing_qualification(
     case: CaseFile, device: str, bgp_count: str
 ) -> tuple[str, str | None]:
@@ -388,7 +368,8 @@ def _bgp_routing_qualification(
             if x is not None and str(x).strip()
         ]
         payload = next((findings[k] for k in keys if k in findings), None)
-        if payload is None or not _drill_finding_is_reachable_side_up(payload):
+        # Only the state the drill reported for the session; words in its prose are not a reading.
+        if payload is None or payload.get("session_state") != "established":
             continue
         peer = _peer_from_incomplete_issue(issue, device)
         if peer and peer not in up_peers:
@@ -401,7 +382,23 @@ def _bgp_routing_qualification(
         bgp_prose = base
 
     drill_line: str | None = None
-    if up_peers:
+    answered = set(case.live_verified_devices or [])
+    # Answering some live query (e.g. interface state) is not reading BGP on that device.
+    bgp_unread = {
+        str(issue.get("message") or "").split(":", 1)[0].strip()
+        for issue in case.issues
+        if isinstance(issue, dict) and issue.get("code") == "collection_error"
+        and issue.get("layer") == "routing"
+    }
+    if up_peers and answered and (device not in answered or device in bgp_unread):
+        # The Established reading came from the peers, not from this device.
+        peers = ", ".join(f"`{p}`" for p in up_peers)
+        drill_line = (
+            f"**Drill:** {peers} "
+            + ("reports its BGP session" if len(up_peers) == 1 else "report their BGP sessions")
+            + f" with `{device}` Established; `{device}` itself could not be read this run"
+        )
+    elif up_peers:
         peers = ", ".join(f"`{p}`" for p in up_peers)
         drill_line = (
             f"**Drill:** BGP Established on `{device}` toward {peers} "
@@ -2237,7 +2234,9 @@ def format_run_details(
         dp_tools_line,
         f"**Drill investigations:** {getattr(b, 'drill_issues_used', 0)} / "
         f"{getattr(b, 'max_drill_issues', 0)} "
-        f"(tools used {getattr(b, 'drills_used', 0)})",
+        f"(tools used {getattr(b, 'drills_used', 0)})"
+        + (f"; {b.drill_issues_unconcluded} ended without a conclusion"
+           if getattr(b, "drill_issues_unconcluded", 0) else ""),
     ]
     if getattr(b, "port_investigations_used", 0):
         by_port = sum(1 for d in case.diagnoses if d.get("source") in explained_sources)
@@ -2250,6 +2249,13 @@ def format_run_details(
             f"{b.deep_checks_used}/{b.max_deep_checks} · "
             f"{b.handoffs_used}/{b.max_handoffs}"
         )
+    calls = getattr(case, "mcp_calls", None) or {}
+    if calls.get("total"):
+        total, by_llm = int(calls["total"]), int(calls.get("during_llm") or 0)
+        lines.append(
+            f"**MCP calls:** {total:,} ({int(calls.get('wire') or 0):,} sent to NSO, "
+            f"{int(calls.get('cache_hits') or 0):,} from cache): {total - by_llm:,} by the program's own checks, "
+            f"{by_llm:,} during LLM investigations")
     from agent.llm_usage import usage_lines
 
     lines.extend(usage_lines(getattr(case, "llm_usage", None)))

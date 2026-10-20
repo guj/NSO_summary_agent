@@ -47,7 +47,11 @@ def _final_status_metrics(case: CaseFile) -> tuple[dict[str, dict[str, int]], li
 
 
 def metrics_snapshot_from_case(
-    case: CaseFile, *, run_id: str | None = None, report_url: str | None = None
+    case: CaseFile,
+    *,
+    run_id: str | None = None,
+    report_url: str | None = None,
+    links_gaining_errors: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Phase-1-compatible snapshot for ``push_phase1_metrics``."""
     topology = topology_from_case(case)
@@ -100,4 +104,7 @@ def metrics_snapshot_from_case(
     }
     if run_id:
         snapshot["scan"] = {"run_id": run_id, "report_url": report_url or ""}
+    if links_gaining_errors:
+        # The report's "Links gaining errors while up", compared with the previous scan.
+        snapshot["links_gaining_errors"] = list(links_gaining_errors)
     return snapshot

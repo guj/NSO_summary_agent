@@ -346,3 +346,45 @@ def test_format_executive_keeps_llm_action_items():
     assert "Restore NSO sync on renc-data-sw" in body
     assert "Investigate down l2ptp services" in body
     assert body.index("Overall Status") < body.index("Action Items")
+
+
+def test_port_the_device_gives_no_state_for_is_not_a_mapping_problem():
+    """As cien-data-sw's management ports m1-m4: on the device by name, but no state reported."""
+    from agent.report_executive import device_notes_label
+    from nso_report.devices import device_detail_lines
+
+    phys = [
+        {"id": "if:cien-data-sw:14", "local": {"device": "cien-data-sw", "interface": "14"},
+         "state": {"admin": "up", "oper": "up", "status": "up"}},
+        {"id": "if:cien-data-sw:1", "local": {"device": "cien-data-sw", "interface": "1"},
+         "state": {"admin": "down", "oper": "down", "status": "down"}},
+        {"id": "if:cien-data-sw:m1", "local": {"device": "cien-data-sw", "interface": "m1"},
+         "state": {"status": "unknown", "detail": "no interface state from get_interface_health", "no_state": True}},
+        # An IOS-XR name NSO has but the device's interfaces brief lacks: still a mapping problem.
+        {"id": "if:uky-data-sw:Fo0/0/0/34", "local": {"device": "uky-data-sw", "interface": "Fo0/0/0/34"},
+         "state": {"status": "unknown", "detail": "not in interfaces brief"}},
+    ]
+    assert device_interfaces_label("cien-data-sw", phys, {}) == "Healthy"
+    assert device_notes_label("cien-data-sw", phys, {}) == ""
+    assert device_interfaces_label("uky-data-sw", phys, {}) == "Inventory Review"
+    assert device_notes_label("uky-data-sw", phys, {}) == "Mapping unknown"
+
+    topology = {"operational": {"layers": {"physical": {"edges": phys}, "underlay": {"edges": []},
+                                           "routing": {"edges": []}}}}
+    cien = "\n".join(device_detail_lines(topology)["cien-data-sw"])
+    assert "not on box" not in cien and "Mapping Unknown: 0" in cien and "No state:    1" in cien
+    assert "Fo0/0/0/34 → (not on box)" in "\n".join(device_detail_lines(topology)["uky-data-sw"])
+
+
+def test_device_with_no_interface_records_is_not_called_healthy():
+    """scm-data-sw: NSO holds no interfaces for it and it did not answer, so nothing was checked."""
+    from diagnostic_mas.operator_report import _health_prose
+
+    phys = [{"id": "if:sw1:a", "local": {"device": "sw1", "interface": "a"}, "state": {"admin": "up", "oper": "up"}}]
+    assert device_interfaces_label("scm-data-sw", phys, {}) == "—"
+    assert device_interfaces_label("sw1", phys, {}) == "Healthy"
+    # An unconfirmed mapping issue for the device still asks for review.
+    mismatch = {"if:scm-data-sw:x": {"device": "scm-data-sw", "confirmed": False}}
+    assert device_interfaces_label("scm-data-sw", phys, mismatch) == "Inventory Review"
+    assert (_health_prose({"interfaces": "—", "hardware": "Unavailable", "notes": ""})
+            == "Interface and hardware status not collected for this run")

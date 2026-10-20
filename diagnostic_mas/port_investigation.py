@@ -80,8 +80,8 @@ def _sides(intent: Any) -> list[set[tuple[str, str]]]:
 def _still_carries(basic: dict[str, Any]) -> bool:
     """True when what is still up may carry traffic: an attachment up on every side, and two ends up in all.
 
-    A gateway that is up is an end, so a routed service with one attachment left is not called Down here:
-    whether that is Down or Degraded is not settled, and its own investigation says.
+    A gateway that is up is an end, so a routed service with one attachment left still carries traffic.
+    Such a service is Degraded by its dark port, not Down (the admins' answer, 14 Oct 2026).
     """
     checks = basic.get("checks") or []
     up = {(str(c.get("device") or ""), str(c.get("observation") or "")) for c in checks
@@ -99,16 +99,13 @@ def _still_carries(basic: dict[str, Any]) -> bool:
 
 
 def _faulted_links(record: dict[str, Any], down: dict[str, list[str]]) -> set[tuple[str, str]]:
-    """(device, port) behind the faulted checks; empty unless the down interfaces alone leave the service Down.
+    """(device, port) behind the faulted checks; empty unless every fault is on a down interface.
 
-    Every fault must be on a down interface, and what is left up must not be able to carry traffic.
+    Whether those down interfaces leave the service Down or Degraded is ``_still_carries``.
     """
     links: set[tuple[str, str]] = set()
     basic = record.get("basic_checks") or {}
     if basic.get("status") != "down":
-        return links
-    # Still carrying on what is left: impaired, not down. Its own investigation says how far.
-    if _still_carries(basic):
         return links
     for check in basic.get("checks") or []:
         if check.get("status") != "fault":
@@ -367,9 +364,11 @@ def _explain_services(case: CaseFile, concluded: dict[tuple[str, str], dict[str,
         where = "; ".join(f"{link} on {device}" for device, link in links)
         causes = " ".join(
             f"Port {f['port']} was investigated once: {brief(f.get('cause'), 240)}" for f in findings)
+        carries = _still_carries(record.get("basic_checks") or {})
         _record_dataplane_finding(case, record, {
-            "dataplane_status": "down",
-            "cause": f"Attached link {where} is down. {causes}",
+            "dataplane_status": "degraded" if carries else "down",
+            "cause": (f"Attached link {where} is down"
+                      + ("; what is left up still carries traffic. " if carries else ". ") + causes),
             "observed": (
                 f"Fixed check (this run) faulted on {where}; the interface collection recorded it down. "
                 "This service was not investigated individually; the readings are in the port finding under "

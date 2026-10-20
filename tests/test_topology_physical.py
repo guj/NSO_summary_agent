@@ -414,3 +414,62 @@ Hu0/0/0/32                     down       down               ARPA   1514       1
     assert edges[0]["state"]["status"] == "down"
     assert not any(i["code"] == "config_live_mismatch" for i in issues)
     assert not any(i["code"] == "unexpected_live_object" for i in issues)
+
+
+# A Ciena device has no CLI exec action: the MCP server says so with exec_unavailable.
+EXEC_UNAVAILABLE = {"status": "error", "error_code": "exec_unavailable",
+                    "error_message": "device 'cien-data-sw' exists but has no CLI exec action"}
+CIENA_HEALTH = {"status": "success", "data": {"device": "cien-data-sw", "platform": "saos", "interfaces": [
+    {"name": "14", "admin_status": "up", "oper_status": "up", "read_ok": True},
+    {"name": "1", "admin_status": "up", "oper_status": "down", "read_ok": True},
+    {"name": "3", "admin_status": "down", "oper_status": "down", "read_ok": True},
+    {"name": "m1", "admin_status": "up", "oper_status": None, "read_ok": True},
+]}}
+
+
+def _iface_edges(device: str, names: list[str]) -> list[dict[str, Any]]:
+    return [{"id": f"if:{device}:{n}", "type": "interface", "local": {"device": device, "interface": n},
+             "remote": None} for n in names]
+
+
+async def _operational(handlers: dict, static_edges: list, monkeypatch) -> tuple[dict, list]:
+    from nso_facts.mcp_client import _tool_data
+    import nso_facts.topology.physical as physical_mod
+
+    client = FakeClient(handlers)
+
+    async def call_mcp(client_arg, tool, params=None):
+        return _tool_data(await client_arg.call_tool(tool, {"params": params or {}}))
+
+    monkeypatch.setattr(physical_mod, "call_mcp", call_mcp)
+    edges, issues, _ = await collect_operational_physical(client, static_edges)
+    return {edge["id"]: edge["state"] for edge in edges}, issues
+
+
+@pytest.mark.asyncio
+async def test_device_without_cli_exec_reads_interface_states_from_get_interface_health(monkeypatch):
+    states, issues = await _operational(
+        {("exec_show", "cien-data-sw"): EXEC_UNAVAILABLE, ("get_interface_health", "cien-data-sw"): CIENA_HEALTH},
+        _iface_edges("cien-data-sw", ["14", "1", "3", "m1"]), monkeypatch)
+
+    assert {edge: state["status"] for edge, state in states.items()} == {
+        "if:cien-data-sw:14": "up", "if:cien-data-sw:1": "down",
+        "if:cien-data-sw:3": "admin-down", "if:cien-data-sw:m1": "unknown"}
+    # A port the device gives no state for is unknown, not down, and not a config mismatch.
+    assert "oper" not in states["if:cien-data-sw:m1"] and states["if:cien-data-sw:m1"]["no_state"] is True
+    assert not [i for i in issues if i["code"] in ("collection_error", "config_live_mismatch")]
+
+
+@pytest.mark.asyncio
+async def test_other_exec_failures_and_a_failed_fallback_leave_interfaces_unknown(monkeypatch):
+    locked = {"status": "error", "error_code": "nso_error", "error_message": "Device brist-data-sw is southbound locked"}
+    states, issues = await _operational(
+        {("exec_show", "brist-data-sw"): locked,
+         ("exec_show", "cien-data-sw"): EXEC_UNAVAILABLE,
+         ("get_interface_health", "cien-data-sw"): {"status": "error", "error_code": "timeout", "error_message": "too slow"}},
+        _iface_edges("brist-data-sw", ["HundredGigE0/0/0/1"]) + _iface_edges("cien-data-sw", ["14"]), monkeypatch)
+
+    assert {state["status"] for state in states.values()} == {"unknown"}
+    messages = sorted(i["message"] for i in issues if i["code"] == "collection_error")
+    assert messages[0] == "brist-data-sw: Device brist-data-sw is southbound locked"
+    assert messages[1].startswith("cien-data-sw: ") and "too slow" in messages[1]

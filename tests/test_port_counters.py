@@ -9,7 +9,7 @@ from diagnostic_mas.case import Budget, CaseFile, add_evidence
 from diagnostic_mas.case_delta import compute_case_delta, format_changes_since_previous
 from diagnostic_mas.open_faults import digest_changes
 from diagnostic_mas.port_counters import (
-    counter_targets, links_gaining_errors, parse_port_counters, record_port_counters)
+    counter_targets, gain_line, links_gaining_errors, parse_port_counters, record_port_counters)
 from diagnostic_mas.state_paths import case_to_dict
 
 RUTG, HUB = "rutg-data-sw", "star-data-sw"
@@ -289,3 +289,118 @@ async def test_collection_phase_reads_the_counters_after_the_service_step(monkey
     quiet, asked[:] = CaseFile(budget=Budget(0, 0)), []
     await coordinator.run_mandatory_spines(None, None, quiet, [RUTG, HUB], physical_edges=[], max_port_counter_reads=0)
     assert asked == []
+
+
+# --- a device without a CLI exec action (Ciena) ---------------------------------
+
+CIEN = "cien-data-sw"
+
+
+def _ciena_case() -> CaseFile:
+    """One service on cien port 14, which the service model names Generic 14."""
+    case = CaseFile(budget=Budget(0, 0))
+    case.device_names = [CIEN]
+    service = {"name": "lan", "service_type": "l2bridge", "devices": [CIEN],
+               "basic_checks": {"status": "unknown", "checks": [], "intent": {
+                   "device": CIEN, "interface": [{"type": "Generic", "id": "14", "outervlan": 2008}]}}}
+    add_evidence(case, {"kind": "spine", "role": "service", "layer": "services",
+                        "payload": {"extra": {"services": {"l2bridge/lan": service}}}})
+    return case
+
+
+async def test_port_on_a_device_without_cli_is_read_through_get_interface_health():
+    asked = []
+
+    async def call(client, tool, args):
+        asked.append((tool, dict(args)))
+        if tool == "exec_show":
+            return {"status": "error", "error_code": "exec_unavailable", "error_message": "no CLI exec action"}
+        return {"status": "success", "data": {"platform": "saos", "interfaces": [
+            {"name": "14", "description": "14", "admin_status": "up", "oper_status": "up", "state_changes": None,
+             "link_flap_events": 0, "input_errors": 7, "crc_errors": 3, "read_ok": True}]}}
+
+    case = _ciena_case()
+    await record_port_counters(None, case, ceiling=400, call=call)
+
+    # The service model calls the port Generic14; the device calls it 14.
+    assert asked == [("exec_show", {"device_name": CIEN, "input_command": "interfaces Generic14"}),
+                     ("get_interface_health", {"device_name": CIEN, "interface": "14"})]
+    reading = _saved(case)["ports"][f"{CIEN}:Generic14"]
+    assert reading | {"state": "up", "input_errors": 7, "crc": 3, "transitions": None, "cleared": None,
+                      "source": "get_interface_health", "services": 1} == reading
+
+
+async def test_a_port_that_failed_for_another_reason_is_not_retried_through_the_structured_tool():
+    asked = []
+
+    async def call(client, tool, args):
+        asked.append(tool)
+        return {"status": "error", "error_code": "nso_error", "error_message": "southbound locked"}
+
+    case = _ciena_case()
+    await record_port_counters(None, case, ceiling=400, call=call)
+    assert asked == ["exec_show"] and _saved(case)["ports"] == {}
+
+
+def test_structured_readings_compare_without_a_clear_time_and_skip_a_counter_that_went_back():
+    def ciena(**changed):
+        return {"state": "up", "transitions": None, "cleared": None, "description": "14", "input_errors": 7,
+                "crc": 3, "output_errors": None, "input_drops": None, "output_drops": None,
+                "source": "get_interface_health", "services": 1, "adjacency": False} | changed
+
+    assert _gains(ciena(), ciena(crc=10, input_errors=14))[0]["gained"] == {"crc": 7, "input_errors": 7}
+    assert _gains(ciena(crc=10), ciena(crc=4)) == []
+    # An IOS-XR reading without a clear time is still not compared.
+    assert _gains(_reading(cleared=None), _reading(crc=843, cleared=None)) == []
+
+
+# --- a Ciena port that went down and came back between scans --------------------
+# Values as cien-data-sw reported port 14 on 19 October 2026: last change 3 Aug when test44 read it
+# at 16:33 UTC, and 19 Oct 18:21:30 UTC (a restart) when test45 read it at 20:30 UTC.
+
+AUG_3, OCT_19_1821 = "1785773106236775980", "1792434090733640352"
+
+
+async def test_structured_reading_keeps_the_last_change_as_an_absolute_time():
+    from diagnostic_mas.port_counters import _structured_reading
+
+    def answer(raw):
+        async def call(client, tool, args):
+            return {"status": "success", "data": {"interfaces": [
+                {"name": "14", "admin_status": "up", "oper_status": "up", "input_errors": 0, "crc_errors": 0,
+                 "last_change": {"raw": raw}, "read_ok": True}]}}
+        return call
+
+    assert (await _structured_reading(answer(OCT_19_1821), None, CIEN, "Generic14"))["changed_at"] == "2026-10-19T18:21:30+00:00"
+    assert (await _structured_reading(answer("1792434090"), None, CIEN, "Generic14"))["changed_at"] == "2026-10-19T18:21:30+00:00"
+    assert (await _structured_reading(answer("never"), None, CIEN, "Generic14"))["changed_at"] is None
+
+
+def _ciena_reading(changed_at, **changed):
+    return {"state": "up", "transitions": None, "cleared": None, "description": "14", "input_errors": 0, "crc": 0,
+            "output_errors": None, "input_drops": None, "output_drops": None, "changed_at": changed_at,
+            "source": "get_interface_health", "services": 1, "adjacency": False} | changed
+
+
+def _ciena_scans(before: dict, now: dict) -> list[dict]:
+    def scan(read_at, reading):
+        return {"evidence": [{"kind": "port_counters", "payload": {"read_at": read_at,
+                                                                  "ports": {f"{CIEN}:Generic14": reading}}}]}
+    return links_gaining_errors(scan("2026-10-19T16:33:00+00:00", before), scan("2026-10-19T20:30:00+00:00", now))
+
+
+def test_ciena_port_whose_last_change_is_after_the_previous_scan_went_down_and_came_back():
+    rows = _ciena_scans(_ciena_reading("2026-08-03T16:05:06+00:00"), _ciena_reading("2026-10-19T18:21:30+00:00"))
+
+    assert [(r["port"], r["gained"], r["state_changes"], r["bounced"]) for r in rows] == [("Generic14", {}, 0, True)]
+    assert gain_line(rows[0]).startswith(
+        '`cien-data-sw` Generic14 ("14"): went down and came back since the previous scan (count not reported) in 3 h 57 min')
+
+
+@pytest.mark.parametrize("before, now", [
+    (_ciena_reading("2026-08-03T16:05:06+00:00"), _ciena_reading("2026-08-03T16:05:06+00:00")),     # no change
+    (_ciena_reading("2026-08-03T16:05:06+00:00"), _ciena_reading("2026-10-19T18:21:30+00:00", state="down")),
+    (_ciena_reading(None), _ciena_reading(None)),                                                    # time not given
+])
+def test_no_bounce_without_a_later_change_on_a_port_that_is_up(before, now):
+    assert _ciena_scans(before, now) == []

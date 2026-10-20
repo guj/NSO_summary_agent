@@ -46,6 +46,8 @@ class Probe:
         self.calls = 0
         self.checks = []
         self.sources = []
+        # (device, command) -> the MCP error code of a failed command, e.g. exec_unavailable.
+        self.error_codes = {}
         # Facts the collector worked out across all services, for checks that need them.
         self.fleet = {}
 
@@ -70,6 +72,8 @@ class Probe:
                 text = data.get("result", "") if isinstance(data, dict) else ""
                 if mcp_is_error(raw) or not isinstance(text, str) or ERROR.search(text):
                     text = ""
+                if mcp_is_error(raw) and isinstance(raw, dict) and raw.get("error_code"):
+                    self.error_codes[key] = raw["error_code"]
             except Exception:
                 text = ""
             self.cache[key] = (text.replace("\r", ""), datetime.now(timezone.utc).isoformat())

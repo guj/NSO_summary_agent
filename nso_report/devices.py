@@ -532,6 +532,8 @@ def _interfaces_summary_section(device: str, phys: list) -> list[str]:
     # Include up/down in summary if present
     if counts.get("up/down"):
         lines.insert(5, f"{_I2}Up/down:     {counts['up/down']}")
+    if counts.get("no-state"):
+        lines.append(f"{_I2}No state:    {counts['no-state']}")
     return lines
 
 
@@ -896,7 +898,13 @@ def _admin_oper(edge: dict[str, Any]) -> tuple[str, str]:
 
 
 def _iface_pair_status(edge: dict[str, Any]) -> str:
-    """Composite Status/Protocol label for Devices rollups."""
+    """Composite Status/Protocol label for Devices rollups.
+
+    ``no-state``: the device lists the interface but reports no state for it, so it is
+    neither a mapping problem nor a down link.
+    """
+    if (edge.get("state") or {}).get("no_state"):
+        return "no-state"
     admin, oper = _admin_oper(edge)
     if admin == "admin-down" or oper == "admin-down":
         return "admin-down"

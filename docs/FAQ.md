@@ -7,8 +7,7 @@ agent, see [DIAGNOSTIC_RUNNER.md](DIAGNOSTIC_RUNNER.md).
 
 ### What sections does the report have?
 
-In order: **Summary**, **Changes since previous run**, **Undecided rules** (only when a rule the
-operators have not decided would change a service in this scan), **Devices**, **Services**,
+In order: **Summary**, **Changes since previous run**, **Devices**, **Services**,
 **Recommended follow-up**, **Run configuration** and **Run details**. The Summary is written by
 the LLM and is omitted with `--skip-llm`. Findings from LLM investigations appear under the
 service they concern; the rest of the report is deterministic.
@@ -94,6 +93,10 @@ For case 1, an administrator can record the confirmed NSO-to-device name mapping
 and point `INTERFACE_EQUIVALENCES_FILE` at it. The schema is shown in
 `config/interface-equivalences.example.json`. For case 2, correct the NSO configuration instead.
 
+An interface the device lists but reports no state for, such as a Ciena's management ports, is
+not a mapping problem: the device's interface summary counts it under "No state", and it does not
+set this label.
+
 ### Where do names like `HundredGigE0/0/0/9` and `Hu0/0/0/9` come from?
 
 The long form comes from NSO device configuration. The short form is what the device prints in live
@@ -120,7 +123,8 @@ up. Neighbors outside the NSO inventory are not counted, so the number can be lo
 
 The count comes from the first collection pass, but for at least one session the other end could
 not be checked live in this run, so the session was not verified from both sides. When a follow-up
-check confirms the session from the reachable side, a **Drill:** line says so. An unverified far
+check confirms the session from the reachable side, a **Drill:** line says so. Under a device that
+could not be read, that line names the peer that reported the session. An unverified far
 end is a gap in evidence, not a sign that the session is down.
 
 ### How is BGP peer state read from the device?
@@ -135,7 +139,9 @@ is treated as Established.
 - A BGP session to another inventory device that the devices report down. It is also counted in
   the Result line and listed in the follow-up. **Changes since previous run** lists BGP sessions
   and IS-IS adjacencies that were up in the previous run and are not up now, and interfaces that
-  went from up to down. It also lists the service faults still open, each with the scan that first
+  went from up to down. An interface is marked "its service was deleted" when every service the
+  previous scan had on it has since been deleted by its owner; that is not a fault on its own.
+  It also lists the service faults still open, each with the scan that first
   listed it and, for a down link, how long the device says it has been down. The Slack and email
   digest starts with the same changes.
 - A device whose automated live queries timed out or failed. Further live queries to it are skipped
@@ -178,18 +184,20 @@ Per-service sections appear only for services that were investigated or have a f
 `--services-detail` to list every instance.
 
 A down port is investigated once, before the services. It explains a service when the
-service's basic check is Down, every failed check of that service is on a link recorded as down,
-and what is still up cannot carry traffic: a side of the service has no attachment up, or fewer
-than two of its ends are up in all. Those services keep the Down from their own basic check,
-show "Down — port investigated once" in the table, and are not investigated individually; the
-port's finding is printed under its device.
+service's basic check is Down and every failed check of that service is on a link recorded as
+down, provided the investigation itself reads that link down. Such a service is not investigated
+individually, and the port's finding is printed under its device. Its status depends on what is
+still up:
 
-A service with an attachment up on every side, and two ends up in all, is impaired, not down:
-the port does not explain it, and it keeps its own investigation, which can report it Degraded.
+- **Down** when what is left cannot carry traffic: a side of the service has no attachment up, or
+  fewer than two of its ends are up in all. The table shows "Down — port investigated once".
+- **Degraded** when an attachment is up on every side and two ends are up in all. The table shows
+  "Degraded — port investigated once". The admins chose this on 14 October 2026.
+
 The sides come from the service's configuration; a site-to-site service has two, so one with
 nothing up at one site is Down however many are up at the other. For a routed service a working
-gateway counts as an end. One with a single attachment left and its gateway up is therefore left
-to its own investigation as well: whether that is Degraded or Down has not been decided. A BVI, Loopback or Null
+gateway counts as an end, so one with a single attachment left and its gateway up is Degraded. A
+port that leaves some services Down and others Degraded is listed once for each. A BVI, Loopback or Null
 interface is never investigated as a port: it has no port of its own, and a BVI is down because
 its member port is down. A bundle is investigated like any other port. A port investigation that
 does not finish explains nothing, and its services are investigated as usual.
@@ -260,7 +268,10 @@ Pushgateway, labelled `pipeline="diagnostic"`. Dry runs do not push, and `--skip
 push off for one run. Only counts are exported, not the topology itself. See `deploy/monitoring/`.
 
 The counts include the report's final status per service type (`nso_services`), services that are
-not OpUp per device (`nso_service_faults`), and how many devices could not be covered. A scan that
+not OpUp per device (`nso_service_faults`), and how many devices could not be covered. Links that
+gained errors while up since the previous scan add CRC errors per minute (`nso_link_crc_per_minute`)
+and down/up changes (`nso_link_state_changes`); a rate is the average over the gap between the two
+scans, a lead rather than a service status. A scan that
 ends without a report, for example because NSO became unreachable, pushes only a failed-attempt
 signal (`nso_scan_last_attempt_success` 0) and leaves the last good scan's values in place. The
 **NSO Diagnostic** Grafana dashboard charts these.

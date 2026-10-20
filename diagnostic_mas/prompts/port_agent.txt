@@ -14,8 +14,11 @@ Read the same facts for every listed link, in one batch where possible:
   that is up now must be reported as up): shut down by configuration or
   not, line protocol, time
   of the last state change, number of state transitions, input errors;
-- optics or controller state: receive and transmit power per lane, alarms,
-  and the reason the device gives for the link being down.
+- optics state: receive and transmit power per lane and alarms, with
+  "controllers optics <location>" for the physical port (0/0/0/5 for
+  HundredGigE0/0/0/5/1), and the reason the device gives for the link being
+  down. Output with blank transceiver fields, or a lane table that does not
+  match the optic, is not a power reading.
 After a failed or unsupported command use at most one grounded alternative,
 then name the reading that is missing. Truncated or failed output cannot
 establish a reading.

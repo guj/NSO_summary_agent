@@ -160,35 +160,44 @@ def usage_record(before: LlmSpend | None, after: LlmSpend | None, totals: dict[s
             if basis == "account":
                 record["cost_basis"] = "account"
             break
-    if after is not None and after.budget_left is not None:
-        record |= {"budget_spend": after.budget_spend, "budget_max": after.budget_max,
-                   "budget_left": round(after.budget_left, 5), "budget_period": after.budget_period,
-                   "budget_reset_at": after.budget_reset_at.date().isoformat() if after.budget_reset_at else None}
+    # A reading that failed is not a provider without spend figures: say which one is missing.
+    if record["cost"] is None and (before is None) != (after is None):
+        record["missing_reading"] = "end" if after is None else "start"
+        if before is not None and before.key_spend is not None:
+            record["spend_before"] = before.key_spend
+    budget = after if after is not None else before
+    if budget is not None and budget.budget_left is not None:
+        record |= {"budget_spend": budget.budget_spend, "budget_max": budget.budget_max,
+                   "budget_left": round(budget.budget_left, 5), "budget_period": budget.budget_period,
+                   "budget_reset_at": budget.budget_reset_at.date().isoformat() if budget.budget_reset_at else None}
+        if budget is before:
+            record["budget_read_at"] = "start"
     return record
 
 
 def usage_lines(record: dict[str, Any] | None) -> list[str]:
-    """Run-details lines; none for a scan that did not use the LLM."""
+    """The run-details line for this scan; none for a scan that did not use the LLM.
+
+    Only this scan's cost and tokens: the budget is the line at the start of the scan, and the
+    provider's running totals stay in the record, because readers took them for this scan's figures.
+    """
     if not record:
         return []
-    line = (f"**LLM usage:** {record.get('requests', 0):,} requests · {record.get('input_tokens', 0):,} input tokens"
-            f" · {record.get('output_tokens', 0):,} output tokens")
+    tokens = (f"{record.get('requests', 0):,} requests · {record.get('input_tokens', 0):,} input and "
+              f"{record.get('output_tokens', 0):,} output tokens")
     missing = int(record.get("uncounted") or 0)
     if missing:
-        line += f" · {missing:,} answer{'' if missing == 1 else 's'} gave no token counts"
-    lines = [line]
-    if record.get("cost") is None:
-        lines.append("**LLM cost:** not reported by this provider")
+        tokens += f" · {missing:,} answer{'' if missing == 1 else 's'} gave no token counts"
+    if record.get("cost") is not None:
+        basis = " (from the account's spend)" if record.get("cost_basis") == "account" else ""
+        return [f"**LLM this scan:** {_money(record['cost'])}{basis} · {tokens}. "
+                "The last request may not be counted yet."]
+    missing_reading = record.get("missing_reading")
+    if missing_reading in {"start", "end"}:
+        why = f"cost unknown: the provider gave no spend reading at the {missing_reading} of the scan"
     else:
-        whose = "account" if record.get("cost_basis") == "account" else "key"
-        lines.append(f"**LLM cost this scan:** {_money(record['cost'])}, the provider's spend for this {whose} "
-                     f"({_money(record['spend_before'])} → {_money(record['spend_after'])}); "
-                     "the last requests may not be counted yet")
-    if record.get("budget_max") is not None:
-        lines.append("**LLM budget:** " + _budget_words(record["budget_spend"], record["budget_max"],
-                                                        record.get("budget_period"), record["budget_left"],
-                                                        record.get("budget_reset_at")))
-    return lines
+        why = "no spend reading from the provider"
+    return [f"**LLM this scan:** {tokens}; {why}."]
 
 
 def begin_llm_accounting(settings: Any, *, get: Callable[[str, str], Any] | None = None) -> str:

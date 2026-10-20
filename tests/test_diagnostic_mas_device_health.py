@@ -267,6 +267,7 @@ def test_bgp_routing_qualification_spine_vs_drill():
                     "No real BGP fault on the reachable side: session is "
                     "Established on atla-data-sw"
                 ),
+                "session_state": "established",
             },
         },
     )
@@ -285,6 +286,7 @@ def test_bgp_routing_qualification_spine_vs_drill():
                 "cause": (
                     "Monitoring/telemetry false positive; session IS Established"
                 ),
+                "session_state": "established",
             },
         },
     )
@@ -310,6 +312,57 @@ def test_bgp_routing_qualification_spine_vs_drill():
     assert "**Drill:** BGP Established on `atla-data-sw`" in text
     assert "reachable side only" in text
 
+
+
+def test_drill_line_names_the_side_that_was_read_when_the_device_itself_was_not():
+    """brist could not be read; the drill's Established reading came from wash."""
+    from diagnostic_mas.operator_report import _bgp_routing_qualification
+
+    edge = "bgp:10.133.0.1:10.144.0.1:wash-data-sw:brist-data-sw"
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    case.device_names = ["brist-data-sw", "wash-data-sw"]
+    case.live_verified_devices = ["wash-data-sw"]
+    case.issues = [{
+        "id": "is_7", "code": "configured_no_session", "status": "open", "edge_id": edge,
+        "layer": "routing",
+        "message": "BGP wash-data-sw 10.133.0.1 (idle) ↔ brist-data-sw 10.144.0.1 (unknown)",
+    }]
+    add_evidence(case, {"kind": "drill_finding", "role": "drill", "layer": "routing", "payload": {
+        "issue_id": "is_7", "issue_edge_id": edge, "observed": "brist-data-sw is southbound locked",
+        "cause": "The idle state is a stale snapshot; the session is Established now on wash-data-sw.",
+        "session_state": "established"}})
+
+    _, unread = _bgp_routing_qualification(case, "brist-data-sw", "0/1")
+    _, read = _bgp_routing_qualification(case, "wash-data-sw", "0/1")
+
+    assert unread == ("**Drill:** `wash-data-sw` reports its BGP session with `brist-data-sw` Established; "
+                      "`brist-data-sw` itself could not be read this run")
+    assert read == ("**Drill:** BGP Established on `wash-data-sw` toward `brist-data-sw` "
+                    "(reachable side only; peer devices not live-checked this run)")
+
+
+def test_drill_line_follows_the_reported_session_state_not_words_in_the_text():
+    """As test46's star-cape drill wrote it: quarantined peer, other peers Established, this one Idle."""
+    from diagnostic_mas.operator_report import _bgp_routing_qualification
+
+    edge = "bgp:10.129.128.1:10.148.128.1:star-data-sw:cape-data-sw"
+
+    def case_with(**extra):
+        case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+        case.device_names = ["cape-data-sw", "star-data-sw"]
+        case.live_verified_devices = ["star-data-sw"]
+        case.issues = [{"id": "is_34", "code": "configured_no_session", "status": "open", "edge_id": edge,
+                        "layer": "routing", "message": "BGP star-data-sw 10.129.128.1 (idle) <-> cape-data-sw"}]
+        add_evidence(case, {"kind": "drill_finding", "role": "drill", "layer": "routing", "payload": {
+            "issue_id": "is_34", "issue_edge_id": edge,
+            "observed": ("cape-data-sw is quarantined/unavailable. Neighbor 10.148.128.1 is Idle; all other "
+                         "iBGP peers are Established. Connections established 5 / dropped 5."),
+            "cause": "No route to multi-hop neighbor; the session is held in Idle.", **extra}})
+        return case
+
+    for extra in ({"session_state": "not_established"}, {"session_state": "unknown"}, {}):
+        for device in ("cape-data-sw", "star-data-sw"):
+            assert _bgp_routing_qualification(case_with(**extra), device, "0/1")[1] is None, (extra, device)
 
 def test_collection_status_reason_device_timeout():
     from diagnostic_mas.operator_report import _collection_status_reason
@@ -453,3 +506,42 @@ def test_health_prose_still_flags_real_review():
     assert "Inventory Review" in prose
     assert "mapping unconfirmed" in prose
     assert "per-device details are in the HTML report" in prose
+
+
+def test_health_prose_says_what_was_not_read():
+    """cien-data-sw in test47: interfaces read and healthy, hardware not readable on a Ciena."""
+    from diagnostic_mas.operator_report import _health_prose
+
+    def prose(interfaces, hardware):
+        return _health_prose({"interfaces": interfaces, "hardware": hardware, "notes": ""})
+
+    assert prose("Healthy", "Healthy") == "Interface and hardware checks reported healthy"
+    assert prose("Healthy", "Unavailable") == "Interface checks reported healthy; hardware status not collected"
+    assert prose("—", "Healthy") == "Hardware checks reported healthy; interface status not collected"
+    assert prose("—", "Unavailable") == "Interface and hardware status not collected for this run"
+
+
+def test_drill_line_does_not_count_a_device_as_read_when_its_bgp_collection_failed():
+    """cien answers get_interface_health, so it is live-verified, but its BGP cannot be read."""
+    from diagnostic_mas.operator_report import _bgp_routing_qualification
+
+    edge = "bgp:10.129.128.1:10.148.0.1:star-data-sw:cien-data-sw"
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    case.device_names = ["cien-data-sw", "star-data-sw"]
+    case.live_verified_devices = ["cien-data-sw", "star-data-sw"]
+    case.issues = [
+        {"id": "is_9", "code": "missing_reverse_session", "status": "open", "edge_id": edge, "layer": "routing",
+         "message": "star-data-sw sees 10.148.0.1 (Established) but cien-data-sw has no matching reciprocal row"},
+        {"code": "collection_error", "status": "open", "layer": "routing", "edge_id": None,
+         "message": "cien-data-sw: BGP summary collection failed: device 'cien-data-sw' exists but has no CLI exec action"},
+    ]
+    add_evidence(case, {"kind": "drill_finding", "role": "drill", "layer": "routing", "payload": {
+        "issue_id": "is_9", "issue_edge_id": edge, "observed": "star: neighbor 10.148.0.1 Established, 5d",
+        "cause": "Session up from star; cien could not be read.", "session_state": "established"}})
+
+    assert _bgp_routing_qualification(case, "cien-data-sw", "0/1")[1] == (
+        "**Drill:** `star-data-sw` reports its BGP session with `cien-data-sw` Established; "
+        "`cien-data-sw` itself could not be read this run")
+    assert _bgp_routing_qualification(case, "star-data-sw", "0/1")[1] == (
+        "**Drill:** BGP Established on `star-data-sw` toward `cien-data-sw` "
+        "(reachable side only; peer devices not live-checked this run)")

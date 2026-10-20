@@ -39,7 +39,8 @@ def test_normalize_exec_show_strips_show_prefix():
 
 
 @pytest.mark.asyncio
-async def test_get_interface_health_drops_interface_kwarg(monkeypatch):
+async def test_get_interface_health_passes_one_interface_and_other_device_tools_drop_it(monkeypatch):
+    """The MCP server reads one port when given ``interface``; without it, the whole device."""
     calls: list[tuple[str, dict]] = []
 
     async def fake_call_mcp(client, tool, params=None):
@@ -50,16 +51,16 @@ async def test_get_interface_health_drops_interface_kwarg(monkeypatch):
     await run_deep_checks(
         client=None,
         plan=[
-            {
-                "check": "get_interface_health",
-                "args": {
-                    "device": "lbnl-data-sw",
-                    "interface": "TF0/0/0/23/1",
-                },
-            }
+            {"check": "get_interface_health", "args": {"device": "lbnl-data-sw", "interface": "TF0/0/0/23/1"}},
+            {"check": "get_interface_health", "args": {"device_name": "lbnl-data-sw", "interface": " "}},
+            {"check": "get_hardware_health", "args": {"device_name": "lbnl-data-sw", "interface": "TF0/0/0/23/1"}},
         ],
     )
-    assert calls == [("get_interface_health", {"device_name": "lbnl-data-sw"})]
+    assert calls == [
+        ("get_interface_health", {"device_name": "lbnl-data-sw", "interface": "TF0/0/0/23/1"}),
+        ("get_interface_health", {"device_name": "lbnl-data-sw"}),
+        ("get_hardware_health", {"device_name": "lbnl-data-sw"}),
+    ]
 
 
 @pytest.mark.asyncio
@@ -160,3 +161,21 @@ def test_any_probe_succeeded_ignores_error_only_lists():
         [{"error": "a"}, {"check": "exec_show", "result": "UP"}]
     ) is True
     assert any_probe_succeeded([{"check": "exec_show", "ok": True}]) is True
+
+
+@pytest.mark.asyncio
+async def test_service_list_is_read_fresh_and_other_reads_may_use_the_cache(monkeypatch):
+    """An owner can delete a service mid-scan; the start-of-scan copy of the list would hide it."""
+    calls: list[tuple[str, bool]] = []
+
+    async def fake_call_mcp(client, tool, params=None, *, bypass_cache=False):
+        calls.append((tool, bypass_cache))
+        return {"ok": True}
+
+    monkeypatch.setattr("multi_agent.deep_checks.call_mcp", fake_call_mcp)
+    await run_deep_checks(client=None, plan=[
+        {"check": "get_services", "args": {"service_type": "l2bridge"}},
+        {"check": "get_device_config", "args": {"device": "cern-data-sw"}},
+    ])
+
+    assert calls == [("get_services", True), ("get_device_config", False)]

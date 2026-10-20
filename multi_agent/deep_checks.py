@@ -18,9 +18,10 @@ async def run_deep_checks(
         # Normalize LLM/plan arg names → current MCP tool schemas (flat keys).
         if check == "exec_show":
             args = _normalize_exec_show_args(args)
+        elif check == "get_interface_health":
+            args = _device_and_interface(args)
         elif check in (
             "get_hardware_health",
-            "get_interface_health",
             "verify_bgp_peer_reachability",
             "get_device_config",
             "compare_device_config",
@@ -39,7 +40,11 @@ async def run_deep_checks(
         elif check == "explore_nso_path":
             args = _normalize_explore_path_args(args)
         try:
-            result = await call_mcp(client, check, args)
+            if check == "get_services":
+                # Owners delete services mid-scan; the start-of-scan copy would hide that.
+                result = await call_mcp(client, check, args, bypass_cache=True)
+            else:
+                result = await call_mcp(client, check, args)
             # MCP may return a validation string instead of raising
             if _is_exec_show_validation_error(check, result):
                 evidence.append(
@@ -108,6 +113,15 @@ def _device_name_only(args: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     if dev is not None:
         out["device_name"] = dev
+    return out
+
+
+def _device_and_interface(args: dict[str, Any]) -> dict[str, Any]:
+    """``device_name`` plus an optional ``interface``, which narrows the read to one port."""
+    out = _device_name_only(args)
+    interface = args.get("interface") or args.get("interface_name")
+    if isinstance(interface, str) and interface.strip():
+        out["interface"] = interface.strip()
     return out
 
 

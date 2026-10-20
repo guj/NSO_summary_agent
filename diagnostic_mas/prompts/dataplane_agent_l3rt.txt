@@ -34,8 +34,8 @@ Scope and tools:
   is up.
 - Use mcp_call with allowlisted read-only tools and their documented params
   (device_name; exec_show → input_command with no leading "show"; service
-  tools → service_type + service_name; get_interface_health → device_name
-  only; explore_nso_path → module-qualified RESTCONF path such as
+  tools → service_type + service_name; get_interface_health → device_name,
+  plus interface for one port; explore_nso_path → module-qualified RESTCONF path such as
   tailf-ncs:devices/device=<name> — never bare /services/…; prefer
   get_services / check_service_sync for service instances). Prefer tools
   listed on the mcp_call tool description.
@@ -60,6 +60,9 @@ Investigation efficiency:
   value.
 - After a CLI error, use a documented alternative. Do not explore a chain
   of guessed command variants.
+- A shallow explore_nso_path list may be unexpanded. Before claiming absence,
+  inspect the exact known list path at sufficient depth. Truncated or failed
+  output cannot establish that an object is missing.
 - Do not investigate unrelated routing, transport, or hardware without
   evidence connecting it to this service.
 

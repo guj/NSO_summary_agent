@@ -101,7 +101,10 @@ async def record_port_counters(client: Any, case: CaseFile, *, ceiling: int, wor
     async def read(device: str) -> None:
         probe = Probe(client, calls, cache, max_calls=len(by_device[device]))
         for port in by_device[device]:
-            reading = parse_port_counters(await probe.show(device, f"interfaces {port}", required=False), port)
+            command = f"interfaces {port}"
+            reading = parse_port_counters(await probe.show(device, command, required=False), port)
+            if reading is None and probe.error_codes.get((device, command)) == "exec_unavailable":
+                reading = await _structured_reading(calls, client, device, port)
             if reading:
                 ports[f"{device}:{port}"] = reading | targets[device, port]
 
@@ -109,6 +112,42 @@ async def record_port_counters(client: Any, case: CaseFile, *, ceiling: int, wor
     add_evidence(case, {"kind": KIND, "role": "physical", "layer": "physical", "payload": {
         "read_at": datetime.now(timezone.utc).isoformat(), "ports": dict(sorted(ports.items())),
         "wanted": len(targets), "left_out": max(0, len(order) - ceiling)}})
+
+
+async def _structured_reading(call: Any, client: Any, device: str, port: str) -> dict[str, Any] | None:
+    """The port's state and error counters from ``get_interface_health``, for a device without CLI.
+
+    The service model names such a port by type and id (``Generic14``); the device names it by
+    its id. There is no clear time and no state-transition count, so those stay None.
+    """
+    named = re.fullmatch(r"Generic(\S+)", port)
+    result = await call(client, "get_interface_health", {"device_name": device, "interface": named[1] if named else port})
+    data = result.get("data") if isinstance(result, dict) and result.get("status") == "success" else None
+    rows = [row for row in (data or {}).get("interfaces") or [] if isinstance(row, dict) and row.get("read_ok") is not False]
+    if len(rows) != 1:
+        return None
+    row = rows[0]
+    admin, oper = str(row.get("admin_status") or "").lower(), str(row.get("oper_status") or "").lower()
+    if admin not in ("up", "down") or not oper:
+        return None
+    counts = {name: row.get(field) if isinstance(row.get(field), int) else None
+              for name, field in (("input_errors", "input_errors"), ("crc", "crc_errors"))}
+    return {"state": "admin-down" if admin == "down" else "up" if oper == "up" else "down",
+            "transitions": None, "input_drops": None, "output_drops": None, "output_errors": None, **counts,
+            "cleared": None, "description": str(row.get("description") or "")[:120],
+            "changed_at": _change_time(row.get("last_change")), "source": "get_interface_health"}
+
+
+def _change_time(last_change: Any) -> str | None:
+    """The device's last-change stamp as UTC time; 19 digits are nanoseconds, 10 are seconds."""
+    raw = str(last_change.get("raw") if isinstance(last_change, dict) else last_change or "").strip()
+    if re.fullmatch(r"\d{19}", raw):
+        seconds = int(raw) // 10**9
+    elif re.fullmatch(r"\d{10}", raw):
+        seconds = int(raw)
+    else:
+        return None
+    return datetime.fromtimestamp(seconds, timezone.utc).isoformat()
 
 
 def _saved(case: dict[str, Any]) -> dict[str, Any]:
@@ -148,7 +187,10 @@ def links_gaining_errors(older: dict[str, Any], newer: dict[str, Any]) -> list[d
             return pair if all(isinstance(value, int) for value in pair) else None
 
         # Counters cleared since the previous scan, or one that went back, cannot be subtracted.
-        if reading.get("cleared") != "never":
+        # A structured reading has no clear time; the went-back check below still catches a
+        # reset, and a missed one could only make the gain smaller, never invent one.
+        structured = reading.get("source") == earlier.get("source") == "get_interface_health"
+        if reading.get("cleared") != "never" and not structured:
             age = _age_seconds(reading.get("cleared"))
             if age is None or elapsed is None or age < elapsed:
                 continue
@@ -157,11 +199,18 @@ def links_gaining_errors(older: dict[str, Any], newer: dict[str, Any]) -> list[d
         gained = {name: pair[1] - pair[0] for name in _ERRORS if (pair := both(name)) and pair[1] > pair[0]}
         moved = both("transitions")
         state_changes = moved[1] - moved[0] if moved else 0
-        if not gained and not state_changes:
+        # Without a transition count, a last change after the previous read means it went down and back.
+        bounced = False
+        if structured and not state_changes:
+            try:
+                bounced = datetime.fromisoformat(str(reading.get("changed_at"))) > datetime.fromisoformat(before["read_at"])
+            except (KeyError, TypeError, ValueError):
+                bounced = False
+        if not gained and not state_changes and not bounced:
             continue
         device, _, port = key.partition(":")
         rows.append({"device": device, "port": port, "description": reading.get("description") or "",
-                     "gained": gained, "state_changes": state_changes,
+                     "gained": gained, "state_changes": state_changes, **({"bounced": True} if bounced else {}),
                      "minutes": round(elapsed / 60) if elapsed is not None else None,
                      "services": int(reading.get("services") or 0), "adjacency": bool(reading.get("adjacency")),
                      "device_services": int(reading.get("device_services") or 0)})
@@ -174,6 +223,8 @@ def gain_line(row: dict[str, Any]) -> str:
     parts = [f"+{row['gained'][name]} {label}" for name, label in _ERRORS.items() if name in row["gained"]]
     if row["state_changes"]:
         parts.append(f"{row['state_changes']} state change{'' if row['state_changes'] == 1 else 's'}")
+    elif row.get("bounced"):
+        parts.append("went down and came back since the previous scan (count not reported)")
     minutes = row.get("minutes")
     took = "" if minutes is None else f" in {minutes // 60} h {minutes % 60} min" if minutes >= 60 else f" in {minutes} min"
     services = row["services"]

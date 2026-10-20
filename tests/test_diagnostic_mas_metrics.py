@@ -204,3 +204,49 @@ def test_scan_pushes_its_run_id_and_report_link():
 
     assert ('nso_scan_info{pipeline="diagnostic",'
             'report_url="https://reports.example/run-1/report.html",run_id="run-1"} 1.0') in text
+
+
+# Rows as the report's "Links gaining errors while up" list gives them, 508 minutes after the last scan.
+LINKS = [
+    {"device": "toky-data-sw", "port": "TenGigE0/0/0/18/0", "gained": {"crc": 41867, "input_errors": 41867},
+     "state_changes": 0, "minutes": 508},
+    {"device": "losa-data-sw", "port": "Bundle-Ether101", "gained": {"crc": 10, "input_errors": 253},
+     "state_changes": 4, "minutes": 508},
+    {"device": "dall-data-sw", "port": "Bundle-Ether101", "gained": {}, "state_changes": 4, "minutes": 508},
+]
+
+
+def _series(text: str, name: str) -> dict[tuple[str, str], float]:
+    """(device, port) -> value for each pushed series of ``name``."""
+    found = {}
+    for line in text.splitlines():
+        if line.startswith(name + "{"):
+            labels, value = line[len(name) + 1:].rsplit("} ", 1)
+            pairs = dict(part.split("=", 1) for part in labels.split(","))
+            found[(pairs["device"].strip('"'), pairs["port"].strip('"'))] = float(value)
+    return found
+
+
+def test_scan_pushes_crc_errors_per_minute_for_each_link_gaining_them():
+    crc = _series(_pushed(scan_case(), links_gaining_errors=LINKS), "nso_link_crc_per_minute")
+
+    assert set(crc) == {("toky-data-sw", "TenGigE0/0/0/18/0"), ("losa-data-sw", "Bundle-Ether101")}
+    assert abs(crc[("toky-data-sw", "TenGigE0/0/0/18/0")] - 41867 / 508) < 1e-6
+    assert abs(crc[("losa-data-sw", "Bundle-Ether101")] - 10 / 508) < 1e-6
+
+
+def test_scan_pushes_how_often_each_link_went_down_or_up():
+    changes = _series(_pushed(scan_case(), links_gaining_errors=LINKS), "nso_link_state_changes")
+
+    assert changes == {("losa-data-sw", "Bundle-Ether101"): 4.0, ("dall-data-sw", "Bundle-Ether101"): 4.0}
+
+
+def test_link_with_no_time_between_readings_gets_no_rate():
+    row = {"device": "toky-data-sw", "port": "TenGigE0/0/0/18/0", "gained": {"crc": 5},
+           "state_changes": 0, "minutes": 0}
+
+    assert "nso_link_crc_per_minute" not in _pushed(scan_case(), links_gaining_errors=[row])
+
+
+def test_scan_without_a_previous_scan_pushes_no_link_series():
+    assert "nso_link_" not in _pushed(scan_case())

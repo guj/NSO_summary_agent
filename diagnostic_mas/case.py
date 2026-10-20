@@ -19,6 +19,8 @@ class Budget:
     # How many Issues get a drill session (e.g. 2 degraded services)
     max_drill_issues: int = 2
     drill_issues_used: int = 0
+    # Drill sessions whose LLM loop ended without concluding (e.g. the provider refused the request)
+    drill_issues_unconcluded: int = 0
     # Tool-call allowance per drill session (generous)
     max_tools_per_drill: int = 12
     # MCP tool calls per service in the dataplane verify LLM phase
@@ -66,10 +68,10 @@ class CaseFile:
     # Set when provider LLM spend budget is exceeded; stop further LLM calls.
     # Historical faults are not current evidence or fresh diagnoses.
     last_known_service_faults: list[dict[str, Any]] = field(default_factory=list)
-    # What each rule the operators have not decided would change; reporting only.
-    undecided_rules: dict[str, Any] = field(default_factory=dict)
     # Token counts for the scan, and its cost and the budget when the provider reports them.
     llm_usage: dict[str, Any] = field(default_factory=dict)
+    # MCP calls of the scan: all, from cache, and those made during LLM investigations.
+    mcp_calls: dict[str, Any] = field(default_factory=dict)
     llm_halt_reason: str | None = None
     _evidence_seq: int = 0
     _issue_seq: int = 0
