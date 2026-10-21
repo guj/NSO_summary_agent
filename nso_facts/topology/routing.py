@@ -20,11 +20,6 @@ _BGP_CONFIG_SUFFIXES = (
     "tailf-ned-cisco-ios:router/bgp",
 )
 
-_BGP_SUMMARY_COMMANDS = (
-    "bgp ipv4 unicast summary",
-    "bgp summary",
-)
-
 _BGP_NEIGHBOR_LINE = re.compile(
     r"^\s*(?P<neighbor>\d+\.\d+\.\d+\.\d+)\s+(?P<rest>.+)$"
 )
@@ -576,6 +571,32 @@ def parse_router_id_from_summary(text: str) -> str | None:
     return None
 
 
+# A NED that models BGP config only (Ciena SAOS): the MCP server's code, and our wording for it.
+_NOT_EXPOSED_CODE = "not_exposed"
+NOT_EXPOSED = "BGP session state is not exposed on this platform"
+
+
+class SessionStateNotExposed(RuntimeError):
+    """The device's NED has no BGP session state to read; retrying cannot help."""
+
+
+def bgp_state_not_exposed(issue: dict[str, Any]) -> bool:
+    """A BGP end that is unread because of the platform, not because a read failed."""
+    return (issue.get("code") == "collection_error" and issue.get("layer") == "routing"
+            and NOT_EXPOSED in str(issue.get("message") or ""))
+
+
+async def _bgp_summary(client: Any, device: str) -> dict[str, Any]:
+    """One device's ``get_bgp_summary`` data; raises when its session state cannot be read."""
+    result = await call_mcp(client, "get_bgp_summary", {"device_name": device})
+    if isinstance(result, dict) and result.get("status") == "error":
+        if result.get("error_code") == _NOT_EXPOSED_CODE:
+            raise SessionStateNotExposed(result.get("error_message", ""))
+        raise RuntimeError(result.get("error_message") or "get_bgp_summary failed")
+    data = unwrap_mcp_data(result)
+    return data if isinstance(data, dict) else {}
+
+
 async def _enrich_router_ids_from_live(
     client: Any,
     device_names: list[str],
@@ -585,19 +606,14 @@ async def _enrich_router_ids_from_live(
     for device in device_names:
         if device in enriched:
             continue
-        for command in _BGP_SUMMARY_COMMANDS:
-            result = await call_mcp(
-                client,
-                "exec_show",
-                {"device_name": device, "input_command": command},
-            )
-            if isinstance(result, dict) and result.get("status") == "error":
-                continue
-            text = _exec_show_text(result)
-            router_id = parse_router_id_from_summary(text)
-            if router_id:
-                enriched[device] = router_id
-                break
+        # The same call as the session read, so a scan's cache answers it.
+        try:
+            data = await _bgp_summary(client, device)
+        except RuntimeError:
+            continue
+        router_id = parse_router_id_from_summary(str(data.get("raw") or ""))
+        if router_id:
+            enriched[device] = router_id
     return enriched
 
 
@@ -614,6 +630,18 @@ async def _collect_observations(
         try:
             observations.extend(await _observations_for_device(client, device))
             devices_queried += 1
+        except SessionStateNotExposed as exc:
+            # Still an unread end, so its peers' view stands for the sessions.
+            devices_failed += 1
+            issues.append(
+                {
+                    "severity": "low",
+                    "layer": "routing",
+                    "code": "collection_error",
+                    "edge_id": None,
+                    "message": f"{device}: {NOT_EXPOSED} ({exc})",
+                }
+            )
         except Exception as exc:  # noqa: BLE001
             devices_failed += 1
             issues.append(
@@ -638,30 +666,29 @@ async def _observations_for_device(
     client: Any,
     device: str,
 ) -> list[BgpSessionObservation]:
-    last_error: str | None = None
-    observations: list[BgpSessionObservation] = []
-    seen: set[tuple[str, str]] = set()
-
-    for command in _BGP_SUMMARY_COMMANDS:
-        result = await call_mcp(
-            client,
-            "exec_show",
-            {"device_name": device, "input_command": command},
-        )
-        if isinstance(result, dict) and result.get("status") == "error":
-            last_error = str(result.get("error_message") or "exec_show failed")
-            continue
-        text = _exec_show_text(result)
-        for obs in parse_bgp_summary_text(device, text):
+    data = await _bgp_summary(client, device)
+    raw = data.get("raw")
+    if isinstance(raw, str) and raw.strip():
+        # The device's own table, read by the agent's parser: it also reads the
+        # older ``(Estab)`` rows and the header's local AS.
+        observations: list[BgpSessionObservation] = []
+        seen: set[tuple[str, str]] = set()
+        for obs in parse_bgp_summary_text(device, raw):
             key = (obs.neighbor_address, obs.state)
             if key not in seen:
                 seen.add(key)
                 observations.append(obs)
-        if observations:
-            return observations
-    if last_error:
-        raise RuntimeError(last_error)
-    return observations
+        return observations
+    # No printed table (a NED that models session state): the server's rows.
+    return [
+        BgpSessionObservation(
+            device, str(row["address"]), str(row.get("state") or "unknown"),
+            remote_as=row["remote_as"] if isinstance(row.get("remote_as"), int) else None,
+            up_down=row.get("up_down"),
+        )
+        for row in data.get("neighbors") or []
+        if isinstance(row, dict) and row.get("address")
+    ]
 
 
 async def _static_bgp_for_device(

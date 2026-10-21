@@ -349,15 +349,22 @@ We **prefer `get_device_config()`** for BGP peering intent, not a multi-step `ex
 
 IOS-XR config lists **neighbor addresses**, not remote hostnames. Pairing uses **router-id** (config or live summary line `BGP router identifier …`) to resolve which device owns a neighbor IP.
 
-When static edges are built, one live **`exec_show`** pass pairs sessions (same pattern as underlay `seed_from_live`).
+When static edges are built, one live **`get_bgp_summary`** pass pairs sessions (same pattern as underlay `seed_from_live`).
 
 ### Finding operational BGP (live)
 
 For each device:
 
 ```text
-exec_show(device_name, input_command="bgp ipv4 unicast summary")
+get_bgp_summary(device_name)   # IOS-XR: runs `show bgp ipv4 unicast summary`
 ```
+
+The agent parses the returned `raw` table itself (it also reads the older
+`200160 (Estab)` rows and the header's router ID and local AS). With no `raw`
+table, it uses the server's `neighbors` rows. `not_exposed` (Ciena SAOS, whose
+NED models BGP config only) is recorded as a low-severity `collection_error`,
+"BGP session state is not exposed on this platform", and the device's
+sessions are read from their peers' end.
 
 Parse neighbor rows for **Established** / **Idle** / **Active** / … — same bidirectional pairing as underlay:
 

@@ -107,3 +107,14 @@ def test_mcp_results_keep_a_week_unless_set():
     for raw in ("", "-1", "1.5", "no"):
         with pytest.raises(ValueError, match="MCP_RESULTS_KEEP_DAYS"):
             _parse_keep_days(raw)
+
+
+def test_notification_digest_is_off_unless_set(monkeypatch):
+    from agent.config import load_settings
+
+    for name, value in {"NSO_ADDRESS": "localhost", "NSO_PASSWORD": "test", "FABRIC_AI_API_KEY": "test"}.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("NOTIFICATION_DIGEST", raising=False)
+    assert load_settings().notification_digest is False
+    monkeypatch.setenv("NOTIFICATION_DIGEST", "1")
+    assert load_settings().notification_digest is True

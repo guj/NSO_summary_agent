@@ -74,6 +74,8 @@ class Settings:
     fabric_chat_timeout_sec: float = 60.0
     fabric_chat_connect_timeout_sec: float = 20.0
     mcp_results_keep_days: int = 7
+    # Slack and email carry the HTML report with one line naming the run; True restores the digest.
+    notification_digest: bool = False
 
 
 def _parse_temperature(raw: str | None) -> float | None:
@@ -221,6 +223,7 @@ def load_settings(*, require_llm_key: bool = True) -> Settings:
         fabric_chat_connect_timeout_sec=_parse_connect_timeout(os.environ.get("FABRIC_CHAT_CONNECT_TIMEOUT_SEC")),
         state_dir=Path(os.environ.get("STATE_DIR", root / "state")),
         mcp_results_keep_days=_parse_keep_days(os.environ.get("MCP_RESULTS_KEEP_DAYS")),
+        notification_digest=os.environ.get("NOTIFICATION_DIGEST", "0") in ("1", "true", "yes"),
         # Default dry-run (safe): no state write / Slack / email unless DRY_RUN=0 or --publish
         dry_run=os.environ.get("DRY_RUN", "1") in ("1", "true", "yes"),
         ignore_service_types=_parse_ignore_service_types(

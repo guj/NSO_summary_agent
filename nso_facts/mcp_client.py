@@ -417,7 +417,7 @@ def parse_live_mcp_collection_phase(message: str) -> str:
     blob = f"{cmd} {lower}"
     if re.search(r"\bisis\b", blob):
         return "IS-IS collection"
-    if re.search(r"\bbgp\b", blob):
+    if re.search(r"\bbgp\b", blob) or "get_bgp_summary" in blob:
         return "BGP collection"
     if re.search(r"\b(l2vpn|xconnect|evpn|bridge-domain)\b", blob):
         return "L2VPN collection"
@@ -690,7 +690,7 @@ def start_mcp_cache() -> None:
 def successful_live_devices() -> list[str]:
     """Devices with a successful live query in this session, not CDB inventory."""
     live_tools = {"exec_show", "check_isis_adjacencies", "get_interface_health",
-                  "get_hardware_health"}
+                  "get_hardware_health", "get_bgp_summary"}
     devices: set[str] = set()
     for key, result in (_mcp_cache.get() or {}).items():
         tool, body = key.split("\0", 1)

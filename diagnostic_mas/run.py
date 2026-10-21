@@ -696,16 +696,18 @@ async def _run_after_accounting(
             report=report,
             nso_address=nso_address,
         )
-        from diagnostic_mas.html_report import notification_digest
+        from diagnostic_mas.html_report import notification_digest, report_notice
         from urllib.parse import quote
 
         report_url = None
         if settings.diagnostic_report_base_url:
             report_url = (settings.diagnostic_report_base_url.rstrip("/") + "/"
                           + quote(out.parent.name, safe="") + "/report.html")
+        notice = (notification_digest(report, run_id, changes=list(
+                      digest_changes(case_delta, previous_run_id, open_faults)))
+                  if settings.notification_digest else report_notice(run_id))
         channels = publish_all(
-            mask_nso_address(notification_digest(
-                report, run_id, changes=list(digest_changes(case_delta, previous_run_id, open_faults))), nso_address),
+            mask_nso_address(notice, nso_address),
             run_id,
             settings,
             attachment_path=out.parent / "report.html",
@@ -827,13 +829,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-dataplane-services",
         type=int,
-        default=None,
+        default=10,
         help=(
-            "Cap how many services get dataplane LLM verify in total. "
-            "Default without --max-dataplane-per-category: one best instance "
-            "per typed prompt category (dataplane_agent_<type>.txt on disk); "
-            "two if only one typed category is present. Soft-error live L2 is "
-            "preferred within the cap, not added beyond it."
+            "Cap how many services get a dataplane LLM investigation in total, "
+            "whatever their type (default 10; 0 turns them off). Services are "
+            "taken in turns across types, most suspicious first; "
+            "--max-dataplane-per-category also limits each type. Soft-error "
+            "live L2 is preferred within the cap, not added beyond it."
         ),
     )
     parser.add_argument(

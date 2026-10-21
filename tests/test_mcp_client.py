@@ -653,6 +653,24 @@ async def test_live_verification_requires_successful_live_query():
 
 
 @pytest.mark.asyncio
+async def test_a_bgp_table_read_counts_as_a_live_answer_and_names_its_phase():
+    from nso_facts.mcp_client import (
+        parse_live_mcp_collection_phase, start_mcp_cache, stop_mcp_cache, successful_live_devices,
+    )
+    start_mcp_cache()
+    try:
+        ok = SimpleNamespace(data={"status": "success", "data": {"raw": "BGP router identifier 10.0.0.1"}},
+                             structured_content=None, content=[])
+        client = _client_with_tools(
+            _flat_tool("get_bgp_summary", {"device_name": {"type": "string"}}), call_return=ok)
+        await call_mcp(client, "get_bgp_summary", {"device_name": "star"})
+        assert successful_live_devices() == ["star"]
+    finally:
+        stop_mcp_cache()
+    assert parse_live_mcp_collection_phase("get_bgp_summary: Request timed out after 30s") == "BGP collection"
+
+
+@pytest.mark.asyncio
 async def test_archive_preserves_full_wire_response_and_cache(tmp_path):
     import json
     import stat

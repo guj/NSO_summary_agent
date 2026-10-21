@@ -150,11 +150,21 @@ on the device that was read, as "Established here, far end not read" or the stat
 IS-IS adjacency toward a device that could not be read keeps that device's interface as `?`,
 because only that device can name it.
 
+"IS-IS not readable on cien-data-sw (its NED exposes no adjacency state)" is a limit of the
+platform, not a failed read: the Ciena SAOS NED models IS-IS configuration only, so no scan can
+read adjacencies from that end. Its neighbors' view is the only reading of those adjacencies.
+
 ### How is BGP peer state read from the device?
 
-From `show bgp summary`. On IOS-XR the `St/PfxRcd` column holds a prefix count for an established
-peer (for example `0` or `445667`) and a state word such as `Idle` or `Active` otherwise. A number
-is treated as Established.
+Through the MCP server's `get_bgp_summary`, which runs `show bgp ipv4 unicast summary` on IOS-XR.
+The agent reads the table as the device printed it. The `St/PfxRcd` column holds a prefix count
+for an established peer (for example `0` or `445667`) and a state word such as `Idle` or `Active`
+otherwise. A number is treated as Established.
+
+On Ciena SAOS the NED (`ciena-saos_nc-gen-1.0`) models BGP configuration but no session state, so
+the device line says "BGP not readable on cien-data-sw (its NED exposes no session state)" and
+its sessions are read from the peers' end only. This is a fact about that NED version: a newer
+one could expose session state, and the agent would then use the server's per-neighbor rows.
 
 ### What goes under Attention?
 
@@ -167,8 +177,8 @@ is treated as Established.
   It is marked "already Down in the previous run" when that scan read the interface up and then
   found its services Down: the port failed during that scan, which already reported the loss.
   It also lists the service faults still open, each with the scan that first
-  listed it and, for a down link, how long the device says it has been down. The Slack and email
-  digest starts with the same changes.
+  listed it and, for a down link, how long the device says it has been down. With
+  `NOTIFICATION_DIGEST=1`, the Slack and email digest starts with the same changes.
 - A device whose automated live queries timed out or failed. Further live queries to it are skipped
   for the rest of the run. NSO configuration may still be present and manual access may still work,
   so this is not proof that the device is down. A single read that ran out of time while the

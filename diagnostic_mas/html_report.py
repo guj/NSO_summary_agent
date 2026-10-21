@@ -178,6 +178,11 @@ def _technician_lines(finding: dict, evidence: list) -> list[str]:
     return lines
 
 
+def report_notice(run_id: str) -> str:
+    """The one line Slack and email carry beside the attached HTML report."""
+    return f"NSO diagnostic report — {run_id}"
+
+
 def notification_digest(report: str, run_id: str, *, changes: list[str] | None = None) -> str:
     lines = [f"# NSO diagnostic report — {run_id}"]
     for prefix in ("**Scope:**", "**Duration:**"):

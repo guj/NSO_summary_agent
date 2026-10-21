@@ -410,6 +410,8 @@ async def test_runner_sends_the_change_lines_in_the_notification(tmp_path):
     import argparse
     from unittest.mock import AsyncMock, MagicMock, patch
 
+    from dataclasses import replace
+
     from diagnostic_mas import run as run_mod
     from test_diagnostic_mas_publish import _settings
 
@@ -426,7 +428,9 @@ async def test_runner_sends_the_change_lines_in_the_notification(tmp_path):
             return False
 
     async def scan() -> str:
-        with patch.object(run_mod, "load_settings", return_value=_settings(state_dir=tmp_path, dry_run=True)), \
+        # The change lines travel in the digest, which NOTIFICATION_DIGEST switches on.
+        settings = replace(_settings(state_dir=tmp_path, dry_run=True), notification_digest=True)
+        with patch.object(run_mod, "load_settings", return_value=settings), \
              patch.object(run_mod, "prepare_fabric_llm", return_value=(None, True)), \
              patch.object(run_mod, "mcp_session", return_value=_Session()), \
              patch.object(run_mod, "call_mcp", new=AsyncMock(return_value={"status": "success", "data": {"device": []}})), \

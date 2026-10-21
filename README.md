@@ -19,7 +19,7 @@ Anthropic-only bases (for example `…/anthropic`) are not supported.
 ## Prerequisites
 
 - Python 3.12+
-- Running [fabric-nso-mcp-server](https://github.com/fabric-testbed/fabric-nso-mcp-server)
+- Running [fabric-nso-mcp-server](https://github.com/fabric-testbed/fabric-nso-mcp-server), a version that provides `get_bgp_summary` (BGP session state is read through it)
 - Optional LLM API access via `FABRIC_AI_API_KEY` / `FABRIC_AI_API_URL` / `FABRIC_AI_MODEL` (OpenAI-compatible). Run `nso-diagnostic-run --skip-llm` without a model. Free/institutional access depends on provider eligibility and quotas; paid endpoints also work. See [model choices and our trial experience](docs/DIAGNOSTIC_RUNNER.md#running-without-an-llm-and-choosing-a-model).
 
 ## Diagnostic runner: standalone checkout
@@ -236,6 +236,7 @@ See [deploy/monitoring/README.md](deploy/monitoring/README.md) for:
 | `MCP_SERVER_CMD`              | no       | Path to `cisco-nso-mcp-server` binary                                     |
 | `STATE_DIR`                   | no       | Default `./state`                                                         |
 | `MCP_RESULTS_KEEP_DAYS`       | no       | Days a `--save-mcp-results` archive is kept (default `7`; `0` keeps all). See [Preserve MCP responses](#preserve-mcp-responses) |
+| `NOTIFICATION_DIGEST`         | no       | `1` sends a short digest with the HTML report to Slack and email; default sends one line naming the run. See [Compact diagnostic notifications and HTML reports](#compact-diagnostic-notifications-and-html-reports) |
 | `IGNORE_SERVICE_TYPES`        | no       | Comma-separated types to skip (default `idipa`; set empty to include all) |
 | `NSO_SERVICE_SYNC_MODE`       | no       | `check` (default) calls `check_service_sync` per instance; `skip` uses endpoint fleet sync only (this lab). Overall status combines sync and dataplane; the diagnostic table counts endpoint sync and dataplane independently |
 | `MAX_SERVICE_TYPES`           | no       | Cap on service types queried per run (default `10`; also `--max-service-types`) |
@@ -258,7 +259,8 @@ Required together when `EMAIL_TO` is set.
 ## Automatic Slack / email delivery
 
 Each successful `nso-diagnostic-run --publish` run (or `DRY_RUN=0`) delivers to every configured channel.
-Slack and email receive a compact digest. Email also carries the full HTML report as an attachment. On Slack,
+Slack and email receive the full HTML report with one line naming the run (`NOTIFICATION_DIGEST=1` adds a
+short digest). Email carries the report as an attachment. On Slack,
 a webhook cannot attach files; with a bot token the HTML report is uploaded to the channel
 (see [Compact diagnostic notifications and HTML reports](#compact-diagnostic-notifications-and-html-reports)).
 
@@ -567,7 +569,7 @@ A port investigation adds a **For the technician** list to that block: each down
 
 The section of an l3rt service that is OpUp ends with a **Delivery check for an operator**: the ping to its gateway that someone on the customer side can run, from a permitted host when the service lists one. The line says the agent did not run it; the agent has no access to customer hosts.
 
-**Publish:** Slack and email receive a compact digest; email attaches the self-contained HTML report (see [Compact diagnostic notifications and HTML reports](#compact-diagnostic-notifications-and-html-reports)).
+**Publish:** Slack and email receive the self-contained HTML report with one line naming the run, or a short digest with `NOTIFICATION_DIGEST=1` (see [Compact diagnostic notifications and HTML reports](#compact-diagnostic-notifications-and-html-reports)).
 
 ### Useful flags
 
@@ -577,8 +579,8 @@ The section of an l3rt service that is OpUp ends with a **Delivery check for an 
 | `--deterministic-summary` | Skip final Summary chat; restate dataplane diagnoses/findings (default is LLM Summary) |
 | `--service-type` / `--service-id` | **Service-first** (implies lean service-only): match instances, basic checks for all; with LLM enabled, an explicit `--service-id` also investigates instances whose basic checks pass (within budget); type-only focus investigates suspicious instances; no whole-NSO topology unless evidence expands. Combined = intersection; exit if nothing matches |
 | `--max-dataplane-tools N` | Per-service dataplane verify budget (default 40; `0` skips) |
-| `--max-dataplane-services N` | Total cap on dataplane LLM instances (default without per-category: one best per typed prompt; **two** if only one typed category is present) |
-| `--max-dataplane-per-category N` | Up to N digs from each typed prompt category (even overnight sample; optional total cap still applies) |
+| `--max-dataplane-services N` | Total cap on service LLM investigations per scan, whatever their type (default **10**; `0` turns them off). Services are taken in turns across types, most suspicious first |
+| `--max-dataplane-per-category N` | Up to N digs from each typed prompt category (even overnight sample); the total cap above, 10 by default, still applies |
 | `--max-drill-issues N` | Run-wide drill slot count (default 2; separate from dataplane selection) |
 | `--max-port-investigations N` | Down ports and cut-off devices investigated once before the service investigations (default 6; 0 investigates every service individually) |
 | `--max-port-counter-reads N` | Ports whose error counters are read each scan and compared with the next: ports under a service or an IS-IS adjacency (default 400; 0 reads none) |
@@ -761,22 +763,26 @@ nso-diagnostic-run --service-only --service-id <service-id> --dry-run --save-mcp
 ### Compact diagnostic notifications and HTML reports
 
 Published `nso-diagnostic-run` runs now save `report.html` alongside `report.md`
-and `case.json`. Email and Slack receive a bounded digest instead of the full
-report. The digest leads with the status counts, then what changed since the
+and `case.json`. Email and Slack carry that HTML report with one line naming the
+run ("NSO diagnostic report — <run id>"), not a summary. Email attaches the
+self-contained HTML: download it and open it in a browser for search,
+service-status filters, expandable details, and section navigation. No additional
+LLM calls are used. Terminal Markdown is unchanged. Dry runs do not publish or
+save the HTML report.
+
+Set `NOTIFICATION_DIGEST=1` to send a bounded digest with the report instead of
+the one line. The digest leads with the status counts, then what changed since the
 previous scan (new service faults, cleared faults, devices answering again, links
 that went down, routing sessions lost) and the faults still open with their age.
 The priority follow-up items come after that. The rest of the Result line and the
-investigation-coverage sentence are in the full report only. Email includes the self-contained HTML as an attachment: download it
-and open it in a browser for search, service-status filters, expandable details,
-and section navigation. No additional LLM calls are used. Terminal Markdown is
-unchanged. Dry runs do not publish or save the HTML report.
+investigation-coverage sentence are in the full report only.
 
 Slack file attachments require `SLACK_BOT_TOKEN` with `files:write` and
 `SLACK_CHANNEL_ID`. The bot must be a member of that channel: invite it with
 `/invite @your-app-name`. The upload uses Slack's
 getUploadURLExternal → upload → completeUploadExternal flow. If the upload fails with
 `not_in_channel`, the bot has not been invited to that channel. Existing webhook-only
-setups still receive a compact digest, but cannot attach the HTML. Optionally set
+setups receive the one line (or the digest), but cannot attach the HTML. Optionally set
 `DIAGNOSTIC_REPORT_BASE_URL` to an existing internal HTTPS location serving the
 contents of the diagnostic `runs/` directory; webhook posts will link to
 `<base>/<run-id>/report.html`. The runner does not deploy or host those files.

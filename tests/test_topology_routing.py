@@ -238,6 +238,11 @@ def test_no_session_down_issue_without_a_failed_state(state_a, state_b):
     assert not any(i["code"] == "session_down" for i in issues)
 
 
+def _bgp_summary(table: str) -> dict[str, Any]:
+    """get_bgp_summary on IOS-XR: parsed neighbors plus the table as the device printed it."""
+    return {"status": "success", "data": {"raw": table, "neighbors": []}}
+
+
 class FakeClient:
     def __init__(self, handlers: dict[tuple[str, str], Any]):
         self.handlers = handlers
@@ -253,7 +258,7 @@ class FakeClient:
 def _handler_key(tool: str, params: dict[str, Any]) -> str:
     if tool == "explore_nso_path":
         return params.get("path", "")
-    if tool in ("exec_show", "get_device_config", "check_isis_adjacencies"):
+    if tool in ("exec_show", "get_device_config", "check_isis_adjacencies", "get_bgp_summary"):
         if tool == "exec_show":
             return f"{params.get('device_name')}:{params.get('input_command')}"
         return params.get("device_name", params.get("path", ""))
@@ -276,14 +281,8 @@ async def test_collect_static_and_operational_routing():
         {
             ("get_device_config", "lbnl-data-sw"): IOS_XR_BGP_CONFIG,
             ("get_device_config", "renc-data-sw"): IOS_XR_BGP_CONFIG_B,
-            (
-                "exec_show",
-                "lbnl-data-sw:bgp ipv4 unicast summary",
-            ): {"status": "success", "data": {"result": BGP_SUMMARY_A}},
-            (
-                "exec_show",
-                "renc-data-sw:bgp ipv4 unicast summary",
-            ): {"status": "success", "data": {"result": BGP_SUMMARY_B}},
+            ("get_bgp_summary", "lbnl-data-sw"): _bgp_summary(BGP_SUMMARY_A),
+            ("get_bgp_summary", "renc-data-sw"): _bgp_summary(BGP_SUMMARY_B),
         }
     )
 
@@ -321,14 +320,8 @@ async def test_collect_static_lbnl_uky_from_config_and_live():
         {
             ("get_device_config", "lbnl-data-sw"): IOS_XR_BGP_CONFIG_LBNL,
             ("get_device_config", "uky-data-sw"): IOS_XR_BGP_CONFIG_UKY,
-            (
-                "exec_show",
-                "lbnl-data-sw:bgp ipv4 unicast summary",
-            ): {"status": "success", "data": {"result": BGP_SUMMARY_LBNL}},
-            (
-                "exec_show",
-                "uky-data-sw:bgp ipv4 unicast summary",
-            ): {"status": "success", "data": {"result": BGP_SUMMARY_UKY}},
+            ("get_bgp_summary", "lbnl-data-sw"): _bgp_summary(BGP_SUMMARY_LBNL),
+            ("get_bgp_summary", "uky-data-sw"): _bgp_summary(BGP_SUMMARY_UKY),
         }
     )
 
@@ -371,19 +364,13 @@ def test_exec_show_plain_string_response_parses():
 
 @pytest.mark.asyncio
 async def test_exec_show_mcp_returns_bare_string():
-    """MCP _tool_data may return exec output as a plain string, not {result: ...}."""
+    """get_bgp_summary's raw table is read by the agent's own parser (the (Estab) form included)."""
     client = FakeClient(
         {
             ("get_device_config", "lbnl-data-sw"): IOS_XR_BGP_CONFIG_LBNL,
             ("get_device_config", "uky-data-sw"): IOS_XR_BGP_CONFIG_UKY,
-            (
-                "exec_show",
-                "lbnl-data-sw:bgp ipv4 unicast summary",
-            ): BGP_SUMMARY_LBNL,
-            (
-                "exec_show",
-                "uky-data-sw:bgp ipv4 unicast summary",
-            ): BGP_SUMMARY_UKY,
+            ("get_bgp_summary", "lbnl-data-sw"): _bgp_summary(BGP_SUMMARY_LBNL),
+            ("get_bgp_summary", "uky-data-sw"): _bgp_summary(BGP_SUMMARY_UKY),
         }
     )
 
@@ -572,3 +559,65 @@ async def test_operational_routing_returns_the_unmatched_neighbors(monkeypatch):
 
     assert [(row["address"], row["outside"]) for row in unmatched] == [
         ("10.129.134.2", True), ("10.128.128.1", False), ("198.125.141.24", True)]
+
+
+# What the MCP server returns for a platform whose NED models BGP config only (Ciena SAOS).
+BGP_NOT_EXPOSED = {
+    "status": "error",
+    "error_code": "not_exposed",
+    "error_message": ("device 'renc-data-sw' runs saos, whose NED models BGP config only and does not expose "
+                      "per-neighbour session state; configured peers are readable but their session state is not"),
+}
+
+
+@pytest.mark.asyncio
+async def test_bgp_session_state_is_read_through_get_bgp_summary(monkeypatch):
+    import nso_facts.topology.routing as routing
+    from nso_facts.topology.routing import bgp_state_not_exposed
+
+    answers = {
+        "lbnl-data-sw": _bgp_summary(BGP_SUMMARY_LBNL),
+        "renc-data-sw": BGP_NOT_EXPOSED,
+        # A NED that models session state but prints no IOS-XR table: the structured rows are used.
+        "uky-data-sw": {"status": "success", "data": {"neighbors": [
+            {"address": "10.129.0.1", "remote_as": 398900, "state": "Established",
+             "up_down": "1w6d", "prefixes_received": 200160}]}},
+    }
+    tools = set()
+
+    async def call_mcp(client, tool, params=None):
+        tools.add(tool)
+        return answers[params["device_name"]]
+
+    monkeypatch.setattr(routing, "call_mcp", call_mcp)
+    observations, issues, coverage = await routing._collect_observations(None, list(answers))
+
+    assert tools == {"get_bgp_summary"}
+    assert [(o.device, o.neighbor_address, o.remote_as) for o in observations] == [
+        ("lbnl-data-sw", "10.128.128.1", 398900), ("lbnl-data-sw", "10.148.0.1", 398900),
+        ("uky-data-sw", "10.129.0.1", 398900)]
+    assert (observations[-1].state, observations[-1].up_down) == ("Established", "1w6d")
+    [gap] = issues
+    assert gap["code"] == "collection_error" and gap["severity"] == "low"
+    assert gap["message"] == ("renc-data-sw: BGP session state is not exposed on this platform ("
+                              + BGP_NOT_EXPOSED["error_message"] + ")")
+    assert bgp_state_not_exposed(gap)
+    assert coverage["devices_failed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_router_id_missing_from_config_is_read_from_the_same_bgp_table(monkeypatch):
+    import nso_facts.topology.routing as routing
+
+    tools = set()
+
+    async def call_mcp(client, tool, params=None):
+        tools.add(tool)
+        return _bgp_summary(BGP_SUMMARY_UKY) if params["device_name"] == "uky-data-sw" else BGP_NOT_EXPOSED
+
+    monkeypatch.setattr(routing, "call_mcp", call_mcp)
+    ids = await routing._enrich_router_ids_from_live(
+        None, ["uky-data-sw", "renc-data-sw", "lbnl-data-sw"], {"lbnl-data-sw": "10.129.0.1"})
+
+    assert ids == {"lbnl-data-sw": "10.129.0.1", "uky-data-sw": "10.128.128.1"}
+    assert tools == {"get_bgp_summary"}

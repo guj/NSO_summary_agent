@@ -581,6 +581,38 @@ def _routing_case():
     return case
 
 
+def test_an_end_whose_platform_exposes_no_adjacency_state_says_so():
+    from diagnostic_mas.case import open_issue
+    from diagnostic_mas.operator_report import format_devices_operator
+
+    case = _routing_case()
+    open_issue(case, code="collection_error", layer="underlay", severity="low", evidence_ids=[],
+               message=("prin-data-sw: IS-IS adjacency state is not exposed on this platform (device "
+                        "'prin-data-sw' runs saos, whose NED models ISIS config only)"))
+    routing = _device_lines("\n".join(format_devices_operator(case)), "**Routing:**")
+
+    assert routing["prin-data-sw"].endswith(
+        " · IS-IS not readable on prin-data-sw (its NED exposes no adjacency state); "
+        "its neighbors report 1 of 1 up (newy-data-sw)")
+    # A read that merely failed keeps the plain wording.
+    assert "IS-IS not read on prin-data-sw" in "\n".join(format_devices_operator(_routing_case()))
+
+
+def test_a_peer_whose_platform_exposes_no_session_state_says_so():
+    from diagnostic_mas.case import open_issue
+    from diagnostic_mas.operator_report import format_devices_operator
+
+    case = _routing_case()
+    open_issue(case, code="collection_error", layer="routing", severity="low", evidence_ids=[],
+               message=("prin-data-sw: BGP session state is not exposed on this platform (device "
+                        "'prin-data-sw' runs saos, whose NED models BGP config only)"))
+    routing = _device_lines("\n".join(format_devices_operator(case)), "**Routing:**")
+
+    assert routing["prin-data-sw"].startswith(
+        "**Routing:** BGP not readable on prin-data-sw (its NED exposes no session state); "
+        "its peers report 1 of 1 Established (star-data-sw) · ")
+
+
 def _outside_case():
     """test54's unmatched rows: star's two PEERING sessions down, its ESnet session up, wash's RR client unknown."""
     from diagnostic_mas.case import open_issue

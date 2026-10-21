@@ -16,6 +16,7 @@ _DEVICE_TOOLS = frozenset(
         "get_live_status",
         "get_interface_health",
         "get_hardware_health",
+        "get_bgp_summary",
         "get_device_state",
         "check_isis_adjacencies",
         "check_telemetry_baseline",

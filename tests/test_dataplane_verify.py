@@ -737,6 +737,11 @@ def test_select_dataplane_per_category_even_sample():
     capped = select_dataplane_candidates(case, per_category=3, limit=5)
     assert len(capped) == 5
 
+    # A total cap alone (the command line's default) takes turns across the types too.
+    total = select_dataplane_candidates(case, limit=5)
+    assert len(total) == 5
+    assert {str(r.get("service_type")) for _e, r in total} == {"l2ptp", "l2sts", "l3rt"}
+
     # Explicit 0 skips digs.
     assert select_dataplane_candidates(case, per_category=0) == []
 
@@ -762,7 +767,9 @@ def test_cli_max_dataplane_per_category_flag():
 
     ns = build_parser().parse_args(["--max-dataplane-per-category", "10"])
     assert ns.max_dataplane_per_category == 10
-    assert ns.max_dataplane_services is None
+    # At most 10 service investigations a scan unless asked otherwise; 0 turns them off.
+    assert ns.max_dataplane_services == 10
+    assert build_parser().parse_args(["--max-dataplane-services", "0"]).max_dataplane_services == 0
 
 
 def test_fleet_select_prefers_one_soft_error_per_typed_category():

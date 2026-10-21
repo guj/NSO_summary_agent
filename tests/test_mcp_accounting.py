@@ -22,6 +22,7 @@ def test_classify_nso_and_device():
     assert classify_mcp_tool("exec_show") == "device"
     assert classify_mcp_tool("check_isis_adjacencies") == "device"
     assert classify_mcp_tool("get_hardware_health") == "device"
+    assert classify_mcp_tool("get_bgp_summary") == "device"
     assert classify_mcp_tool("totally_unknown_tool") == "other"
 
 

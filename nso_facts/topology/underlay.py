@@ -399,6 +399,21 @@ async def probe_static_isis_discovery(
     }
 
 
+# A NED that models IS-IS config only (Ciena SAOS): the MCP server's code, and our wording for it.
+_NOT_EXPOSED_CODE = "not_exposed"
+NOT_EXPOSED = "IS-IS adjacency state is not exposed on this platform"
+
+
+class AdjacencyStateNotExposed(RuntimeError):
+    """The device's NED has no IS-IS adjacency state to read; retrying cannot help."""
+
+
+def isis_state_not_exposed(issue: dict[str, Any]) -> bool:
+    """An IS-IS end that is unread because of the platform, not because a read failed."""
+    return (issue.get("code") == "collection_error" and issue.get("layer") == "underlay"
+            and NOT_EXPOSED in str(issue.get("message") or ""))
+
+
 async def _collect_observations(
     client: Any,
     device_names: list[str],
@@ -412,6 +427,18 @@ async def _collect_observations(
         try:
             observations.extend(await _observations_for_device(client, device))
             devices_queried += 1
+        except AdjacencyStateNotExposed as exc:
+            # Still an unread end, so the neighbor's view stands for the adjacency.
+            devices_failed += 1
+            issues.append(
+                {
+                    "severity": "low",
+                    "layer": "underlay",
+                    "code": "collection_error",
+                    "edge_id": None,
+                    "message": f"{device}: {NOT_EXPOSED} ({exc})",
+                }
+            )
         except Exception as exc:  # noqa: BLE001
             devices_failed += 1
             issues.append(
@@ -440,6 +467,8 @@ async def _observations_for_device(
         client, "check_isis_adjacencies", {"device_name": device}
     )
     if isinstance(result, dict) and result.get("status") == "error":
+        if result.get("error_code") == _NOT_EXPOSED_CODE:
+            raise AdjacencyStateNotExposed(result.get("error_message", ""))
         raise RuntimeError(result.get("error_message", "check_isis_adjacencies failed"))
 
     data = unwrap_mcp_data(result)
@@ -577,12 +606,13 @@ UNREAD_INTERFACE = "?"
 
 
 def _unread_devices(issues: list[dict[str, Any]]) -> set[str]:
-    """Devices whose check_isis_adjacencies failed, from this module's own issue messages."""
+    """Devices whose IS-IS adjacencies could not be read, from this module's own issue messages."""
     return {
         str(issue.get("message") or "").split(":", 1)[0].strip()
         for issue in issues
         if issue.get("code") == "collection_error"
-        and "check_isis_adjacencies failed" in str(issue.get("message") or "")
+        and ("check_isis_adjacencies failed" in str(issue.get("message") or "")
+             or isis_state_not_exposed(issue))
     }
 
 

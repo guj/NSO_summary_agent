@@ -946,7 +946,7 @@
       "id": 22,
       "type": "timeseries",
       "title": "Links gaining errors while up",
-      "description": "Links that are up but gained errors since the previous scan, as listed in the report. Solid lines: CRC errors per minute (left, log scale). Dashed lines: times the link went down or up (right). Each value is the average over the gap between two scans, so it shows the trend, not when the errors happened. A lead to follow up, not a service status. A link drops off once a scan finds it no longer gaining errors.",
+      "description": "Links that are up but gained errors since the previous scan, as listed in the report. Solid lines: CRC errors per minute (left, log scale). Dashed lines: times the link went down or up (right). Each value is the average over the gap between two scans, so it shows the trend, not when the errors happened. A lead to follow up, not a service status. A link drops off once a scan finds it no longer gaining errors. The red dashed line marks 1,000 CRC errors a minute: a link above it is gaining errors fast.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -995,7 +995,23 @@
             "scaleDistribution": {
               "type": "log",
               "log": 10
+            },
+            "thresholdsStyle": {
+              "mode": "dashed"
             }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1000
+              }
+            ]
           }
         },
         "overrides": [
@@ -1012,6 +1028,12 @@
               {
                 "id": "custom.axisLabel",
                 "value": "down/up changes"
+              },
+              {
+                "id": "custom.thresholdsStyle",
+                "value": {
+                  "mode": "off"
+                }
               },
               {
                 "id": "custom.scaleDistribution",

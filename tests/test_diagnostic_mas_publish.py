@@ -77,10 +77,13 @@ def test_publish_and_dry_run_cli_conflict(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_run_publish_persists_and_publishes(tmp_path: Path):
+@pytest.mark.parametrize("digest", [False, True])
+async def test_run_publish_persists_and_publishes(tmp_path: Path, digest: bool):
+    from dataclasses import replace
+
     from diagnostic_mas import run as run_mod
 
-    settings = _settings(state_dir=tmp_path, dry_run=True)
+    settings = replace(_settings(state_dir=tmp_path, dry_run=True), notification_digest=digest)
     args = argparse.Namespace(
         skip_llm=True,
         dry_run=False,
@@ -141,6 +144,13 @@ async def test_run_publish_persists_and_publishes(tmp_path: Path):
     assert runs
     assert (runs[0] / "report.md").read_text(encoding="utf-8") == "# report\n"
     assert (runs[0] / "case.json").exists()
+    # Slack and email carry the HTML report with one line naming the run, unless the digest is asked for.
+    sent = pa.call_args.args[0]
+    if digest:
+        assert sent.startswith(f"# NSO diagnostic report — {runs[0].name}\n")
+    else:
+        assert sent == f"NSO diagnostic report — {runs[0].name}"
+    assert pa.call_args.kwargs["attachment_path"] == runs[0] / "report.html"
 
 
 # A documentation address stands in for the NSO address, which must not appear in the repo.

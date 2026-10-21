@@ -340,10 +340,10 @@ The latter schedules service digs with disjoint reserved devices. CDB-only reads
 can proceed concurrently; extra-device conflicts are explicit verification gaps.
 Each dig has isolated conversation, evidence and budgets, merged by the coordinator.
 
-`--max-dataplane-tools` defaults to 40 per dig. `--max-dataplane-per-category N`
-controls sampling per service type; `--max-dataplane-services N` caps the combined
-selection. Without category selection, the default chooses one best eligible
-instance per supported category. `--max-deep-checks` and `--max-handoffs` default
+`--max-dataplane-tools` defaults to 40 per dig. `--max-dataplane-services N` caps
+how many services get a dig per scan, whatever their type (default 10; 0 turns
+digs off), taking eligible services in turns across types, most suspicious first.
+`--max-dataplane-per-category N` also limits each service type. `--max-deep-checks` and `--max-handoffs` default
 to zero; these older mechanisms are separate from dataplane digs and issue drills.
 
 ## Reports and topology

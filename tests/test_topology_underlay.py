@@ -434,3 +434,36 @@ async def test_a_one_sided_static_edge_is_not_marked_down_once_both_ends_answer(
 
     assert [e["state"]["status"] for e in op_edges] == ["up"]
     assert not any(i["code"] == "configured_no_adjacency" for i in issues)
+
+
+# What the MCP server returns for a platform whose NED models IS-IS config only (Ciena SAOS).
+ISIS_STATE_NOT_EXPOSED = {
+    "status": "error",
+    "error_code": "not_exposed",
+    "error_message": ("device 'renc-data-sw' runs saos, whose NED models ISIS config only and does not "
+                      "expose adjacency state; no ISIS adjacency data can be read from this platform"),
+}
+
+
+@pytest.mark.asyncio
+async def test_a_platform_without_adjacency_state_is_an_unread_end_not_a_failed_read():
+    from nso_facts.topology.underlay import isis_state_not_exposed
+
+    _, op_edges, issues = await _collect({
+        ("get_device_config", "lbnl-data-sw"): IOS_XR_ISIS_CONFIG,
+        ("get_device_config", "renc-data-sw"): IOS_XR_ISIS_CONFIG,
+        ("check_isis_adjacencies", "lbnl-data-sw"): ISIS_ADJ_LBNL,
+        ("check_isis_adjacencies", "renc-data-sw"): ISIS_STATE_NOT_EXPOSED,
+    })
+
+    # The near end's reading still stands for the adjacency.
+    assert op_edges == [{"id": "isis:lbnl-data-sw:HundredGigE0/0/0/0.2402:renc-data-sw:?", "state": {
+        "local": "up", "remote": "unknown", "status": "unknown", "detail": "far end not read this scan"}}]
+    [gap] = [i for i in issues if i["code"] == "collection_error"]
+    assert gap["severity"] == "low"
+    assert gap["message"] == ("renc-data-sw: IS-IS adjacency state is not exposed on this platform ("
+                              + ISIS_STATE_NOT_EXPOSED["error_message"] + ")")
+    assert isis_state_not_exposed(gap)
+    failed = {"code": "collection_error", "layer": "underlay",
+              "message": "renc-data-sw: check_isis_adjacencies failed: RESTCONF 500: Connect timed out"}
+    assert not isis_state_not_exposed(failed)

@@ -117,9 +117,9 @@ def test_result_line_counts_unknown_services_on_a_dropped_device_whose_sync_succ
     result = format_result_line(case)
 
     assert "1 OpUp, 0 Down, 0 Degraded, 2 Unknown" in result
-    assert "`gpn-data-sw` (2 unknown services)" in result
-    assert "`kans-data-sw` (1 unknown service)" in result
-    assert "`scm-data-sw` (0 unknown services)" in result
+    assert "`gpn-data-sw` (all 2 of its services left Unknown)" in result
+    assert "`kans-data-sw` (1 of its 2 services left Unknown)" in result
+    assert "`scm-data-sw` (no services on it)" in result
 
 
 def test_result_line_names_the_failed_operation_for_a_single_dropped_device(monkeypatch):
@@ -150,13 +150,30 @@ def test_devices_nso_could_not_connect_to_are_not_reported_unreachable(monkeypat
     result = format_result_line(case)
     followup = "\n".join(format_followup_operator(case))
 
-    assert "`cape-data-sw` (0 unknown services), `scm-data-sw` (0 unknown services)" in result
+    assert "`cape-data-sw` (no services on it), `scm-data-sw` (no services on it)" in result
     # Manual NSO access fails the same way when NSO itself cannot connect.
     assert "NSO itself could not connect to them" in result
     assert "manual NSO access may still succeed" not in result
     assert "Check NSO's management connection to `cape-data-sw`" in followup
     assert "Check NSO's management connection to `scm-data-sw`" in followup
     assert "Restore live reachability" not in followup
+
+
+def test_followup_for_a_dropped_device_says_what_it_carries(monkeypatch):
+    from diagnostic_mas.operator_report import format_followup_operator
+
+    services = {"l3rt/a": {"name": "a", "service_type": "l3rt", "devices": ["star-data-sw"],
+                           "device_sync": {"star-data-sw": "in-sync"}, "status": "up",
+                           "operational_status": "up"}}
+    case = _case_with_dropped_devices(monkeypatch, services, {
+        "star-data-sw": "device star-data-sw unreachable via NED",
+        "brist-data-sw": "device brist-data-sw unreachable via NED"})
+    followup = "\n".join(format_followup_operator(case))
+
+    assert ("Restore live reachability to `brist-data-sw` to resume automated live MCP "
+            "(no services on it).") in followup
+    assert ("Restore live reachability to `star-data-sw` to resume automated live MCP "
+            "(its 1 service not left Unknown).") in followup
 
 
 def test_result_line_states_service_status_before_dropped_devices(monkeypatch):
@@ -401,9 +418,9 @@ def test_result_line_timeout_quarantine_lists_operation_and_counts():
         )
     result = format_result_line(case)
     assert "4 devices hit automated exec_show (isis adjacency) timeout, read timeout=10s" in result
-    assert "`star-data-sw` (2 unknown services)" in result
-    assert "`wash-data-sw` (1 unknown service)" in result
-    assert "`scm-data-sw` (0 unknown services)" in result
+    assert "`star-data-sw` (all 2 of its services left Unknown)" in result
+    assert "`wash-data-sw` (its 1 service left Unknown)" in result
+    assert "`scm-data-sw` (no services on it)" in result
     assert "not proof devices are down" in result
     assert "manual NSO access may still succeed" in result
 
@@ -590,8 +607,9 @@ def test_followup_prioritizes_reachability_then_services_over_mapping():
     assert "IS-IS collection" in text
     assert "compare the same operation through MCP and the NSO CLI" in text
     assert "Investigate the repeated 10-second NSO API timeout during STAR" in text
-    assert "clear collection gaps for up to 1 unknown service" in text
+    assert "to restore automated live checks for `star-data-sw` and settle its 1 service left Unknown" in text
     assert "Restore live reachability" not in text
+    assert "unknown services attributed" not in text and "attributed here" not in text
     assert "Retry endpoint sync/MCP for" not in text
     assert "After successful checks, reassess" not in text
     assert "Retry service sync checks" not in text
@@ -1490,20 +1508,20 @@ def test_result_and_followup_group_unknowns_by_endpoint():
     follow = "\n".join(format_followup_operator(case))
     # One action per device; combination rows stay out of follow-up.
     assert (
-        "Restore live collection evidence for `gpn-data-sw` to clear up "
-        "to 5 unknown services"
+        "Restore live collection evidence for `gpn-data-sw` to settle "
+        "all 5 of its services left Unknown"
     ) in follow
     assert (
-        "Restore live collection evidence for `star-data-sw` to clear up "
-        "to 4 unknown services"
+        "Restore live collection evidence for `star-data-sw` to settle "
+        "all 4 of its services left Unknown"
     ) in follow
     assert (
-        "Restore live collection evidence for `eduky-data-sw` to clear up "
-        "to 2 unknown services"
+        "Restore live collection evidence for `eduky-data-sw` to settle "
+        "all 2 of its services left Unknown"
     ) in follow
     assert (
-        "Restore live collection evidence for `toky-data-sw` to clear up "
-        "to 1 unknown service"
+        "Restore live collection evidence for `toky-data-sw` to settle "
+        "its 1 service left Unknown"
     ) in follow
     assert "star-data-sw` + `toky-data-sw`" not in follow
     assert (

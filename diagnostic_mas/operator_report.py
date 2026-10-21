@@ -351,8 +351,17 @@ def _one_sided_routing(case: CaseFile, device: str, layer: str) -> str | None:
                 for s in order]
 
     if far and not (up or here or rest):
+        from nso_facts.topology.routing import bgp_state_not_exposed
+        from nso_facts.topology.underlay import isis_state_not_exposed
+
         seen = far.pop(ok_state, [])
-        line = f"not read on {device}; its {others} report {len(seen)} of {total} {ok_word}"
+        unread = f"not read on {device}"
+        platform_limit, what = {"underlay": (isis_state_not_exposed, "adjacency state"),
+                                "routing": (bgp_state_not_exposed, "session state")}[layer]
+        if any(platform_limit(issue) and str(issue.get("message") or "").startswith(f"{device}:")
+               for issue in case.issues):
+            unread = f"not readable on {device} (its NED exposes no {what})"
+        line = f"{unread}; its {others} report {len(seen)} of {total} {ok_word}"
         if seen:
             line += f" ({', '.join(sorted(seen))})"
         return line + "".join(", " + g for g in groups(far, "{n} {word} ({names})"))
@@ -697,23 +706,38 @@ def _verification_unknown_involvement_by_device(case: CaseFile) -> Counter[str]:
     return counts
 
 
-def _final_unknown_services_by_endpoint(case: CaseFile) -> Counter[str]:
-    """Services whose final status is Unknown, counted once per endpoint device.
+def _endpoint_service_counts(case: CaseFile) -> tuple[Counter[str], Counter[str]]:
+    """(services with an endpoint on each device, those whose final status is Unknown).
 
-    Unlike the sync-verification grouping above, this includes services left
-    Unknown for any reason, such as queries skipped after a device was dropped.
-    Counts overlap across devices and must not be summed.
+    Unlike the sync-verification grouping above, Unknown here includes services
+    left Unknown for any reason, such as queries skipped after a device was
+    dropped. Counts overlap across devices and must not be summed.
     """
     from diagnostic_mas.service_final_status import final_service_assessments
 
-    counts: Counter[str] = Counter()
+    total: Counter[str] = Counter()
+    unknown: Counter[str] = Counter()
     for _kind, _name, service, status, _reason in final_service_assessments(case):
-        if status != "unknown":
-            continue
         endpoints = {str(d) for d in service.get("devices") or [] if d}
         endpoints.update(str(d) for d in service.get("device_sync") or {} if d)
-        counts.update(endpoints)
-    return counts
+        total.update(endpoints)
+        if status == "unknown":
+            unknown.update(endpoints)
+    return total, unknown
+
+
+def _service_impact(total: int, unknown: int) -> str:
+    """What a device's lost reads did to the services on it, e.g. "1 of its 2 services left Unknown"."""
+    total = max(total, unknown)
+    if not total:
+        return "no services on it"
+    if total == 1:
+        return "its 1 service left Unknown" if unknown else "its 1 service not left Unknown"
+    if not unknown:
+        return f"none of its {total} services left Unknown"
+    if unknown == total:
+        return f"all {total} of its services left Unknown"
+    return f"{unknown} of its {total} services left Unknown"
 
 
 def _verification_unknown_service_names(case: CaseFile) -> set[str]:
@@ -1871,6 +1895,7 @@ def format_followup_operator(case: CaseFile) -> list[str]:
 
     involvement = _verification_unknown_involvement_by_device(case)
     grouped_names = _verification_unknown_service_names(case)
+    service_totals = _endpoint_service_counts(case)[0]
 
     attributed_devices = sorted(
         involvement.keys(), key=lambda d: (-involvement[d], d)
@@ -1893,9 +1918,8 @@ def format_followup_operator(case: CaseFile) -> list[str]:
             )
         else:
             resolve = (
-                f"to restore automated live checks for `{device}` and clear "
-                f"collection gaps for up to {services_n} unknown "
-                f"service{'s' if services_n != 1 else ''} attributed here"
+                f"to restore automated live checks for `{device}` and settle "
+                f"{_service_impact(service_totals[device], services_n)}"
             )
         if nso_could_not_connect(msg):
             # NSO's own session to the device failed; MCP and the NSO CLI would meet the same wall.
@@ -1940,15 +1964,14 @@ def format_followup_operator(case: CaseFile) -> list[str]:
         elif kind == "unreachable":
             items.append(
                 f"Restore live reachability to `{device}` to resume automated "
-                f"checks and clear up to {n} unknown "
-                f"service{'s' if n != 1 else ''} attributed here "
+                f"checks and settle {_service_impact(service_totals[device], n)} "
                 "(strong unreachability evidence this run)."
             )
         else:
             items.append(
-                f"Restore live collection evidence for `{device}` to clear up "
-                f"to {n} unknown service{'s' if n != 1 else ''} attributed "
-                "here (sync/query incomplete — not confirmed outages; avoid "
+                f"Restore live collection evidence for `{device}` to settle "
+                f"{_service_impact(service_totals[device], n)} "
+                "(sync/query incomplete — not confirmed outages; avoid "
                 "inconclusive service-sync loops)."
             )
 
@@ -1960,15 +1983,14 @@ def format_followup_operator(case: CaseFile) -> list[str]:
         if kind == "unreachable":
             items.append(
                 f"Restore live reachability to `{device}` to resume automated "
-                "live MCP (no unknown services attributed in this grouping)."
+                f"live MCP ({_service_impact(service_totals[device], 0)})."
             )
         elif kind == "timeout":
             items.append(_timeout_collection_followup(device, services_n=None))
         else:
             items.append(
                 f"Investigate failed live MCP for `{device}` to restore "
-                "automated collection (no unknown services attributed in "
-                "this grouping)."
+                f"automated collection ({_service_impact(service_totals[device], 0)})."
             )
 
     # Do not add generic "retry service sync" / "reassess all unknowns" —
@@ -2210,7 +2232,7 @@ def format_result_line(case: CaseFile) -> str:
             live_mcp_failure_kind(str(i.get("message") or ""))
             for i in quarantined_issues
         }
-        involvement = _final_unknown_services_by_endpoint(case)
+        service_totals, involvement = _endpoint_service_counts(case)
         if kinds == {"timeout"}:
             ops = {
                 parse_live_mcp_failed_operation(str(i.get("message") or ""))
@@ -2239,9 +2261,8 @@ def format_result_line(case: CaseFile) -> str:
                 dev = str((issue.get("devices") or [""])[0]).strip()
                 if not dev:
                     continue
-                n = involvement.get(dev, 0)
                 device_bits.append(
-                    f"`{dev}` ({n} unknown service{'s' if n != 1 else ''})"
+                    f"`{dev}` ({_service_impact(service_totals[dev], involvement.get(dev, 0))})"
                 )
             device_list = ", ".join(device_bits) if device_bits else (
                 f"{quarantined_n} device{'s' if quarantined_n != 1 else ''}"
