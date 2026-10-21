@@ -34,6 +34,8 @@ _BGP_STATE_TOKEN = re.compile(
     re.IGNORECASE,
 )
 
+_BGP_LOCAL_AS = re.compile(r"local AS number\s+(?P<asn>\d+)", re.IGNORECASE)
+
 _BGP_ROUTER_ID = re.compile(
     r"BGP router identifier\s+(?P<router_id>\d+\.\d+\.\d+\.\d+)",
     re.IGNORECASE,
@@ -54,6 +56,10 @@ class BgpSessionObservation:
     device: str
     neighbor_address: str
     state: str
+    # As the summary table prints them; None when the row or header lacks them.
+    remote_as: int | None = None
+    local_as: int | None = None
+    up_down: str | None = None
 
 
 async def collect_static_routing(
@@ -155,8 +161,11 @@ async def collect_operational_routing(
     client: Any,
     device_names: list[str],
     static_edges: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int]]:
-    """Refresh live BGP session state and compare to static edge set."""
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int], list[dict[str, Any]]]:
+    """Refresh live BGP session state and compare to static edge set.
+
+    Also returns the summary rows no NSO device matched (``unmatched_bgp_neighbors``).
+    """
     observations, issues, coverage = await _collect_observations(client, device_names)
     neighbor_configs = await _neighbor_configs_for_devices(client, device_names)
     router_ids = await _router_ids_for_devices(client, device_names)
@@ -207,7 +216,8 @@ async def collect_operational_routing(
                 }
             )
 
-    return operational, issues, coverage
+    return (operational, issues, coverage,
+            unmatched_bgp_neighbors(observations, neighbor_configs, router_ids))
 
 
 _FAILED_BGP_STATES = frozenset({"idle", "active", "connect", "opensent", "openconfirm",
@@ -238,6 +248,53 @@ def build_operational_routing_layer(edges: list[dict[str, Any]]) -> dict[str, An
     return {"edges": edges, "summary": summarize_operational_routing(edges)}
 
 
+def _fabric_as_numbers(
+    observations: list[BgpSessionObservation],
+    neighbor_configs: dict[str, list[BgpNeighborConfig]],
+) -> set[int]:
+    """AS numbers NSO's devices run BGP in, from their config and their own tables."""
+    return ({cfg.local_as for rows in neighbor_configs.values() for cfg in rows if cfg.local_as is not None}
+            | {obs.local_as for obs in observations if obs.local_as is not None})
+
+
+def _is_outside_peer(obs: BgpSessionObservation, fabric_as: set[int]) -> bool:
+    """A neighbor in an AS no NSO device uses: another network's router, which NSO never lists."""
+    return bool(fabric_as) and obs.remote_as is not None and obs.remote_as not in fabric_as
+
+
+def outside_session_id(device: str, address: str) -> str:
+    return f"bgp-outside:{device}:{address}"
+
+
+_UNMATCHED_MESSAGE = re.compile(r"^(?P<device>\S+)\s+(?P<address>\S+):\s+could not map neighbor address")
+
+
+def unmatched_neighbor_in(message: str) -> tuple[str, str] | None:
+    """(device, neighbor address) named by an ``unknown_neighbor_address`` message."""
+    match = _UNMATCHED_MESSAGE.match(message or "")
+    return (match["device"], match["address"]) if match else None
+
+
+def unmatched_bgp_neighbors(
+    observations: list[BgpSessionObservation],
+    neighbor_configs: dict[str, list[BgpNeighborConfig]],
+    router_ids: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Summary rows whose neighbor is no NSO device's router ID, as each device read them.
+
+    ``outside`` marks another network's router. Without a known FABRIC AS or the
+    neighbor's AS, a row is not called outside: it stays a neighbor to identify.
+    """
+    fabric_as = _fabric_as_numbers(observations, neighbor_configs)
+    return [
+        {"device": obs.device, "address": obs.neighbor_address, "remote_as": obs.remote_as,
+         "state": _normalize_bgp_state(obs.state), "up_down": obs.up_down,
+         "outside": _is_outside_peer(obs, fabric_as)}
+        for obs in observations
+        if resolve_neighbor_device(obs.neighbor_address, neighbor_configs, router_ids) is None
+    ]
+
+
 def pair_bgp_observations(
     observations: list[BgpSessionObservation],
     neighbor_configs: dict[str, list[BgpNeighborConfig]],
@@ -251,6 +308,7 @@ def pair_bgp_observations(
 
     used_remote: set[tuple[str, str]] = set()
     edges: list[dict[str, Any]] = []
+    fabric_as = _fabric_as_numbers(observations, neighbor_configs)
 
     for obs_a in observations:
         remote_device = resolve_neighbor_device(
@@ -258,6 +316,24 @@ def pair_bgp_observations(
             neighbor_configs,
             router_ids,
         )
+        if remote_device is None and _is_outside_peer(obs_a, fabric_as):
+            # Only this end is in NSO, so its own reading is the whole evidence.
+            if _normalize_bgp_state(obs_a.state) != "established":
+                issues.append(
+                    {
+                        "severity": "medium",
+                        "layer": "routing",
+                        "code": "outside_bgp_session_not_established",
+                        "edge_id": outside_session_id(obs_a.device, obs_a.neighbor_address),
+                        "devices": [obs_a.device],
+                        "message": (
+                            f"{obs_a.device} {obs_a.neighbor_address} (outside peer, AS {obs_a.remote_as}): "
+                            f"{obs_a.state} (Up/Down {obs_a.up_down or 'not printed'}); "
+                            "only this end is visible"
+                        ),
+                    }
+                )
+            continue
         if remote_device is None:
             issues.append(
                 {
@@ -665,13 +741,23 @@ def parse_bgp_summary_text(
     text: str,
 ) -> list[BgpSessionObservation]:
     observations: list[BgpSessionObservation] = []
+    header = _BGP_LOCAL_AS.search(text)
+    local_as = int(header["asn"]) if header else None
     for line in text.splitlines():
         match = _BGP_NEIGHBOR_LINE.match(line)
         if not match:
             continue
         neighbor = match.group("neighbor")
         state = _state_from_bgp_summary_rest(match.group("rest"))
-        observations.append(BgpSessionObservation(device, neighbor, state))
+        # Spk/V, AS, MsgRcvd, MsgSent, TblVer, InQ, OutQ, Up/Down, St/PfxRcd [(Estab)]
+        columns = [c for c in match.group("rest").split() if c != "(Estab)"]
+        whole = len(columns) == 9 and columns[1].isdigit()
+        observations.append(BgpSessionObservation(
+            device, neighbor, state,
+            remote_as=int(columns[1]) if whole else None,
+            local_as=local_as,
+            up_down=columns[7] if whole else None,
+        ))
     return observations
 
 

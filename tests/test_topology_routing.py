@@ -301,7 +301,7 @@ async def test_collect_static_and_operational_routing():
         static_edges, _, _ = await collect_static_routing(
             client, ["lbnl-data-sw", "renc-data-sw"]
         )
-        op_edges, issues, _ = await collect_operational_routing(
+        op_edges, issues, _, _ = await collect_operational_routing(
             client, ["lbnl-data-sw", "renc-data-sw"], static_edges
         )
     finally:
@@ -346,7 +346,7 @@ async def test_collect_static_lbnl_uky_from_config_and_live():
         static_edges, _, _ = await collect_static_routing(
             client, ["lbnl-data-sw", "uky-data-sw"]
         )
-        op_edges, issues, _ = await collect_operational_routing(
+        op_edges, issues, _, _ = await collect_operational_routing(
             client, ["lbnl-data-sw", "uky-data-sw"], static_edges
         )
     finally:
@@ -398,7 +398,7 @@ async def test_exec_show_mcp_returns_bare_string():
     original = routing_mod.call_mcp
     routing_mod.call_mcp = call_mcp
     try:
-        _, issues, _ = await collect_operational_routing(
+        _, issues, _, _ = await collect_operational_routing(
             client, ["lbnl-data-sw", "uky-data-sw"], []
         )
     finally:
@@ -472,3 +472,103 @@ async def test_only_a_device_with_no_neighbors_is_reported_as_having_none():
         "lbnl-data-sw: no BGP neighbors found in NSO config"]
     assert [{edge["local"]["device"], edge["remote"]["device"]} for edge in edges] == [
         {"cien-data-sw", "star-data-sw"}]
+
+
+def test_summary_rows_carry_the_neighbor_as_and_up_down_time():
+    rows = parse_bgp_summary_text("lbnl-data-sw", BGP_SUMMARY_LBNL)
+
+    assert [(o.neighbor_address, o.remote_as, o.up_down, o.local_as) for o in rows] == [
+        ("10.128.128.1", 398900, "1w6d", 398900), ("10.148.0.1", 398900, "00:00:00", 398900)]
+
+
+# star's table in test54, cut down: a FABRIC peer, an unmatched FABRIC-AS neighbor and two other networks.
+BGP_SUMMARY_STAR = """\
+BGP router identifier 10.129.128.1, local AS number 398900
+Neighbor        Spk    AS MsgRcvd MsgSent   TblVer  InQ OutQ  Up/Down  St/PfxRcd
+10.129.134.2      0 47065       0       0        0    0    0 00:00:00 Active
+10.133.0.1        0 398900   1000    1000  347324145    0    0    32w4d     496338
+10.128.128.1      0 398900   1000    1000  347324145    0    0     4w6d          0
+198.125.141.24    0   293 3417976 1876801 347324145    0    0    1y08w      18350
+"""
+BGP_SUMMARY_WASH = """\
+BGP router identifier 10.133.0.1, local AS number 398900
+Neighbor        Spk    AS MsgRcvd MsgSent   TblVer  InQ OutQ  Up/Down  St/PfxRcd
+10.129.128.1      0 398900   1000    1000  347324145    0    0    32w4d     496338
+"""
+STAR_IDS = {"star-data-sw": "10.129.128.1", "wash-data-sw": "10.133.0.1"}
+
+
+def _star_and_wash(summary_star=BGP_SUMMARY_STAR, *, local_as=398900):
+    observations = (parse_bgp_summary_text("star-data-sw", summary_star)
+                    + parse_bgp_summary_text("wash-data-sw", BGP_SUMMARY_WASH))
+    configs = {"star-data-sw": [BgpNeighborConfig("star-data-sw", "10.133.0.1", 398900, local_as)]}
+    return observations, configs
+
+
+def test_unmatched_neighbor_in_another_networks_as_is_an_outside_peer():
+    from nso_facts.topology.routing import unmatched_bgp_neighbors
+
+    observations, configs = _star_and_wash()
+    edges, issues = pair_bgp_observations(observations, configs, STAR_IDS)
+
+    # Only the FABRIC session becomes an edge; outside peers are never drawn between devices.
+    assert [e["id"] for e in edges] == [bgp_edge_id("star-data-sw", "10.129.128.1", "wash-data-sw", "10.133.0.1")]
+    by_code = {i["code"]: i for i in issues}
+    assert set(by_code) == {"unknown_neighbor_address", "outside_bgp_session_not_established"}
+    assert by_code["unknown_neighbor_address"]["message"] == (
+        "star-data-sw 10.128.128.1: could not map neighbor address to NSO device")
+    outside = by_code["outside_bgp_session_not_established"]
+    assert outside["edge_id"] == "bgp-outside:star-data-sw:10.129.134.2"
+    assert outside["devices"] == ["star-data-sw"]
+    assert outside["message"] == ("star-data-sw 10.129.134.2 (outside peer, AS 47065): Active "
+                                  "(Up/Down 00:00:00); only this end is visible")
+    assert unmatched_bgp_neighbors(observations, configs, STAR_IDS) == [
+        {"device": "star-data-sw", "address": "10.129.134.2", "remote_as": 47065,
+         "state": "active", "up_down": "00:00:00", "outside": True},
+        {"device": "star-data-sw", "address": "10.128.128.1", "remote_as": 398900,
+         "state": "established", "up_down": "4w6d", "outside": False},
+        {"device": "star-data-sw", "address": "198.125.141.24", "remote_as": 293,
+         "state": "established", "up_down": "1y08w", "outside": True},
+    ]
+
+
+def test_no_neighbor_is_called_outside_without_a_known_fabric_as():
+    from nso_facts.topology.routing import unmatched_bgp_neighbors
+
+    def headless(text):
+        return "\n".join(text.splitlines()[1:]) + "\n"
+
+    observations = (parse_bgp_summary_text("star-data-sw", headless(BGP_SUMMARY_STAR))
+                    + parse_bgp_summary_text("wash-data-sw", headless(BGP_SUMMARY_WASH)))
+    configs = {"star-data-sw": [BgpNeighborConfig("star-data-sw", "10.133.0.1", 398900, None)]}
+
+    _, issues = pair_bgp_observations(observations, configs, STAR_IDS)
+
+    assert {i["code"] for i in issues} == {"unknown_neighbor_address"}
+    assert not any(row["outside"] for row in unmatched_bgp_neighbors(observations, configs, STAR_IDS))
+
+
+@pytest.mark.asyncio
+async def test_operational_routing_returns_the_unmatched_neighbors(monkeypatch):
+    import nso_facts.topology.routing as routing
+
+    observations, configs = _star_and_wash()
+
+    async def collected(*args):
+        return observations, [], {"devices_failed": 0}
+
+    async def config_rows(*args):
+        return configs
+
+    async def ids(*args):
+        return STAR_IDS
+
+    monkeypatch.setattr(routing, "_collect_observations", collected)
+    monkeypatch.setattr(routing, "_neighbor_configs_for_devices", config_rows)
+    monkeypatch.setattr(routing, "_router_ids_for_devices", ids)
+    monkeypatch.setattr(routing, "_enrich_router_ids_from_live", ids)
+
+    *_, unmatched = await routing.collect_operational_routing(None, ["star-data-sw", "wash-data-sw"], [])
+
+    assert [(row["address"], row["outside"]) for row in unmatched] == [
+        ("10.129.134.2", True), ("10.128.128.1", False), ("198.125.141.24", True)]

@@ -98,7 +98,8 @@ async def run_mandatory_spines(
             issues=list(spine.get("issues") or []),
             static_edges=spine.get("static_edges"),
             operational_edges=spine.get("operational_edges"),
-            extra={"coverage": spine.get("coverage")},
+            extra={"coverage": spine.get("coverage"),
+                   "unmatched_neighbors": spine.get("unmatched_neighbors") or []},
         )
 
     if run_service:

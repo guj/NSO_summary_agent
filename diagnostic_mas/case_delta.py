@@ -200,6 +200,43 @@ def _routing_edges(case: dict[str, Any], role: str) -> dict[str, dict[str, Any]]
     return found
 
 
+def _unmatched_rows(case: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]] | None:
+    """(device, neighbor) -> BGP summary row no NSO device matched; None when the run stored none."""
+    found: dict[tuple[str, str], dict[str, Any]] | None = None
+    for ev in case.get("evidence") or []:
+        if not isinstance(ev, dict) or ev.get("kind") != "spine" or ev.get("role") != "bgp":
+            continue
+        rows = ((ev.get("payload") or {}).get("extra") or {}).get("unmatched_neighbors")
+        if rows is None:
+            continue
+        found = {} if found is None else found
+        for row in rows:
+            if isinstance(row, dict):
+                found[str(row.get("device")), str(row.get("address"))] = row
+    return found
+
+
+def _outside_sessions_lost(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[str, Any]]:
+    """Sessions to other networks' routers Established in the older run that the device now reports down.
+
+    Only FABRIC's end is in NSO, so a row gone from the table is not evidence.
+    """
+    from nso_facts.topology.routing import outside_session_id
+
+    before, now = _unmatched_rows(older), _unmatched_rows(newer)
+    if not before or now is None:
+        return []
+    rows = []
+    for key, row in sorted(before.items()):
+        current = now.get(key) or {}
+        if (row.get("outside") and row.get("state") == "established"
+                and current.get("outside") and current.get("state") != "established"):
+            rows.append({"protocol": "bgp-outside", "edge_id": outside_session_id(*key),
+                         "now": str(current.get("state")), "states": "this end only",
+                         "remote_as": current.get("remote_as")})
+    return rows
+
+
 def _devices_answering(case: dict[str, Any], layer: str) -> set[str]:
     """Devices a full, unfiltered scan queried live, less those whose query for this layer failed."""
     config = case.get("run_configuration")
@@ -294,11 +331,15 @@ def _interfaces_lost(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[
     the newer list, or without a collected state, is not evidence of a fault.
     ``services_deleted`` counts the older run's services on the port when every
     one of them is gone from the newer run; otherwise it is 0.
+    ``services_down_before`` counts those the older run itself found Down: the
+    port can fail after that run read it up, and the run then reports the loss.
     """
     from diagnostic_mas.port_counters import _parent_port
 
     gone = set(_services_no_longer_present(older, newer))
     riders = _services_on_ports(older)
+    down_before = {name for name, finding in _service_findings(older).items()
+                   if finding.get("status") == "down" and finding.get("complete") is not False}
     now = _interface_states(newer)
     lost = {
         key: str(now[key]["oper"])
@@ -314,7 +355,9 @@ def _interfaces_lost(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[
             on_port = riders.get((device, _parent_port(interface)), set())
             rows[device, interface] = {"device": device, "interface": interface,
                                        "now": state, "sub_interfaces": 0,
-                                       "services_deleted": len(on_port) if on_port and on_port <= gone else 0}
+                                       "services_deleted": len(on_port) if on_port and on_port <= gone else 0,
+                                       "services_down_before": len(on_port & down_before),
+                                       "services_on_port": len(on_port)}
     return list(rows.values())
 
 
@@ -322,10 +365,16 @@ def _interface_lines(rows: list[dict[str, Any]], *, per_device: int = 6) -> list
     by_device: dict[str, list[str]] = {}
     for row in rows:
         n, deleted = row["sub_interfaces"], row.get("services_deleted") or 0
+        down, riders = row.get("services_down_before") or 0, row.get("services_on_port") or 0
         note = (" (admin-down)" if row["now"] == "admin-down" else "") + (
             f" (+{n} sub-interface{'s' if n != 1 else ''})" if n else "") + (
             " (its service was deleted)" if deleted == 1
-            else f" (its {deleted} services were deleted)" if deleted else "")
+            else f" (its {deleted} services were deleted)" if deleted else "") + (
+            "" if not down
+            else " (its service was already Down in the previous run)" if down == riders == 1
+            else f" (its {down} services were already Down in the previous run)" if down == riders
+            else f" ({down} of its {riders} services {'was' if down == 1 else 'were'} "
+                 "already Down in the previous run)")
         by_device.setdefault(row["device"], []).append(row["interface"] + note)
     return [
         f"`{device}`: " + ", ".join(names[:per_device])
@@ -343,7 +392,9 @@ def _cleared_line(row: dict[str, str]) -> str:
 def _routing_session_line(row: dict[str, str]) -> str:
     parts = row["edge_id"].split(":")
     label = f"`{row['edge_id']}`"
-    if len(parts) == 5 and row["protocol"] == "bgp":
+    if len(parts) == 3 and row["protocol"] == "bgp-outside":
+        label = f"BGP `{parts[1]}` → {parts[2]} (outside peer, AS {row.get('remote_as')})"
+    elif len(parts) == 5 and row["protocol"] == "bgp":
         _, addr_a, addr_b, dev_a, dev_b = parts
         label = f"BGP `{dev_a}` {addr_a} ↔ `{dev_b}` {addr_b}"
     elif len(parts) == 5 and row["protocol"] == "isis":
@@ -558,6 +609,22 @@ def _service_issue_faults(case: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 
+def _service_findings(case: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """What one run found per service: collection-reported faults, overridden by completed diagnostics."""
+    findings = {}
+    for name, issue in _service_issue_faults(case).items():
+        code = issue.get("code")
+        if code in {"service_down", "service_degraded"}:
+            findings[name] = {
+                "status": code.removeprefix("service_"),
+                "complete": True,
+                "cause": issue.get("message", ""),
+                "source": "collection",
+            }
+    findings.update(_service_dataplane_map(case))
+    return findings
+
+
 def service_fault_history(
     older: dict[str, Any], newer: dict[str, Any],
     *, previous_run_id: str | None = None, run_id: str | None = None,
@@ -579,20 +646,8 @@ def service_fault_history(
         (older, previous_run_id or older.get("run_id")),
         (newer, run_id or newer.get("run_id")),
     ):
-        dp = _service_dataplane_map(snapshot)
         kinds = _service_inventory(snapshot)
-        # Include collection-reported faults, but prefer completed diagnostics.
-        findings = {}
-        for name, issue in _service_issue_faults(snapshot).items():
-            code = issue.get("code")
-            if code in {"service_down", "service_degraded"}:
-                findings[name] = {
-                    "status": code.removeprefix("service_"),
-                    "complete": True,
-                    "cause": issue.get("message", ""),
-                    "source": "collection",
-                }
-        findings.update(dp)
+        findings = _service_findings(snapshot)
         for name, finding in findings.items():
             st = finding.get("status")
             if finding.get("complete") is False:
@@ -742,8 +797,15 @@ def compute_case_delta(
             persistent.append(issue)
 
     gone = _services_no_longer_present(older, newer)
+    from nso_facts.topology.routing import unmatched_neighbor_in
+
+    now_outside = {key for key, row in (_unmatched_rows(newer) or {}).items() if row.get("outside")}
     for key, issue in old_probs.items():
         if key in new_probs:
+            continue
+        # Now listed as a session to another network's router: re-sorted, not recovered.
+        if (issue.get("code") == "unknown_neighbor_address"
+                and unmatched_neighbor_in(str(issue.get("message") or "")) in now_outside):
             continue
         subject = _issue_subject(issue)
         # Listed under services no longer present: neither recovered nor skipped.
@@ -953,7 +1015,7 @@ def compute_case_delta(
         ],
         "status_changed_on_unchanged_checks": _status_changed_on_unchanged_checks(older, newer),
         "links_gaining_errors": _links_gaining_errors(older, newer),
-        "routing_sessions_lost": _routing_sessions_lost(older, newer),
+        "routing_sessions_lost": _routing_sessions_lost(older, newer) + _outside_sessions_lost(older, newer),
         "interfaces_lost": _interfaces_lost(older, newer),
         "services_no_longer_present": [
             {"service": name, "service_type": kind,
@@ -1321,6 +1383,7 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
             for row in delta.get("routing_sessions_lost") or []]
     interfaces = list(delta.get("interfaces_lost") or [])
     cleared = [row["service"] for row in delta.get("service_faults_cleared") or []]
+    new = list(delta.get("new_problems") or [])
     return {
         **({"service_faults_cleared": {
             "count": len(cleared),
@@ -1335,7 +1398,9 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
                      "admin-down means shut down by configuration. \"its service was deleted\" "
                      "means every service the previous run had on it is gone from this run, "
                      "deleted by its owner; the change most likely follows the deletion and is "
-                     "not evidence of a fault on its own."),
+                     "not evidence of a fault on its own. \"already Down in the previous run\" "
+                     "means that run read the port up, then found its services Down: the loss "
+                     "was already reported then and is not new."),
         }} if interfaces else {}),
         **({"routing_sessions_lost": {
             "count": len(lost),
@@ -1359,5 +1424,11 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
         "persistent_count": len(delta.get("persistent") or []),
         "persistent_sample": _trim_issues(list(delta.get("persistent") or [])),
         "recovered_problem_count": len(delta.get("recovered") or []),
-        "new_problem_count": len(delta.get("new_problems") or []),
+        **({"new_problems": {
+            "count": len(new),
+            "sample": _trim_issues(new),
+            "note": ("Recorded this run, not by the previous run under the same code and subject. "
+                     "That alone does not prove a new failure: an existing condition can be "
+                     "recorded under a new code; read each message."),
+        }} if new else {}),
     }

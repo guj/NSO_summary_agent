@@ -571,6 +571,24 @@ def test_nso_connect_failure_points_at_nsos_connection_to_the_device():
     assert "automated collection path" not in prose
 
 
+def test_nso_failing_to_connect_is_not_proof_the_device_is_unreachable():
+    from nso_facts.mcp_client import (
+        format_live_mcp_quarantine_prose,
+        is_strong_device_unreachability,
+        live_mcp_failure_kind,
+    )
+
+    # The MCP server calls the device unreachable; NSO's own words say its connection attempt failed.
+    reason = ("get_interface_health: device 'cape-data-sw' unreachable: RESTCONF 404: Failed to connect "
+              "to device cape-data-sw: connection refused: Failed to connect: Connect timed out")
+    prose = format_live_mcp_quarantine_prose("cape-data-sw", reason)
+
+    assert is_strong_device_unreachability(reason) is False
+    assert live_mcp_failure_kind(reason) == "timeout"
+    assert "NSO itself could not connect to the device" in prose
+    assert "live unreachable" not in prose
+
+
 @pytest.mark.parametrize(
     ("reason", "operation"),
     [

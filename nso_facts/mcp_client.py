@@ -314,9 +314,11 @@ def is_strong_device_unreachability(message: str) -> bool:
 
     HTTPSConnectionPool / Read timed out against the NSO API means the live
     query timed out; it does not prove the network device itself is down.
+    Nor does NSO failing to connect to the device, even when the MCP server
+    calls that unreachable.
     """
     lowered = (message or "").lower()
-    if not lowered:
+    if not lowered or nso_could_not_connect(lowered):
         return False
     # REST/HTTP timeouts to NSO are not device-reachability proof.
     if any(

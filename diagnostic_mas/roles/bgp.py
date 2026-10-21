@@ -19,7 +19,7 @@ async def run_bgp_spine(client: Any, device_names: list[str]) -> dict[str, Any]:
     static_edges, static_issues, static_cov = await collect_static_routing(
         client, device_names
     )
-    op_edges, op_issues, op_cov = await collect_operational_routing(
+    op_edges, op_issues, op_cov, unmatched = await collect_operational_routing(
         client, device_names, static_edges
     )
     issues = dedupe_issues(static_issues + op_issues)
@@ -29,6 +29,7 @@ async def run_bgp_spine(client: Any, device_names: list[str]) -> dict[str, Any]:
         "issues": issues,
         "static_edges": static_edges,
         "operational_edges": op_edges,
+        "unmatched_neighbors": unmatched,
         "coverage": {
             "devices_total": max(
                 static_cov.get("devices_total", 0), op_cov.get("devices_total", 0)

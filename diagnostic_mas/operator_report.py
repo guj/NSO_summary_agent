@@ -73,15 +73,56 @@ def _issues_for_device(case: CaseFile, device: str) -> list[dict[str, Any]]:
     return out
 
 
-def _mapping_attention(issue: dict[str, Any]) -> str | None:
+_OUTSIDE_AS = re.compile(r"\(outside peer, AS (?P<asn>\d+)\)")
+
+
+def _unmatched_bgp_rows(case: CaseFile) -> list[dict[str, Any]]:
+    """BGP summary rows no NSO device matched, as the BGP spine stored them."""
+    for ev in case.evidence:
+        if ev.get("kind") == "spine" and ev.get("role") == "bgp":
+            extra = (ev.get("payload") or {}).get("extra") or {}
+            return [row for row in extra.get("unmatched_neighbors") or [] if isinstance(row, dict)]
+    return []
+
+
+def _unmatched_neighbor(issue: dict[str, Any], rows: list[dict[str, Any]]) -> tuple[str, str, Any] | None:
+    """(device, neighbor address, its AS or None) of an unmatched-BGP-neighbor issue."""
+    from nso_facts.topology.routing import unmatched_neighbor_in
+
+    found = unmatched_neighbor_in(str(issue.get("message") or ""))
+    if not found:
+        return None
+    asn = next((row.get("remote_as") for row in rows
+                if (row.get("device"), row.get("address")) == found), None)
+    return *found, asn
+
+
+def _outside_peers_prose(rows: list[dict[str, Any]], device: str) -> str | None:
+    """This device's sessions to other networks' routers, from its own table only."""
+    mine = [row for row in rows if row.get("outside") and row.get("device") == device]
+    if not mine:
+        return None
+    up = sum(1 for row in mine if row.get("state") == "established")
+    down: dict[str, list[dict[str, Any]]] = {}
+    for row in mine:
+        if row.get("state") != "established":
+            down.setdefault(str(row.get("state") or "unknown"), []).append(row)
+    parts = [f"outside BGP peers {up}/{len(mine)} Established"]
+    for state in sorted(down):
+        ases = ", ".join(str(asn) for asn in sorted({row.get("remote_as") for row in down[state]}))
+        parts.append(f"{len(down[state])} {state.capitalize()} (AS {ases})")
+    return "; ".join(parts)
+
+
+def _mapping_attention(issue: dict[str, Any], unmatched: list[dict[str, Any]] = ()) -> str | None:
     code = str(issue.get("code") or "")
     msg = scrub_internal_ids(str(issue.get("message") or "").strip())
     if code == "unknown_neighbor_address":
-        return (
-            f"BGP neighbor could not be mapped to NSO inventory. {msg}".strip()
-            if msg
-            else "BGP neighbor could not be mapped to NSO inventory."
-        )
+        found = _unmatched_neighbor(issue, list(unmatched))
+        if found:
+            _, address, asn = found
+            return f"BGP neighbor matches no NSO device: {address}" + (f" (AS {asn})" if asn else "")
+        return f"BGP neighbor matches no NSO device. {msg}".strip()
     if code == "unknown_neighbor_system_id":
         return (
             f"IS-IS neighbor could not be mapped. {msg}".strip()
@@ -894,6 +935,7 @@ def format_devices_operator(case: CaseFile) -> list[str]:
     _fleet_sync, hardware_health, _system = fleet_maps_from_case(case)
     hw_map = hardware_health if isinstance(hardware_health, dict) else {}
 
+    unmatched = _unmatched_bgp_rows(case)
     lines: list[str] = []
     for row in rows:
         device = str(row.get("device") or "?")
@@ -909,7 +951,9 @@ def format_devices_operator(case: CaseFile) -> list[str]:
         )
         isis = (_one_sided_routing(case, device, "underlay")
                 or _routing_count_prose(str(row.get("isis") or "—")))
-        lines.append(f"**Routing:** BGP {bgp_prose} · IS-IS {isis}")
+        outside = _outside_peers_prose(unmatched, device)
+        lines.append(f"**Routing:** BGP {bgp_prose}" + (f" · {outside}" if outside else "")
+                     + f" · IS-IS {isis}")
         if drill_line:
             lines.append(drill_line)
         lines.extend(_port_finding_lines(case, device))
@@ -917,7 +961,7 @@ def format_devices_operator(case: CaseFile) -> list[str]:
 
         attention: list[str] = []
         for issue in _issues_for_device(case, device):
-            mapped = _mapping_attention(issue)
+            mapped = _mapping_attention(issue, unmatched)
             if mapped:
                 attention.append(mapped)
             elif str(issue.get("code") or "") not in _MAPPING_CODES:
@@ -2053,18 +2097,46 @@ def format_followup_operator(case: CaseFile) -> list[str]:
                 "with collection or dig findings (see Services for targets)."
             )
 
-    # 3) Neighbor-mapping inventory (collapsed; after reachability/services)
-    mapping = [
-        i
-        for i in case.issues
-        if str(i.get("code") or "")
-        in {"unknown_neighbor_address", "unknown_neighbor_system_id"}
-    ]
-    if mapping:
+    # 3) Sessions to other networks, then neighbors to identify (after reachability/services)
+    def coded(code: str) -> list[dict[str, Any]]:
+        return [i for i in case.issues if str(i.get("code") or "") == code]
+
+    outside = coded("outside_bgp_session_not_established")
+    if outside:
+        ases_by_device: dict[str, set[int]] = {}
+        for issue in outside:
+            device = str((issue.get("devices") or ["?"])[0])
+            match = _OUTSIDE_AS.search(str(issue.get("message") or ""))
+            ases_by_device.setdefault(device, set()).update([int(match["asn"])] if match else [])
+        where = "; ".join(f"`{device}` → AS {', '.join(str(a) for a in sorted(ases))}"
+                          for device, ases in sorted(ases_by_device.items()))
+        n = len(outside)
         items.append(
-            f"Classify {len(mapping)} neighbor-mapping observation"
-            f"{'s' if len(mapping) != 1 else ''} so inventory/peer labels "
-            "stop appearing as open routing gaps."
+            f"Check {n} outside BGP session{'s' if n != 1 else ''} that "
+            f"{'are' if n != 1 else 'is'} not established ({where}); only FABRIC's end is visible."
+        )
+    unmatched_bgp = coded("unknown_neighbor_address")
+    if unmatched_bgp:
+        rows = _unmatched_bgp_rows(case)
+        named = []
+        for issue in unmatched_bgp[:3]:
+            found = _unmatched_neighbor(issue, rows)
+            if found:
+                device, address, asn = found
+                named.append(f"`{device}` {address}" + (f" (AS {asn})" if asn else ""))
+        n = len(unmatched_bgp)
+        more = f" and {n - len(named)} more" if named and n > len(named) else ""
+        items.append(
+            f"Identify the device behind {n} BGP neighbor{'s' if n != 1 else ''} that "
+            f"match{'es' if n == 1 else ''} no NSO device"
+            + (": " + ", ".join(named) + more if named else "") + "."
+        )
+    unmatched_isis = coded("unknown_neighbor_system_id")
+    if unmatched_isis:
+        n = len(unmatched_isis)
+        items.append(
+            f"Identify the device behind {n} IS-IS neighbor{'s' if n != 1 else ''} that "
+            f"match{'es' if n == 1 else ''} no NSO device."
         )
 
     # 4) Real interface inventory/mapping only — never drop-counter Review alone
@@ -2103,12 +2175,7 @@ def format_followup_operator(case: CaseFile) -> list[str]:
 def format_result_line(case: CaseFile) -> str:
     """One-line Result for the report header (deterministic)."""
     dp = list(_dataplane_by_name(case).values())
-    mapping_n = sum(
-        1
-        for i in case.issues
-        if str(i.get("code") or "")
-        in {"unknown_neighbor_address", "unknown_neighbor_system_id"}
-    )
+    codes = Counter(str(i.get("code") or "") for i in case.issues)
     quarantined_issues = [
         i
         for i in case.issues
@@ -2134,6 +2201,7 @@ def format_result_line(case: CaseFile) -> str:
     if quarantined_n:
         from nso_facts.mcp_client import (
             live_mcp_failure_kind,
+            nso_could_not_connect,
             parse_live_mcp_failed_operation,
             parse_live_mcp_read_timeout_sec,
         )
@@ -2178,12 +2246,17 @@ def format_result_line(case: CaseFile) -> str:
             device_list = ", ".join(device_bits) if device_bits else (
                 f"{quarantined_n} device{'s' if quarantined_n != 1 else ''}"
             )
+            # Manual NSO access fails the same way when NSO itself cannot connect.
+            nso_side = all(nso_could_not_connect(str(i.get("message") or ""))
+                           for i in quarantined_issues)
             collection_gaps.append(
                 f"{quarantined_n} device"
                 f"{'s' if quarantined_n != 1 else ''} hit automated "
                 f"{op} timeout{timeout_bit}: {device_list} "
-                "(further live MCP skipped; manual NSO access may still "
-                "succeed — not proof devices are down)."
+                "(further live MCP skipped; "
+                + (f"NSO itself could not connect to {'them' if quarantined_n != 1 else 'it'}"
+                   if nso_side else "manual NSO access may still succeed")
+                + " — not proof devices are down)."
             )
         elif kinds == {"unreachable"}:
             collection_gaps.append(
@@ -2249,11 +2322,14 @@ def format_result_line(case: CaseFile) -> str:
     if sessions_down:
         parts.append(sessions_down + ".")
     parts.extend(collection_gaps)
-    if mapping_n:
-        parts.append(
-            f"{mapping_n} inventory mapping observation"
-            f"{'s' if mapping_n != 1 else ''} need clarification."
-        )
+    for code, protocol in (("unknown_neighbor_address", "BGP"), ("unknown_neighbor_system_id", "IS-IS")):
+        n = codes[code]
+        if n:
+            parts.append(f"{n} {protocol} neighbor{'s' if n != 1 else ''} "
+                         f"match{'es' if n == 1 else ''} no NSO device.")
+    outside_n = codes["outside_bgp_session_not_established"]
+    if outside_n:
+        parts.append(f"{outside_n} outside BGP session{'s' if outside_n != 1 else ''} not established.")
     health_flags = [r for r in _device_rows(case) if _device_has_health_review(r)]
     if health_flags:
         parts.append(

@@ -581,6 +581,75 @@ def _routing_case():
     return case
 
 
+def _outside_case():
+    """test54's unmatched rows: star's two PEERING sessions down, its ESnet session up, wash's RR client unknown."""
+    from diagnostic_mas.case import open_issue
+
+    case = _routing_case()
+    bgp = next(ev for ev in case.evidence if ev.get("role") == "bgp")
+    bgp["payload"]["extra"] = {"unmatched_neighbors": [
+        {"device": "star-data-sw", "address": "10.129.134.2", "remote_as": 47065,
+         "state": "active", "up_down": "00:00:00", "outside": True},
+        {"device": "star-data-sw", "address": "10.129.135.2", "remote_as": 47065,
+         "state": "active", "up_down": "00:00:00", "outside": True},
+        {"device": "star-data-sw", "address": "198.125.141.24", "remote_as": 293,
+         "state": "established", "up_down": "1y08w", "outside": True},
+        {"device": "wash-data-sw", "address": "10.128.128.1", "remote_as": 398900,
+         "state": "established", "up_down": "4w6d", "outside": False},
+    ]}
+    for address in ("10.129.134.2", "10.129.135.2"):
+        open_issue(case, code="outside_bgp_session_not_established", layer="routing",
+                   edge_id=f"bgp-outside:star-data-sw:{address}", devices=["star-data-sw"],
+                   evidence_ids=[bgp["id"]],
+                   message=(f"star-data-sw {address} (outside peer, AS 47065): Active "
+                            "(Up/Down 00:00:00); only this end is visible"))
+    open_issue(case, code="unknown_neighbor_address", layer="routing", evidence_ids=[bgp["id"]],
+               message="wash-data-sw 10.128.128.1: could not map neighbor address to NSO device")
+    return case
+
+
+def _device_lines(text: str, prefix: str) -> dict[str, str]:
+    lines, device = {}, None
+    for line in text.splitlines():
+        if line.startswith("### "):
+            device = line[4:]
+        elif line.startswith(prefix):
+            lines[device] = line
+    return lines
+
+
+def test_device_lines_show_outside_peers_and_name_the_neighbor_to_identify():
+    from diagnostic_mas.operator_report import format_devices_operator
+
+    text = "\n".join(format_devices_operator(_outside_case()))
+    routing = _device_lines(text, "**Routing:**")
+
+    assert routing["star-data-sw"] == (
+        "**Routing:** BGP 1/5 up; 3 Established here, far end not read "
+        "(brist-data-sw, cien-data-sw, prin-data-sw); 1 Idle (cape-data-sw) "
+        "· outside BGP peers 1/3 Established; 2 Active (AS 47065) · IS-IS 1/1 up")
+    assert routing["wash-data-sw"] == "**Routing:** BGP 1/1 up · IS-IS N/A"
+    assert _device_lines(text, "**Attention:**")["wash-data-sw"] == (
+        "**Attention:** BGP neighbor matches no NSO device: 10.128.128.1 (AS 398900)")
+
+
+def test_result_and_follow_up_separate_outside_sessions_from_neighbors_to_identify():
+    from diagnostic_mas.operator_report import format_followup_operator, format_result_line
+
+    case = _outside_case()
+    result = format_result_line(case)
+    followup = "\n".join(format_followup_operator(case))
+
+    assert "1 BGP neighbor matches no NSO device." in result
+    assert "2 outside BGP sessions not established." in result
+    assert ("Identify the device behind 1 BGP neighbor that matches no NSO device: "
+            "`wash-data-sw` 10.128.128.1 (AS 398900).") in followup
+    assert ("Check 2 outside BGP sessions that are not established (`star-data-sw` → AS 47065); "
+            "only FABRIC's end is visible.") in followup
+    for old in ("inventory mapping observation", "neighbor-mapping"):
+        assert old not in result + followup
+
+
 def test_routing_lines_show_what_each_end_read():
     from diagnostic_mas.operator_report import format_devices_operator
 

@@ -378,9 +378,17 @@ Parse neighbor rows for **Established** / **Idle** / **Active** / … — same b
 | `session_down` | Neither end Established, and at least one end reports a failed state such as Idle |
 | `live_session_not_in_config` | Live pair not reflected in BGP neighbor config |
 | `configured_no_session` | Static session; no operational Established state |
-| `unknown_neighbor_address` | Neighbor IP could not be mapped to an NSO device |
+| `unknown_neighbor_address` | Neighbor IP is no NSO device's router ID, and its AS is one NSO's devices use (or unknown) |
+| `outside_bgp_session_not_established` | Neighbor in an AS no NSO device uses (another network's router), and this end is not Established |
 | `unexpected_live_object` | Live session not in static topology |
 | `no_configured_bgp` | Device has no BGP neighbors in NSO config |
+
+Summary rows no NSO device matched are stored with the BGP spine as
+`extra.unmatched_neighbors`: device, neighbor address, `remote_as`, state,
+`up_down` (as printed) and `outside`. A row is `outside` only when FABRIC's AS
+numbers are known (from NSO's BGP config and each table's header) and the
+neighbor's AS is not one of them. Outside peers are never routing edges: there
+is no NSO device at the far end to pair with.
 
 ### Routing edge shape
 

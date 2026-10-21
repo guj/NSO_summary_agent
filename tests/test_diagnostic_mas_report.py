@@ -138,6 +138,27 @@ def test_result_line_names_the_failed_operation_for_a_single_dropped_device(monk
     assert "automated scm-data-sw timeout" not in result
 
 
+def test_devices_nso_could_not_connect_to_are_not_reported_unreachable(monkeypatch):
+    from diagnostic_mas.operator_report import format_followup_operator, format_result_line
+
+    cape = ("get_interface_health: device 'cape-data-sw' unreachable: RESTCONF 404: Failed to connect "
+            "to device cape-data-sw: connection refused: Failed to connect: Connect timed out")
+    scm = ("check_isis_adjacencies: RESTCONF 500: Failed to connect to device scm-data-sw: "
+           "connection refused: NEDCOM CONNECT: Connect timed out in new state")
+    case = _case_with_dropped_devices(monkeypatch, {}, {"cape-data-sw": cape, "scm-data-sw": scm})
+
+    result = format_result_line(case)
+    followup = "\n".join(format_followup_operator(case))
+
+    assert "`cape-data-sw` (0 unknown services), `scm-data-sw` (0 unknown services)" in result
+    # Manual NSO access fails the same way when NSO itself cannot connect.
+    assert "NSO itself could not connect to them" in result
+    assert "manual NSO access may still succeed" not in result
+    assert "Check NSO's management connection to `cape-data-sw`" in followup
+    assert "Check NSO's management connection to `scm-data-sw`" in followup
+    assert "Restore live reachability" not in followup
+
+
 def test_result_line_states_service_status_before_dropped_devices(monkeypatch):
     from diagnostic_mas.operator_report import format_result_line
 
@@ -575,9 +596,7 @@ def test_followup_prioritizes_reachability_then_services_over_mapping():
     assert "After successful checks, reassess" not in text
     assert "Retry service sync checks" not in text
     assert text.index("STAR") < text.index("SCM")
-    assert text.index("SCM") < text.index("neighbor-mapping") or text.index(
-        "SCM"
-    ) < text.index("Classify")
+    assert text.index("SCM") < text.index("matches no NSO device")
 
 
 def test_followup_skips_drop_counter_only_device_reviews():

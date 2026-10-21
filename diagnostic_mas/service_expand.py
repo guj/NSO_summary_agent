@@ -116,7 +116,8 @@ async def maybe_expand_underlay_for_service_focus(
         issues=list(bgp.get("issues") or []),
         static_edges=bgp.get("static_edges"),
         operational_edges=bgp.get("operational_edges"),
-        extra={"coverage": bgp.get("coverage"), "service_focus_expand": True},
+        extra={"coverage": bgp.get("coverage"), "service_focus_expand": True,
+               "unmatched_neighbors": bgp.get("unmatched_neighbors") or []},
     )
     # Prefer reporting those endpoints
     if not case.focus_devices:

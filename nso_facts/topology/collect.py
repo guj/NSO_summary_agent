@@ -133,7 +133,7 @@ async def load_or_build_topology(
         underlay_edges,
         physical_edges=physical_edges,
     )
-    op_route, route_op_issues, route_op_cov = await collect_operational_routing(
+    op_route, route_op_issues, route_op_cov, _unmatched = await collect_operational_routing(
         client, device_names, routing_edges
     )
     route_summaries, route_sum_issues, route_sum_cov = await collect_route_summaries(

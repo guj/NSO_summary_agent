@@ -26,7 +26,7 @@ async def test_collector_uses_partial_state(monkeypatch, observed, status, code)
     monkeypatch.setattr(routing,'_neighbor_configs_for_devices',configs)
     monkeypatch.setattr(routing,'_router_ids_for_devices',ids)
     monkeypatch.setattr(routing,'_enrich_router_ids_from_live',ids)
-    edges,issues,_=await routing.collect_operational_routing(None,['a','b'],[dict(EDGE,id='pair')])
+    edges,issues,_,_=await routing.collect_operational_routing(None,['a','b'],[dict(EDGE,id='pair')])
     assert edges[0]['state']['status']==status
     assert edges[0]['state']['local']==observed.lower()
     assert any(i['code']==code and i['edge_id']=='pair' for i in issues)

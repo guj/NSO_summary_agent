@@ -647,7 +647,7 @@ def test_interface_that_went_down_is_listed_with_its_sub_interfaces_folded_in():
 
     assert compute_case_delta(older, newer)["interfaces_lost"] == [
         {"device": "pe1-data-sw", "interface": "HundredGigE0/0/0/23", "now": "down", "sub_interfaces": 1,
-         "services_deleted": 0}]
+         "services_deleted": 0, "services_down_before": 0, "services_on_port": 0}]
 
 
 def test_sub_interface_down_under_a_working_port_and_a_shut_port_are_listed_as_such():
@@ -657,9 +657,9 @@ def test_sub_interface_down_under_a_working_port_and_a_shut_port_are_listed_as_s
 
     assert compute_case_delta(older, newer)["interfaces_lost"] == [
         {"device": "pe1-data-sw", "interface": "HundredGigE0/0/0/23.3000", "now": "down", "sub_interfaces": 0,
-         "services_deleted": 0},
+         "services_deleted": 0, "services_down_before": 0, "services_on_port": 0},
         {"device": "pe1-data-sw", "interface": "HundredGigE0/0/0/5", "now": "admin-down", "sub_interfaces": 0,
-         "services_deleted": 0}]
+         "services_deleted": 0, "services_down_before": 0, "services_on_port": 0}]
 
 
 def test_interface_is_not_called_lost_without_a_down_state_this_run():
@@ -738,6 +738,45 @@ def test_changes_section_and_summary_input_say_the_services_were_deleted():
     assert "deleted" in summary_input["note"]
 
 
+def _lanes_after_a_mid_scan_loss() -> dict:
+    """The previous run read every lane up, then found some of their services Down."""
+    on_ports = {"s1": LANE0, "s2": LANE1, "s3": LANE1, "s4": "HundredGigE0/0/0/5", "s5": "HundredGigE0/0/0/6"}
+    older = _ports_scan(on_ports, {port: "up" for port in on_ports.values()})
+    older["diagnoses"] = [{"kind": "dataplane", "subject": {"name": name, "service_type": "l2bridge"},
+                           "status": status}
+                          for name, status in (("s1", "down"), ("s2", "down"), ("s3", "up"), ("s5", "degraded"))]
+    # A fault carried from an earlier run is not one the previous run found.
+    older["last_known_service_faults"] = [{"service": "s4", "status": "down"}]
+    newer = _ports_scan(on_ports, {port: "down" for port in on_ports.values()})
+    return compute_case_delta(older, newer)
+
+
+def test_lane_whose_services_the_previous_run_already_found_down_is_marked():
+    marked = {row["interface"]: (row["services_down_before"], row["services_on_port"])
+              for row in _lanes_after_a_mid_scan_loss()["interfaces_lost"]}
+
+    assert marked == {LANE0: (1, 1), LANE1: (1, 2), "HundredGigE0/0/0/5": (0, 1), "HundredGigE0/0/0/6": (0, 1)}
+
+
+def test_changes_section_and_summary_input_say_the_loss_was_already_reported():
+    from diagnostic_mas.case_delta import compact_delta_for_llm, format_changes_since_previous
+
+    delta = _lanes_after_a_mid_scan_loss()
+    delta["interfaces_lost"].append({"device": "pe2-data-sw", "interface": "HundredGigE0/0/0/7", "now": "down",
+                                     "sub_interfaces": 0, "services_deleted": 0,
+                                     "services_down_before": 2, "services_on_port": 2})
+    text = "\n".join(format_changes_since_previous(delta, previous_run_id="run-1"))
+    summary_input = compact_delta_for_llm(delta)["interfaces_lost"]
+
+    line = (f"`pe1-data-sw`: HundredGigE0/0/0/5, HundredGigE0/0/0/6, "
+            f"{LANE0} (its service was already Down in the previous run), "
+            f"{LANE1} (1 of its 2 services was already Down in the previous run)")
+    assert f"- {line}" in text
+    assert "- `pe2-data-sw`: HundredGigE0/0/0/7 (its 2 services were already Down in the previous run)" in text
+    assert line.replace("`", "") in summary_input["by_device"]
+    assert "already Down in the previous run" in summary_input["note"]
+
+
 def test_interface_is_not_marked_when_the_newer_scan_was_narrowed():
     older = _ports_scan({"s1": LANE0}, {LANE0: "up"})
     newer = _ports_scan({}, {LANE0: "down"})
@@ -797,3 +836,60 @@ def test_passing_check_does_not_end_a_fault_the_llm_confirmed_again_this_run():
 
     assert [row["service"] for row in service_fault_history(older, newer)] == ["svc"]
 
+
+
+ESNET = {"device": "star-data-sw", "address": "198.125.141.24", "remote_as": 293, "outside": True}
+
+
+def _bgp_scan(rows: list[dict], issues: list[dict] = ()) -> dict:
+    """A saved case whose BGP spine stored these unmatched summary rows."""
+    return {"evidence": [{"kind": "spine", "role": "bgp", "layer": "routing",
+                          "payload": {"operational_edges": [], "extra": {"unmatched_neighbors": rows}}}],
+            "issues": list(issues), "diagnoses": [], "service_coverage": {}, "focus_devices": []}
+
+
+def test_outside_session_that_stopped_being_established_is_listed():
+    from diagnostic_mas.case_delta import compact_delta_for_llm, format_changes_since_previous
+
+    older = _bgp_scan([ESNET | {"state": "established", "up_down": "1y08w"}])
+    delta = compute_case_delta(older, _bgp_scan([ESNET | {"state": "idle", "up_down": "00:12:03"}]))
+    text = "\n".join(format_changes_since_previous(delta, previous_run_id="run-1"))
+
+    line = "BGP `star-data-sw` → 198.125.141.24 (outside peer, AS 293) — idle (this end only)"
+    assert f"- {line}" in text
+    assert line.replace("`", "") in compact_delta_for_llm(delta)["routing_sessions_lost"]["sessions"]
+    # Still up, gone from the table, or never up before: nothing to report.
+    for now in ([ESNET | {"state": "established"}], []):
+        assert compute_case_delta(older, _bgp_scan(now))["routing_sessions_lost"] == []
+    assert compute_case_delta(_bgp_scan([ESNET | {"state": "active"}]),
+                              _bgp_scan([ESNET | {"state": "idle"}]))["routing_sessions_lost"] == []
+
+
+def test_neighbor_now_sorted_as_an_outside_peer_is_not_called_recovered():
+    unmatched = {"code": "unknown_neighbor_address", "layer": "routing", "status": "open",
+                 "message": "star-data-sw 198.125.141.24: could not map neighbor address to NSO device"}
+    still_unknown = dict(unmatched, message="wash-data-sw 10.128.128.1: could not map neighbor address to NSO device")
+    older = _bgp_scan([], [unmatched, still_unknown])
+
+    delta = compute_case_delta(older, _bgp_scan([ESNET | {"state": "established"}]))
+
+    # Re-sorted, not fixed; one that simply went away is still a recovery.
+    assert [i["message"] for i in delta["recovered"]] == [still_unknown["message"]]
+
+
+def test_summary_input_says_what_each_new_problem_is():
+    from diagnostic_mas.case_delta import compact_delta_for_llm
+
+    peering = {"code": "outside_bgp_session_not_established", "layer": "routing", "status": "open",
+               "edge_id": "bgp-outside:star-data-sw:10.129.134.2", "devices": ["star-data-sw"],
+               "message": ("star-data-sw 10.129.134.2 (outside peer, AS 47065): Active "
+                           "(Up/Down 00:00:00); only this end is visible")}
+    row = ESNET | {"address": "10.129.134.2", "remote_as": 47065, "state": "active"}
+
+    summary_input = compact_delta_for_llm(compute_case_delta(_bgp_scan([]), _bgp_scan([row], [peering])))
+
+    new = summary_input["new_problems"]
+    assert new["count"] == 1
+    assert [(p["code"], p["message"]) for p in new["sample"]] == [(peering["code"], peering["message"])]
+    assert "does not prove a new failure" in new["note"]
+    assert "new_problems" not in compact_delta_for_llm(compute_case_delta(_bgp_scan([]), _bgp_scan([])))

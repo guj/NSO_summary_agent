@@ -107,10 +107,18 @@ The long form comes from NSO device configuration. The short form is what the de
 
 `BGP 2/2 up` means two sessions between this device and other devices in the NSO inventory, both
 up. Neighbors outside the NSO inventory are not counted, so the number can be lower than what
-`show bgp summary` lists on the device. Those neighbors appear under Attention instead:
+`show bgp summary` lists on the device. They are sorted by the AS number in that table:
+
+- **Outside peers**: routers in an AS that no NSO device uses, such as a research and education
+  network. NSO never lists them, so only this device's end is visible. They get their own count
+  on the Routing line, `outside BGP peers 3/5 Established; 2 Active (AS 64510)`. One that is not
+  Established is listed in the follow-up. One that was Established in the previous scan and is
+  not now is listed under Changes since previous run.
+- **Neighbors to identify**: in FABRIC's own AS, or with no AS the agent could read, yet no NSO
+  device has that address as its router ID. These appear under Attention and in the follow-up:
 
 ```text
-**Attention:** BGP neighbor could not be mapped to NSO inventory. site-a-data-sw 192.0.2.1: could not map neighbor address to NSO device
+**Attention:** BGP neighbor matches no NSO device: 192.0.2.1 (AS 64500)
 ```
 
 `N/A` means no sessions to inventory devices were found for that protocol.
@@ -156,6 +164,8 @@ is treated as Established.
   and IS-IS adjacencies that were up in the previous run and are not up now, and interfaces that
   went from up to down. An interface is marked "its service was deleted" when every service the
   previous scan had on it has since been deleted by its owner; that is not a fault on its own.
+  It is marked "already Down in the previous run" when that scan read the interface up and then
+  found its services Down: the port failed during that scan, which already reported the loss.
   It also lists the service faults still open, each with the scan that first
   listed it and, for a down link, how long the device says it has been down. The Slack and email
   digest starts with the same changes.

@@ -335,6 +335,7 @@ _DRILL_SKIP_CODES = frozenset(
     {
         "unknown_neighbor_address",
         "unknown_neighbor_system_id",
+        "outside_bgp_session_not_established",  # the far end is not in NSO to read
         "port_down",  # has its own investigation, before the service digs
         "device_cut_off",
     }
