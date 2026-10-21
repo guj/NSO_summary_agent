@@ -221,7 +221,8 @@ Dry-run still contacts NSO and, unless skipped, the LLM. It does not save the
 normal case/report state or send Slack/email. `--publish` explicitly enables
 persistence and configured delivery.
 `--save-mcp-results` opts into raw MCP evidence retention; outputs can contain
-sensitive device configuration, so do not commit them.
+sensitive device configuration, so do not commit them. Such a run first removes
+archives older than `MCP_RESULTS_KEEP_DAYS` (default 7 days; `0` keeps all).
 
 `--check-connection` starts the MCP server, asks NSO for its device list and, unless
 `--skip-llm` is given, checks the LLM key and model with a one-token request. When the

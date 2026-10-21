@@ -95,3 +95,15 @@ def test_is_ignored_matches_module_or_service_name():
     assert not _is_ignored_service_type(
         "/ncs:services/l2ptp:l2ptp", frozenset({"idipa"})
     )
+
+
+def test_mcp_results_keep_a_week_unless_set():
+    import pytest
+    from agent.config import _parse_keep_days
+
+    assert _parse_keep_days(None) == 7
+    assert _parse_keep_days("0") == 0
+    assert _parse_keep_days("14") == 14
+    for raw in ("", "-1", "1.5", "no"):
+        with pytest.raises(ValueError, match="MCP_RESULTS_KEEP_DAYS"):
+            _parse_keep_days(raw)

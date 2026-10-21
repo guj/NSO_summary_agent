@@ -235,6 +235,7 @@ See [deploy/monitoring/README.md](deploy/monitoring/README.md) for:
 | `FABRIC_AI_KEY_LIFETIME_DAYS` | no       | Fallback lifetime in days (default `30`) |
 | `MCP_SERVER_CMD`              | no       | Path to `cisco-nso-mcp-server` binary                                     |
 | `STATE_DIR`                   | no       | Default `./state`                                                         |
+| `MCP_RESULTS_KEEP_DAYS`       | no       | Days a `--save-mcp-results` archive is kept (default `7`; `0` keeps all). See [Preserve MCP responses](#preserve-mcp-responses) |
 | `IGNORE_SERVICE_TYPES`        | no       | Comma-separated types to skip (default `idipa`; set empty to include all) |
 | `NSO_SERVICE_SYNC_MODE`       | no       | `check` (default) calls `check_service_sync` per instance; `skip` uses endpoint fleet sync only (this lab). Overall status combines sync and dataplane; the diagnostic table counts endpoint sync and dataplane independently |
 | `MAX_SERVICE_TYPES`           | no       | Cap on service types queried per run (default `10`; also `--max-service-types`) |
@@ -741,8 +742,16 @@ The CLI prints the unique JSONL path under the diagnostic state directory's
 `mcp-results/` folder. Each record includes timestamp, tool, arguments, response,
 raw MCP response for wire calls, and source (wire/cache/quarantine/transport error).
 Files are private (0600); they may contain full device configuration and should
-not be committed. No environment variables or client credentials are added.
+not be committed. No client credentials are added.
 Server-side truncation cannot be undone. Default runs do not create this archive.
+
+Before it creates its archive, a `--save-mcp-results` run removes archives in
+`mcp-results/` whose run ID (the date in the file name) is more than
+`MCP_RESULTS_KEEP_DAYS` days (default `7`) before its own; `0` keeps them all.
+To keep an archive longer, move it into a subfolder such as `mcp-results/keep/`:
+only `<run id>-<random>.jsonl` files directly in `mcp-results/` are removed.
+Runs without the flag remove nothing, and run folders under `runs/` are never
+touched. A full scan's archive is roughly 110–120 MB.
 
 ```bash
 nso-diagnostic-run --service-only --service-id <service-id> --dry-run --save-mcp-results

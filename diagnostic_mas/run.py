@@ -295,7 +295,8 @@ async def _run(args: argparse.Namespace) -> int:
 
     archive_dir = (diagnostic_mas_state_dir(settings) / "mcp-results"
                    if getattr(args, "save_mcp_results", False) else None)
-    with archive_mcp_results(archive_dir, run_id) as archive_path:
+    with archive_mcp_results(archive_dir, run_id,
+                             keep_days=settings.mcp_results_keep_days) as archive_path:
         if archive_path:
             print(f"[mcp archive] Full results: {archive_path}", file=sys.stderr)
         def report_failed_attempt(reason: str) -> None:

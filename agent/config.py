@@ -73,6 +73,7 @@ class Settings:
     fabric_max_retries: int = 0
     fabric_chat_timeout_sec: float = 60.0
     fabric_chat_connect_timeout_sec: float = 20.0
+    mcp_results_keep_days: int = 7
 
 
 def _parse_temperature(raw: str | None) -> float | None:
@@ -175,6 +176,19 @@ def _parse_max_retries(raw: str | None) -> int:
     return value
 
 
+def _parse_keep_days(raw: str | None) -> int:
+    """Days a --save-mcp-results archive is kept (default 7; 0 keeps them all)."""
+    if raw is None:
+        return 7
+    try:
+        value = int(raw)
+    except (ValueError, TypeError):
+        raise ValueError("MCP_RESULTS_KEEP_DAYS must be a nonnegative integer") from None
+    if value < 0:
+        raise ValueError("MCP_RESULTS_KEEP_DAYS must be a nonnegative integer")
+    return value
+
+
 def load_settings(*, require_llm_key: bool = True) -> Settings:
     nso_password = os.environ.get("NSO_PASSWORD")
     if not nso_password:
@@ -206,6 +220,7 @@ def load_settings(*, require_llm_key: bool = True) -> Settings:
         fabric_chat_timeout_sec=_parse_chat_timeout(os.environ.get("FABRIC_CHAT_TIMEOUT_SEC")),
         fabric_chat_connect_timeout_sec=_parse_connect_timeout(os.environ.get("FABRIC_CHAT_CONNECT_TIMEOUT_SEC")),
         state_dir=Path(os.environ.get("STATE_DIR", root / "state")),
+        mcp_results_keep_days=_parse_keep_days(os.environ.get("MCP_RESULTS_KEEP_DAYS")),
         # Default dry-run (safe): no state write / Slack / email unless DRY_RUN=0 or --publish
         dry_run=os.environ.get("DRY_RUN", "1") in ("1", "true", "yes"),
         ignore_service_types=_parse_ignore_service_types(
