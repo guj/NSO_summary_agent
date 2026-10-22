@@ -137,6 +137,29 @@ could not be read, that line names the peer that reported the session. An unveri
 end is a gap in evidence, not a sign that the session is down. When one end did read the
 session, the line shows that reading instead (next question).
 
+### What does "IS-IS adjacency down: … lists it as Init; … does not list it" mean?
+
+```text
+IS-IS adjacency down: newy-data-sw HundredGigE0/0/0/19.3000 lists it as Init; rutg-data-sw HundredGigE0/0/0/23.3000
+does not list it. Ports as read this scan: newy-data-sw HundredGigE0/0/0/19.3000 up; rutg-data-sw
+HundredGigE0/0/0/23.3000 link down (not shut down).
+```
+
+An IS-IS adjacency works only when both routers hear each other, so anything short of Up at both ends is down.
+Both routers answered this scan; the line gives what each one lists. A router showing **Init** still hears the
+other's hellos; one that **does not list it** hears nothing usable: either the direction toward it is failing
+(fibre, optic, far transmitter) or it rejects the other's hellos, for example over an IS-IS setting that does not
+match. The port states help tell these apart. "Both routers answered without it; up in the previous scan" means neither
+lists it now. The port states are each end's interface as `show interfaces brief` read it: "link down" is a
+lost link, "shut down by configuration" is a deliberate one.
+
+When the line goes on with "Optics: A → B: transmitted …, received …, loss … dB per lane; B → A: …", both ends'
+`show controllers <port>` were read in the same scan: each direction is one end's transmit power against the
+other end's receive power, lane by lane. A direction losing several dB more than the other points at that
+direction's fibre, connectors or optics, even while the receive level is still inside the alarm thresholds. The
+numbers are readings only; the report draws no conclusion from them. "Not read" means that end's output could not
+be read or parsed (for example a platform without that output).
+
 ### What do "Established here, far end not read" and "not read on <device>" mean?
 
 ```text

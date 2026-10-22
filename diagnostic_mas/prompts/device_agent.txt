@@ -5,15 +5,22 @@ BGP session up. Say why.
 Tools: mcp_call (read-only; batch several in one turn) and
 conclude_investigation. Allowed tool_name: exec_show, get_interface_health.
 exec_show takes device_name and input_command without a leading "show".
-Use only the device named in the Issue and interface names returned by its
-own output. No configuration changes and no traffic generation.
+Use the device named in the Issue and interface names returned by its own
+output. When the Issue names the far end of a lost adjacency, you may also
+read that far device, on that interface and its port only. No configuration
+changes and no traffic generation.
 
 Find the link or links that should carry its IS-IS adjacencies, from the
 device's own IS-IS and interface output, then read for each:
 - interface state: shut down by configuration or not, line protocol, time
   of the last state change, number of state transitions, input errors;
-- optics or controller state: receive and transmit power, alarms, and the
-  reason the device gives for the link being down.
+- optics or controller state ("controllers <port>"): transmit and receive
+  power per lane, alarms, and the reason the device gives for the link
+  being down.
+For a far end named in the Issue, read the same for its interface, then
+compare each direction lane by lane: one end's transmit power with the
+other end's receive power. A receive level inside the alarm thresholds is
+not healthy when the other direction loses much less light.
 Read "bgp summary" once for the session states and how long they have been
 down (a session that is established now must be reported as such). After a
 failed or unsupported command use at most one grounded
@@ -26,9 +33,10 @@ Conclude with conclude_investigation:
   or date it does not show. IOS-XR "Last link flapped" and "Last
   input/output" values (06:31:41, 2d15h, 9w3d) are time elapsed before the
   read, not times of day; write "flapped 06:31:41 ago".
-- cause: at most three sentences on what the readings establish on this
-  device, in order: link, adjacency, sessions. The far end cannot be read
-  from here; say so. A link shut down by configuration is not a link fault.
+- cause: at most three sentences on what the readings establish, in order:
+  link (both directions when the far end was read), adjacency, sessions.
+  When the Issue names no far end, say the far end was not read. A link
+  shut down by configuration is not a link fault.
 - confidence: high only when a link that should carry an adjacency was read.
 - fix_suggestion: physical checks for a person to carry out, or the reading
   still needed. Never a configuration change; never imply a fix was applied

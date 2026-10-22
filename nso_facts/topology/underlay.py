@@ -41,13 +41,16 @@ async def collect_static_underlay(
     *,
     seed_from_live: bool = True,
     physical_edges: list[dict[str, Any]] | None = None,
+    expected_edges: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int]]:
     """Build static IS-IS adjacency edges for topology.static.json.
 
     IS-IS config in IOS-XR usually lists local interfaces only, not remote device
     names. On static rebuild we optionally pair adjacencies using one live
     `check_isis_adjacencies` pass (`seed_from_live`) and validate against
-    config-enabled IS-IS interfaces.
+    config-enabled IS-IS interfaces. ``expected_edges`` (from an earlier scan)
+    adds the adjacencies this pass no longer shows, when its answers and the
+    config still call for them.
     """
     issues: list[dict[str, Any]] = []
     isis_interfaces: dict[str, set[str]] = {}
@@ -92,6 +95,7 @@ async def collect_static_underlay(
             device_names,
             physical_by_device=physical_by_device,
             unread_devices=_unread_devices(live_issues),
+            known_edges=expected_edges,
         )
         issues.extend(pair_issues)
         for edge in paired:
@@ -110,6 +114,9 @@ async def collect_static_underlay(
                         ),
                     }
                 )
+        edges.extend(_missing_expected_edges(
+            expected_edges or [], paired, device_names=device_names,
+            unread=_unread_devices(live_issues), isis_interfaces=isis_interfaces))
 
     coverage = {
         "devices_total": len(device_names),
@@ -134,6 +141,7 @@ async def collect_operational_underlay(
         device_names,
         physical_by_device=physical_by_device,
         unread_devices=_unread_devices(issues),
+        known_edges=static_edges,
     )
     issues.extend(pair_issues)
 
@@ -149,9 +157,16 @@ async def collect_operational_underlay(
         )
 
     paired_ids = {edge["id"] for edge in paired}
+    unread_now = _unread_devices(issues)
     for static_id, static_edge in static_by_id.items():
         # A one-sided edge only stood for a far end that could not be read.
         if static_id in paired_ids or _is_one_sided(static_edge):
+            continue
+        local = static_edge.get("local") or {}
+        remote = static_edge.get("remote") or {}
+        ends = [device for device in (local.get("device"), remote.get("device")) if device]
+        # A router that did not answer this pass proves nothing about the adjacency.
+        if unread_now & set(ends):
             continue
         operational.append(
             {
@@ -160,22 +175,23 @@ async def collect_operational_underlay(
                     "local": "unknown",
                     "remote": "unknown",
                     "status": "down",
-                    "detail": "no operational adjacency observed",
+                    "detail": MISSING_DETAIL,
                 },
             }
         )
-        local = static_edge.get("local") or {}
-        remote = static_edge.get("remote") or {}
+        why = _EXPECTED_WHY.get((static_edge.get("meta") or {}).get("expected"), "seen up earlier in this scan")
         issues.append(
             {
                 "severity": "high",
                 "layer": "underlay",
                 "code": "configured_no_adjacency",
                 "edge_id": static_id,
+                "devices": ends,
                 "message": (
-                    f"Configured/static IS-IS adjacency missing live Up state: "
+                    f"IS-IS adjacency down: "
                     f"{local.get('device')} {local.get('interface')} ↔ "
-                    f"{remote.get('device')} {remote.get('interface')}"
+                    f"{remote.get('device')} {remote.get('interface')} "
+                    f"(both routers answered without it; {why})"
                 ),
             }
         )
@@ -209,12 +225,15 @@ def pair_adjacency_observations(
     *,
     physical_by_device: dict[str, set[str]] | None = None,
     unread_devices: set[str] | frozenset[str] = frozenset(),
+    known_edges: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Pair one-way IS-IS observations into bidirectional underlay edges.
 
     An adjacency toward a device whose own IS-IS could not be read is kept
     one-sided: this end's reading, the far end ``unknown``, and the far
-    interface written ``?`` because only that device could name it.
+    interface written ``?`` because only that device could name it. One the
+    far device answered without is kept too, its end ``not listed``; its
+    interface then comes from ``known_edges`` (such as the previous scan's).
     """
     issues: list[dict[str, Any]] = []
     by_device: dict[str, list[AdjacencyObservation]] = {}
@@ -248,12 +267,20 @@ def pair_adjacency_observations(
             local_device=remote_device,
             remote_device=obs_a.local_device,
             used_remote=used_remote,
+            device_names=device_names,
         )
         if obs_b is None:
             if remote_device in unread_devices:
                 edge = _one_sided_edge(obs_a, remote_device, physical_by_device)
                 if not any(existing["id"] == edge["id"] for existing in edges):
                     edges.append(edge)
+            else:
+                # The far device answered without it: its silence is a reading too.
+                edge = _half_listed_edge(obs_a, remote_device, physical_by_device, known_edges or [])
+                if not any(existing["id"] == edge["id"] for existing in edges):
+                    edges.append(edge)
+                    if edge["state"]["status"] != "up":
+                        issues.append(_views_issue(edge))
             continue
 
         if_a = canonical_interface_name(
@@ -295,18 +322,7 @@ def pair_adjacency_observations(
         used_remote.add((remote_device, obs_b.local_interface))
 
         if status == "unidirectional":
-            issues.append(
-                {
-                    "severity": "high",
-                    "layer": "underlay",
-                    "code": "unidirectional_adjacency",
-                    "edge_id": edge_id,
-                    "message": (
-                        f"IS-IS adjacency {dev_a} {if_a} ({state_a}) ↔ "
-                        f"{dev_b} {if_b} ({state_b})"
-                    ),
-                }
-            )
+            issues.append(_views_issue(edges[-1]))
 
     return edges, issues
 
@@ -641,6 +657,69 @@ def _one_sided_edge(
     }
 
 
+# The far end of an adjacency its device answered without.
+NOT_LISTED = "not listed"
+
+
+def _known_far_interface(known_edges: list[dict[str, Any]], device: str, interface: str, far_device: str) -> str:
+    """The far interface of a known adjacency from this end, or ``UNREAD_INTERFACE`` when none is known."""
+    for edge in known_edges:
+        ends = [((edge.get(side) or {}).get("device"), (edge.get(side) or {}).get("interface"))
+                for side in ("local", "remote")]
+        for (near, near_if), (far, far_if) in (ends, ends[::-1]):
+            if (near == device and far == far_device and near_if and far_if
+                    and far_if != UNREAD_INTERFACE and interfaces_match(interface, near_if)):
+                return far_if
+    return UNREAD_INTERFACE
+
+
+def _half_listed_edge(
+    obs: AdjacencyObservation,
+    remote_device: str,
+    physical_by_device: dict[str, set[str]] | None,
+    known_edges: list[dict[str, Any]],
+) -> dict[str, Any]:
+    interface = canonical_interface_name(obs.local_device, obs.local_interface, physical_by_device)
+    far_interface = _known_far_interface(known_edges, obs.local_device, interface, remote_device)
+    (dev_a, if_a), (dev_b, if_b) = ordered_isis_endpoints(
+        obs.local_device, interface, remote_device, far_interface
+    )
+    seen = _normalize_isis_state(obs.state)
+    states = {obs.local_device: seen, remote_device: NOT_LISTED}
+    return {
+        "id": isis_edge_id(dev_a, if_a, dev_b, if_b),
+        "type": "isis_adjacency",
+        "local": {"device": dev_a, "interface": if_a},
+        "remote": {"device": dev_b, "interface": if_b},
+        "state": {
+            "local": states[dev_a],
+            "remote": states[dev_b],
+            "status": _bidirectional_status(seen, NOT_LISTED),
+        },
+    }
+
+
+def _views_issue(edge: dict[str, Any]) -> dict[str, Any]:
+    """Each router's view of an adjacency the two do not both have Up."""
+    def view(end: dict[str, Any], state: str) -> str:
+        device, interface = end.get("device"), end.get("interface")
+        if state == NOT_LISTED:
+            return (f"{device} does not list it (its interface is not known)" if interface == UNREAD_INTERFACE
+                    else f"{device} {interface} does not list it")
+        return f"{device} {interface} lists it as {state.capitalize()}"
+
+    state = edge["state"]
+    return {
+        "severity": "high",
+        "layer": "underlay",
+        "code": "unidirectional_adjacency",
+        "edge_id": edge["id"],
+        "devices": [edge["local"]["device"], edge["remote"]["device"]],
+        "message": (f"IS-IS adjacency down: {view(edge['local'], state['local'])}; "
+                    f"{view(edge['remote'], state['remote'])}"),
+    }
+
+
 def _is_one_sided(edge: dict[str, Any]) -> bool:
     return UNREAD_INTERFACE in {
         (edge.get("local") or {}).get("interface"),
@@ -654,12 +733,15 @@ def _find_reverse_observation(
     local_device: str,
     remote_device: str,
     used_remote: set[tuple[str, str]],
+    device_names: list[str] | None = None,
 ) -> AdjacencyObservation | None:
     for obs in rows:
         if (local_device, obs.local_interface) in used_remote:
             continue
         neighbor = obs.neighbor_system_id
-        if neighbor.lower() == remote_device.lower():
+        # The same mapping as the forward direction, so a system id in another form still pairs.
+        if (neighbor.lower() == remote_device.lower()
+                or resolve_system_id(neighbor, device_names or [remote_device]) == remote_device):
             return obs
     return None
 
@@ -706,6 +788,49 @@ def _interface_in_isis_set(interface: str, configured: set[str]) -> bool:
     if interface in configured:
         return True
     return any(interfaces_match(interface, name) for name in configured)
+
+
+# Why an expected adjacency missing now is Down, by where the expectation came from.
+_EXPECTED_WHY = {
+    "previous_scan": "up in the previous scan",
+    "held": "still missing since an earlier scan",
+}
+MISSING_DETAIL = "not reported by either router; both answered"
+
+
+def _missing_expected_edges(
+    expected: list[dict[str, Any]],
+    live: list[dict[str, Any]],
+    *,
+    device_names: list[str],
+    unread: set[str],
+    isis_interfaces: dict[str, set[str]],
+) -> list[dict[str, Any]]:
+    """Expected adjacencies absent from this pass that its answers and NSO config still call for.
+
+    Both routers answered, neither interface is in another adjacency now (parallel
+    links, recabling), and IS-IS is still configured on both interfaces.
+    """
+    live_ids = {edge["id"] for edge in live}
+    live_ends = [((edge.get(side) or {}).get("device"), (edge.get(side) or {}).get("interface"))
+                 for edge in live for side in ("local", "remote")]
+    out: list[dict[str, Any]] = []
+    for edge in expected:
+        ends = [((edge.get(side) or {}).get("device"), (edge.get(side) or {}).get("interface"))
+                for side in ("local", "remote")]
+        if edge.get("id") in live_ids or not all(d and i and i != UNREAD_INTERFACE for d, i in ends):
+            continue
+        if any(d not in device_names or d in unread for d, _ in ends):
+            continue
+        if any(d == live_d and live_i not in {None, UNREAD_INTERFACE} and interfaces_match(i, live_i)
+               for d, i in ends for live_d, live_i in live_ends):
+            continue
+        if not all(_interface_in_isis_set(i, isis_interfaces.get(d) or set()) for d, i in ends):
+            continue
+        out.append({"id": edge["id"], "type": "isis_adjacency", "local": edge["local"],
+                    "remote": edge["remote"],
+                    "meta": {"expected": "held" if edge.get("held") else "previous_scan"}})
+    return out
 
 
 def _static_adjacency_edge(edge: dict[str, Any]) -> dict[str, Any]:

@@ -354,8 +354,9 @@ def test_pair_keeps_a_one_sided_reading_when_the_far_end_was_not_read():
                   "detail": "far end not read this scan"},
     }]
     assert issues == []
-    # A far end that answered but does not report the adjacency is not a one-sided reading.
-    assert pair_adjacency_observations(NEWY_SEES_PRIN, devices)[0] == []
+    # A far end that answered but does not list the adjacency is not "not read": its silence is a reading.
+    [edge] = pair_adjacency_observations(NEWY_SEES_PRIN, devices)[0]
+    assert edge["state"] == {"local": "up", "remote": "not listed", "status": "unidirectional"}
 
 
 def test_adjacency_states_follow_their_endpoints():
@@ -370,8 +371,9 @@ def test_adjacency_states_follow_their_endpoints():
 
     two, issues = pair_adjacency_observations([wash, amst], devices)
     assert (two[0]["state"]["local"], two[0]["state"]["remote"]) == ("init", "up")
-    assert any("amst-data-sw HundredGigE0/0/0/2.1 (init) ↔ wash-data-sw HundredGigE0/0/0/1.1 (up)" in i["message"]
-               for i in issues)
+    assert [i["message"] for i in issues] == [
+        "IS-IS adjacency down: amst-data-sw HundredGigE0/0/0/2.1 lists it as Init; "
+        "wash-data-sw HundredGigE0/0/0/1.1 lists it as Up"]
 
 
 ISIS_RENC_UNREACHABLE = {

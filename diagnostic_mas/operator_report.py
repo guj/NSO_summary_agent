@@ -8,6 +8,7 @@ from typing import Any
 
 from diagnostic_mas.case import CaseFile
 from diagnostic_mas.device_health import (
+    _spine_payload,
     fleet_maps_from_case,
     services_from_case,
     topology_from_case,
@@ -140,6 +141,8 @@ def _mapping_attention(issue: dict[str, Any], unmatched: list[dict[str, Any]] = 
         )
     if code == "session_down":
         return msg or "BGP session down."
+    if code in _ADJACENCY_DOWN_CODES:
+        return msg or "IS-IS adjacency down."
     return None
 
 
@@ -339,7 +342,11 @@ def _one_sided_routing(case: CaseFile, device: str, layer: str) -> str | None:
             far.setdefault(other, []).append(peer)
         else:
             rest.setdefault(status, []).append(peer)
-    if not here and not far:
+    if layer == "underlay":
+        # Two routers that see an adjacency differently: it is down, whatever each lists.
+        rest.setdefault("down", []).extend(rest.pop("unidirectional", []))
+        rest = {status: peers for status, peers in rest.items() if peers}
+    if not here and not far and not (layer == "underlay" and rest):
         return None
 
     def word(state: str) -> str:
@@ -408,6 +415,62 @@ def _bgp_sessions_down_text(case: CaseFile, *, limit: int) -> str | None:
     more = f", and {n - limit} more" if n > limit else ""
     return (f"{n} BGP session{'s' if n != 1 else ''} down: "
             + ", ".join(sessions[:limit]) + more)
+
+
+# IS-IS adjacencies down although both routers answered: neither lists it, or the two see it differently.
+_ADJACENCY_DOWN_CODES = frozenset({"configured_no_adjacency", "unidirectional_adjacency"})
+
+
+def _port_words(state: dict[str, Any] | None) -> str:
+    """A port as `show interfaces brief` read it; ``admin`` holds its interface-state column."""
+    state = state or {}
+    intf, line = str(state.get("admin") or "").lower(), str(state.get("oper") or "").lower()
+    if "admin-down" in {intf, line}:
+        return "shut down by configuration"
+    if intf == "up":
+        return "up" if line == "up" else "up, line protocol down"
+    if intf == "down":
+        return "link down (not shut down)"
+    return "not read"
+
+
+def _adjacency_ports(case: CaseFile, edge_id: str) -> str | None:
+    """Each end's interface as this scan read it, for an ``isis:devA:ifA:devB:ifB`` adjacency."""
+    parts = edge_id.split(":")
+    if len(parts) != 5 or parts[0] != "isis":
+        return None
+    extra = _spine_payload(case, "service").get("extra") or {}
+    states: dict[tuple[str, str], dict[str, Any]] = {}
+    for edge in extra.get("physical_operational_edges") or []:
+        device, _, interface = str((edge or {}).get("id") or "").removeprefix("if:").partition(":")
+        states[device, interface] = (edge or {}).get("state") or {}
+    ends = []
+    for device, interface in ((parts[1], parts[2]), (parts[3], parts[4])):
+        if interface == "?":
+            ends.append(f"{device} interface not known")
+            continue
+        # A sub-interface that was not read shares its parent port's link.
+        state = states.get((device, interface)) or states.get((device, interface.split(".", 1)[0]))
+        ends.append(f"{device} {interface} {_port_words(state)}")
+    return "Ports as read this scan: " + "; ".join(ends) + "."
+
+
+def _isis_adjacencies_down_text(case: CaseFile, *, limit: int) -> str | None:
+    """Count and endpoints of IS-IS adjacencies down although both routers answered."""
+    pairs: list[str] = []
+    for issue in case.issues:
+        if not isinstance(issue, dict) or str(issue.get("code") or "") not in _ADJACENCY_DOWN_CODES:
+            continue
+        parts = str(issue.get("edge_id") or "").split(":")
+        label = f"`{parts[1]}` ↔ `{parts[3]}`" if len(parts) == 5 else f"`{issue.get('edge_id')}`"
+        if label not in pairs:
+            pairs.append(label)
+    if not pairs:
+        return None
+    n = len(pairs)
+    more = f", and {n - limit} more" if n > limit else ""
+    return (f"{n} IS-IS adjacenc{'ies' if n != 1 else 'y'} down: "
+            + ", ".join(pairs[:limit]) + more)
 
 
 def _issue_touches_device(issue: dict[str, Any], device: str) -> bool:
@@ -986,6 +1049,13 @@ def format_devices_operator(case: CaseFile) -> list[str]:
         attention: list[str] = []
         for issue in _issues_for_device(case, device):
             mapped = _mapping_attention(issue, unmatched)
+            if mapped and issue.get("code") in _ADJACENCY_DOWN_CODES:
+                from diagnostic_mas.link_optics import optics_line
+
+                ports = _adjacency_ports(case, str(issue.get("edge_id") or ""))
+                mapped = f"{mapped.rstrip('.')}. {ports}" if ports else mapped
+                optics = optics_line(case, str(issue.get("edge_id") or ""))
+                mapped = f"{mapped} {optics}" if optics else mapped
             if mapped:
                 attention.append(mapped)
             elif str(issue.get("code") or "") not in _MAPPING_CODES:
@@ -1403,13 +1473,16 @@ def _incomplete_dig_next_action(dx: dict[str, Any]) -> str:
 
 
 def _incomplete_dig_followup(name: str, dx: dict[str, Any]) -> str:
-    from diagnostic_mas.unknown_breakdown import next_step, pending_gate_review, category_for
+    from diagnostic_mas.unknown_breakdown import (category_for, next_step, pending_gate_review,
+                                                  refused_followup)
 
     def named(text: str) -> str:
         # These texts are written about one service without always naming it.
         return text if name in text else f"For `{name}`: {text}"
 
-    if pending_gate_review(dx) or category_for(dx) == "gate_contradiction":
+    if pending_gate_review(dx):
+        return refused_followup(name, dx)
+    if category_for(dx) == "gate_contradiction":
         return named(next_step(dx))
     structured = dx.get("verification_gap")
     if isinstance(structured, dict) and structured.get("next_check"):
@@ -1870,6 +1943,12 @@ def format_followup_operator(case: CaseFile) -> list[str]:
     if sessions_down:
         items.append(
             f"Investigate {sessions_down} (reported by the devices). "
+            "Services on these devices may share this cause."
+        )
+    adjacencies_down = _isis_adjacencies_down_text(case, limit=6)
+    if adjacencies_down:
+        items.append(
+            f"Investigate {adjacencies_down} (each router's view and port state are in its Attention line). "
             "Services on these devices may share this cause."
         )
 
@@ -2342,6 +2421,9 @@ def format_result_line(case: CaseFile) -> str:
     sessions_down = _bgp_sessions_down_text(case, limit=3)
     if sessions_down:
         parts.append(sessions_down + ".")
+    adjacencies_down = _isis_adjacencies_down_text(case, limit=3)
+    if adjacencies_down:
+        parts.append(adjacencies_down + ".")
     parts.extend(collection_gaps)
     for code, protocol in (("unknown_neighbor_address", "BGP"), ("unknown_neighbor_system_id", "IS-IS")):
         n = codes[code]
@@ -2422,6 +2504,11 @@ def format_run_details(
         lines.append(
             f"**Port and device investigations:** {b.port_investigations_used} / {b.max_port_investigations} "
             f"(tools used {b.port_tools_used}); {by_port} service{'s' if by_port != 1 else ''} explained")
+    from diagnostic_mas.link_optics import optics_reads_line
+
+    optics_reads = optics_reads_line(case)
+    if optics_reads:
+        lines.append(optics_reads)
     if any((b.max_deep_checks, b.max_handoffs, b.deep_checks_used, b.handoffs_used)):
         lines.append(
             f"**Deep checks / handoffs:** "

@@ -444,6 +444,15 @@ async def _run_after_accounting(
 
         case.focus_devices = list(focus)
 
+        # The last published scan's IS-IS adjacencies: one both routers now omit is Down.
+        expected_isis_edges = None
+        if run_isis:
+            from diagnostic_mas.case_delta import load_previous_case
+            from diagnostic_mas.roles.isis import expected_adjacencies
+
+            expected_isis_edges = expected_adjacencies(
+                load_previous_case(diagnostic_mas_state_dir(settings))[0])
+
         set_mcp_stage("spines")
         await run_mandatory_spines(
             client,
@@ -459,6 +468,7 @@ async def _run_after_accounting(
             filter_services_to_devices=filter_services_to_devices,
             spine_concurrent_devices=getattr(args, "spine_concurrent_devices", 1),
             max_port_counter_reads=max(0, getattr(args, "max_port_counter_reads", 400)),
+            expected_isis_edges=expected_isis_edges,
         )
         if nso_unreachable_reason():
             return NSO_UNREACHABLE_EXIT

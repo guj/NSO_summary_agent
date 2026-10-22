@@ -43,8 +43,13 @@ async def run_mandatory_spines(
     filter_services_to_devices: bool = False,
     spine_concurrent_devices: int = 1,
     max_port_counter_reads: int = 400,
+    expected_isis_edges: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Collect physical + enabled layer spines into the case. Returns physical_edges."""
+    """Collect physical + enabled layer spines into the case. Returns physical_edges.
+
+    ``expected_isis_edges`` are the last published scan's adjacencies (see
+    ``expected_adjacencies``), so one missing from both routers' answers is Down.
+    """
     # Lean focus: skip physical inventory walk
     lean_service = (
         run_service
@@ -74,7 +79,8 @@ async def run_mandatory_spines(
     )
 
     if run_isis:
-        spine = await run_isis_spine(client, device_names, physical_edges)
+        spine = await run_isis_spine(client, device_names, physical_edges,
+                                     expected_edges=expected_isis_edges)
         ingest_layer_spine(
             case,
             layer="underlay",
@@ -130,6 +136,12 @@ async def run_mandatory_spines(
 
             await record_port_counters(client, case, ceiling=max_port_counter_reads,
                                        workers=spine_concurrent_devices)
+
+    if run_isis:
+        # Both ends' optics for each IS-IS adjacency down, so the report can set one direction against the other.
+        from diagnostic_mas.link_optics import record_link_optics
+
+        await record_link_optics(client, case, workers=spine_concurrent_devices)
 
     if run_device:
         spine = await run_device_health_spine(client, settings, device_names)

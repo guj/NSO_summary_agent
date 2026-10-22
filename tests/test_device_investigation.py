@@ -138,6 +138,28 @@ async def test_cut_off_device_is_investigated_once_and_explains_services_that_na
 
 
 @pytest.mark.asyncio
+async def test_the_issue_names_the_far_end_of_each_lost_adjacency():
+    messages = []
+
+    def capture(calls):
+        inner = _loop(calls)
+
+        async def fake(client, settings, case, **kwargs):
+            messages.append(kwargs["focus_issue"]["message"])
+            return await inner(client, settings, case, **kwargs)
+        return fake
+
+    lost = {f"isis:{HUB}:HundredGigE0/0/0/1.3000:{PE}:HundredGigE0/0/0/23.3000":
+            {"local": "unknown", "remote": "unknown", "status": "down"}}
+    await _run(_pe_case(isis=lost), capture([]))
+    await _run(_pe_case(), capture([]))
+
+    assert messages[0].endswith(f"its IS-IS adjacencies that are down: HundredGigE0/0/0/23.3000 ↔ "
+                                f"{HUB} HundredGigE0/0/0/1.3000")
+    assert "adjacencies that are down" not in messages[1]          # no far end known: nothing named
+
+
+@pytest.mark.asyncio
 async def test_device_investigation_without_a_conclusion_or_a_budget_explains_nothing():
     case = _pe_case()
     assert await _run(case, _loop([], conclude=False)) == set() and case.diagnoses == []

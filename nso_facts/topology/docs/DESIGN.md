@@ -157,6 +157,12 @@ Underlay edges are **relationships between two devices** — unlike physical int
 
 When one device reports an adjacency toward a device whose `check_isis_adjacencies` failed, the edge is kept one-sided: status `unknown`, the unread end's state `unknown` and its interface `?`, since only that device can name it. A one-sided static edge that is not seen again is not marked down.
 
+When the far device answered but does not list the adjacency, the edge is kept with that end `not listed` — a
+reading, not `unknown`. Its interface comes from a known adjacency (the previous scan's) or stays `?`. The status is
+`unidirectional` when this end lists it Up, otherwise `down`. A working adjacency is always bidirectional, so the
+report calls both "IS-IS adjacency down" and gives each router's view, e.g. "newy-data-sw … lists it as Init;
+rutg-data-sw … does not list it" (`unidirectional_adjacency`); it never says "unidirectional".
+
 ### Static vs operational
 
 | Version | Question | MCP tool(s) |
@@ -203,6 +209,14 @@ IOS-XR config often says **“IS-IS on this interface”** rather than naming th
 
 - **IS-IS-enabled interfaces** linked to physical `if:…` ids, and/or  
 - **Explicit adjacency pairs** when config names a remote endpoint (NED-dependent)
+
+Because config does not name the far end, the expected adjacencies are this scan's live ones plus
+the last published scan's (passed in as `expected_edges`): those that were up there, or already
+held Down as missing. One absent now is Down (`configured_no_adjacency`) only when both routers
+answered `check_isis_adjacencies` this scan, neither interface is in another adjacency now, and
+NSO config still has IS-IS on both interfaces. The previous scan sets the expectation; the proof
+is this scan's two answers. It is not caught on a first scan, or when the adjacency was already
+gone before the last published one.
 
 ### Finding operational IS-IS (live)
 
@@ -276,9 +290,9 @@ Common abbreviations (IOS-XR):
 
 | Code | Meaning |
 |------|---------|
-| `unidirectional_adjacency` | A sees B up; B does not see A (or down) |
+| `unidirectional_adjacency` | Both routers answered but do not both have it Up: one lists it (Up or Init), the other lists another state or does not list it. Reported as "IS-IS adjacency down" with each router's view |
 | `live_adjacency_not_in_config` | Live pair rejected — often **abbreviated vs long interface name** before normalization; or IS-IS not configured on that interface |
-| `configured_no_adjacency` | Static IS-IS on interface; no operational Up adjacency |
+| `configured_no_adjacency` | An expected adjacency (seen earlier in this scan, up in the last published scan, or held Down since) that both routers answered without; shown as Down with both routers named |
 | `unexpected_live_object` | Live neighbor not present in static scope |
 | `collection_error` | MCP / device unreachable for this device |
 
@@ -476,7 +490,7 @@ svc:l2ptp:customer-a:pe-chi1:pe-den1
   "layer": "underlay",
   "code": "unidirectional_adjacency",
   "edge_id": "isis:pe-den1:Gi0/0/1:pe-chi1:Gi0/0/1",
-  "message": "pe-den1 Gi0/0/1 sees up; pe-chi1 Gi0/0/1 sees down"
+  "message": "IS-IS adjacency down: pe-chi1 Gi0/0/1 lists it as Down; pe-den1 Gi0/0/1 lists it as Up"
 }
 ```
 
@@ -543,6 +557,6 @@ Transport: stdio MCP via `nso_facts/mcp_client.py` (`StdioTransport` → `cisco-
   "layer": "underlay",
   "code": "unidirectional_adjacency",
   "edge_id": "isis:pe-den1:Gi0/0/1:pe-chi1:Gi0/0/1",
-  "message": "Configured adjacency: pe-den1 Gi0/0/1 ↔ pe-chi1 Gi0/0/1; pe-den1 sees up, pe-chi1 sees down"
+  "message": "IS-IS adjacency down: pe-chi1 Gi0/0/1 does not list it; pe-den1 Gi0/0/1 lists it as Up"
 }
 ```

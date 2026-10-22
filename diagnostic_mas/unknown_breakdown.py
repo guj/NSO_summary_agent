@@ -1,4 +1,6 @@
 """Report verification gaps without turning missing evidence into network faults."""
+import re
+
 CATEGORIES = {
     'access_failure': 'Access failure',
     'identity_missing': 'Service identity missing',
@@ -33,12 +35,41 @@ def pending_gate_review(dx):
         or dx.get('source') == 'gate')
 
 
+def _refusal(dx):
+    """(verdict the investigation reached, the evidence check's reason), read from the recorded cause."""
+    match = re.search(r'\b(up|down|degraded)\s+refused:\s*(.+)', str(dx.get('cause') or ''))
+    if not match:
+        return None, None
+    # The reason's first sentence is for the reader; what follows it is guidance for the model.
+    reason = re.split(r'\s+\(LLM claimed|\.\s', match[2], maxsplit=1)[0].strip().rstrip('.')
+    return match[1], reason or None
+
+
+def refused_verdict(dx):
+    """The next check for a service whose investigation's verdict the evidence check did not accept."""
+    claimed, reason = _refusal(dx)
+    said = f'reported {claimed}' if claimed else 'reached a verdict'
+    because = f': {reason}' if reason else ''
+    return (f'The investigation {said}, but that was not accepted{because}. '
+            'It stays Unknown, which is not a fault; the next scan checks it again.')
+
+
+def refused_followup(name, dx):
+    claimed, reason = _refusal(dx)
+    said = f'reported {claimed}' if claimed else 'reached a verdict'
+    because = f' ({reason})' if reason else ''
+    return (f'`{name}` stays Unknown: its investigation {said}, but that was not accepted{because}. '
+            'Not a fault; the next scan checks it again.')
+
+
 def next_step(dx):
     category = category_for(dx)
     gap = dx.get('verification_gap') or {}
-    if category == 'gate_contradiction' or pending_gate_review(dx):
-        return ('Review the gate decision against the cited evidence and replay the finding; '
-                'do not infer a network fault or request configuration changes from rejection alone.')
+    if category == 'gate_contradiction':
+        return ("A review found the evidence check wrongly rejected this verdict; report it to the agent's "
+                'maintainers. Make no configuration change on that verdict alone.')
+    if pending_gate_review(dx):
+        return refused_verdict(dx)
     defaults = {
         'access_failure': 'Resolve the named access limitation, then retry the blocked check; customer-host access requires operator follow-up.',
         'identity_missing': 'Retrieve this exact service definition and confirm its device/interface/bridge-domain or routing identifiers.',
@@ -64,16 +95,19 @@ def format_unknown_breakdown(case):
     counts = {key:0 for key in CATEGORIES}
     for dx in unknown.values():
         counts[category_for(dx)] += 1
-    lines = [f'**Unknown breakdown ({len(unknown)} services):**', '']
+    lines = [f"**Unknown breakdown ({len(unknown)} service{'' if len(unknown) == 1 else 's'}):**", '']
     guidance = {
-        'access_failure': 'restore access, then retry the blocked check',
-        'identity_missing': 'confirm the exact service and device objects',
-        'forwarding_incomplete': 'finish the missing direction/check; preserve what passed',
-        'gate_contradiction': 'correct/replay the validator using reviewed evidence',
+        'access_failure': 'a device or endpoint the check needed could not be read; once that access works, the next scan retries',
+        'identity_missing': "the service's devices or interfaces could not be confirmed from NSO; check its definition in NSO",
+        'forwarding_incomplete': "the checks that ran passed, but one piece of evidence is missing (named in the service's details); not a fault",
+        'gate_contradiction': "the evidence check wrongly rejected a verdict, as a review confirmed; report it to the agent's maintainers",
     }
-    lines += [f'- {label}: **{counts[key]}** — {guidance[key]}.' for key,label in CATEGORIES.items()]
+    # Only reasons some service has: a zero would read as a statement about the whole scan.
+    lines += [f'- {label}: **{counts[key]}** — {guidance[key]}.' for key,label in CATEGORIES.items() if counts[key]]
     pending = sum(pending_gate_review(dx) for dx in unknown.values())
-    if pending:
-        lines += ['', f'{pending} of the forwarding-incomplete services have a gate rejection pending review; these are not confirmed gate contradictions.']
-    lines += ['', 'Each service is counted once. These are reasons within Dataplane Unknown, not additional service statuses. Model timeouts and unclassified query gaps remain forwarding-incomplete with their specific blocker shown in the service details.', '']
+    if pending == 1:
+        lines += ['', "1 of them: the evidence check did not accept its investigation's verdict."]
+    elif pending:
+        lines += ['', f"{pending} of them: the evidence check did not accept their investigations' verdicts."]
+    lines += ['', 'Each service is counted once. These are reasons within Unknown, not additional service statuses.', '']
     return lines

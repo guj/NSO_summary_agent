@@ -291,9 +291,14 @@ def _routing_sessions_lost(older: dict[str, Any], newer: dict[str, Any]) -> list
                 if len(devices) == 2 and devices <= answering:
                     rows.append({"protocol": role, "edge_id": edge_id,
                                  "now": "not reported", "states": ""})
-            elif current.get("status") in {"down", "degraded"}:
-                rows.append({"protocol": role, "edge_id": edge_id, "now": str(current["status"]),
-                             "states": f"{current.get('local')} / {current.get('remote')}"})
+            elif current.get("status") in {"down", "degraded", "unidirectional"}:
+                # Read from neither end (an expected adjacency both routers omit): its detail says why.
+                unread = {current.get("local"), current.get("remote")} <= {None, "", "unknown"}
+                states = (str(current["detail"]) if unread and current.get("detail")
+                          else f"{current.get('local')} / {current.get('remote')}")
+                # Two routers that see an adjacency differently: it is down, whatever each lists.
+                now = "down" if current["status"] == "unidirectional" else str(current["status"])
+                rows.append({"protocol": role, "edge_id": edge_id, "now": now, "states": states})
     return rows
 
 

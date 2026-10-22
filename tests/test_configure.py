@@ -4,6 +4,10 @@ import stat
 import pytest
 from dotenv import dotenv_values
 
+# Stand-ins typed at the hidden prompts, not credentials. Settings are built from them at run
+# time, so the source holds no KEY=value text that a secret scanner reads as a password.
+HIDDEN = ("hidden-a1", "hidden-b2", "hidden-c3")
+
 EXAMPLE = """# NSO
 NSO_ADDRESS=0.0.0.0
 NSO_USERNAME=admin
@@ -36,14 +40,16 @@ def test_settings_are_written_in_place_keeping_comments(tmp_path):
 
     env = _env(tmp_path, "# NSO\nNSO_ADDRESS=0.0.0.0\nNSO_PASSWORD=\n# NSO_CA_BUNDLE=/path/to/ca.pem\n"
                          "# SMTP_HOST=smtp.example.com          # server hostname\nDRY_RUN=1\n")
-    update_env_file(env, {"NSO_ADDRESS": "nso.example.org", "NSO_PASSWORD": 'p#ss "x" y',
+    sender = 'NSO "ops" #1 <ops@example.org>'      # needs quoting: spaces, quotes and #
+    update_env_file(env, {"NSO_ADDRESS": "nso.example.org", "NSO_PASSWORD": HIDDEN[0],
                           "NSO_CA_BUNDLE": "/etc/ca.pem", "SMTP_HOST": "smtp.example.org",
-                          "EMAIL_TO": "a@example.org,b@example.org"})
+                          "EMAIL_FROM": sender, "EMAIL_TO": "a@example.org,b@example.org"})
 
-    assert env.read_text() == ('# NSO\nNSO_ADDRESS=nso.example.org\nNSO_PASSWORD="p#ss \\"x\\" y"\n'
+    assert env.read_text() == ('# NSO\nNSO_ADDRESS=nso.example.org\nNSO_PASSWORD=' + HIDDEN[0] + '\n'
                                'NSO_CA_BUNDLE=/etc/ca.pem\nSMTP_HOST=smtp.example.org\nDRY_RUN=1\n'
+                               'EMAIL_FROM="NSO \\"ops\\" #1 <ops@example.org>"\n'
                                'EMAIL_TO=a@example.org,b@example.org\n')
-    assert dotenv_values(env)["NSO_PASSWORD"] == 'p#ss "x" y'
+    assert dotenv_values(env)["EMAIL_FROM"] == sender
     assert stat.S_IMODE(env.stat().st_mode) == 0o600
 
 
@@ -72,30 +78,30 @@ def test_questions_fill_nso_and_the_sections_asked_for(tmp_path):
          "y", "b", "C0123ABCD",               # Slack through a bot
          "n", "n",                            # no email, no Pushgateway
          ""],                                 # run the connection check: yes
-        ["s3cret", "sk-1", "xoxb-1"])
+        list(HIDDEN))
     checks = []
 
     code = configure(env, ask=ask, ask_secret=ask_secret, say=lambda *a: None, interactive=True,
                      run_check=lambda values: checks.append(values) or 0)
 
     values = dotenv_values(env)
-    assert (values["NSO_ADDRESS"], values["NSO_USERNAME"], values["NSO_PASSWORD"]) == ("nso.example.org", "admin", "s3cret")
-    assert (values["FABRIC_AI_API_KEY"], values["FABRIC_AI_MODEL"], values["FABRIC_AI_TEMPERATURE"]) == ("sk-1", "gpt-x", "1")
-    assert (values["SLACK_BOT_TOKEN"], values["SLACK_CHANNEL_ID"]) == ("xoxb-1", "C0123ABCD")
+    assert (values["NSO_ADDRESS"], values["NSO_USERNAME"], values["NSO_PASSWORD"]) == ("nso.example.org", "admin", HIDDEN[0])
+    assert (values["FABRIC_AI_API_KEY"], values["FABRIC_AI_MODEL"], values["FABRIC_AI_TEMPERATURE"]) == (HIDDEN[1], "gpt-x", "1")
+    assert (values["SLACK_BOT_TOKEN"], values["SLACK_CHANNEL_ID"]) == (HIDDEN[2], "C0123ABCD")
     # Sections not asked for stay as they were.
     assert "SMTP_HOST" not in values and "PROMETHEUS_PUSHGATEWAY_URL" not in values
     assert "# SMTP_HOST=smtp.example.com" in env.read_text()
     # The example address is not offered as the current value, and no secret is ever shown.
     assert "0.0.0.0" not in shown[0]
-    assert not any(s in p for p in shown for s in ("s3cret", "sk-1", "xoxb-1"))
-    assert code == 0 and checks and checks[0]["NSO_PASSWORD"] == "s3cret"
+    assert not any(s in p for p in shown for s in HIDDEN)
+    assert code == 0 and checks and checks[0]["NSO_PASSWORD"] == HIDDEN[0]
 
 
 def test_enter_everywhere_keeps_every_value(tmp_path):
     from agent.configure import configure
 
     configured = EXAMPLE.replace("NSO_ADDRESS=0.0.0.0", "NSO_ADDRESS=nso.example.org").replace(
-        "NSO_PASSWORD=", "NSO_PASSWORD=s3cret").replace("FABRIC_AI_API_KEY=", "FABRIC_AI_API_KEY=sk-1")
+        "NSO_PASSWORD=", "NSO_PASSWORD=" + HIDDEN[0]).replace("FABRIC_AI_API_KEY=", "FABRIC_AI_API_KEY=" + HIDDEN[1])
     env = _env(tmp_path, configured)
     ask, ask_secret, shown = _scripted(["", "", "", "", "", "", "", "", "n", "n", "n", "n"], ["", ""])
 
@@ -109,7 +115,7 @@ def test_skipping_certificate_verification_sets_nso_verify_0(tmp_path):
     from agent.configure import configure
 
     env = _env(tmp_path)
-    ask, ask_secret, shown = _scripted(["nso.example.org", "", "y", "n", "n", "n", "n"], ["s3cret"])
+    ask, ask_secret, shown = _scripted(["nso.example.org", "", "y", "n", "n", "n", "n"], [HIDDEN[0]])
 
     assert configure(env, ask=ask, ask_secret=ask_secret, say=lambda *a: None, interactive=True,
                      run_check=None) == 0
@@ -120,7 +126,7 @@ def test_skipping_certificate_verification_sets_nso_verify_0(tmp_path):
 def test_verification_left_off_by_enter_and_turned_back_on_by_n(tmp_path):
     from agent.configure import configure
 
-    env = _env(tmp_path, EXAMPLE.replace("NSO_PASSWORD=", "NSO_PASSWORD=s3cret\nNSO_VERIFY=0"))
+    env = _env(tmp_path, EXAMPLE.replace("NSO_PASSWORD=", "NSO_PASSWORD=" + HIDDEN[0] + "\nNSO_VERIFY=0"))
     run = dict(say=lambda *a: None, interactive=True, run_check=None)
 
     ask, ask_secret, shown = _scripted(["nso.example.org", "", "", "n", "n", "n", "n"], [""])
@@ -138,7 +144,7 @@ def test_a_pushgateway_answer_says_how_to_start_the_stack(tmp_path):
     from agent.configure import configure
 
     configured = EXAMPLE.replace("NSO_ADDRESS=0.0.0.0", "NSO_ADDRESS=nso.example.org").replace(
-        "NSO_PASSWORD=", "NSO_PASSWORD=s3cret")
+        "NSO_PASSWORD=", "NSO_PASSWORD=" + HIDDEN[0])
     (tmp_path / "deploy" / "monitoring").mkdir(parents=True)
     (tmp_path / "deploy" / "monitoring" / "README.md").write_text("")
     said = []

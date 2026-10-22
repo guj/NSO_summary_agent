@@ -425,6 +425,23 @@ def cut_off_devices(case: CaseFile, answered: set[str]) -> list[dict[str, Any]]:
     ]
 
 
+def lost_adjacencies(case: CaseFile, device: str) -> list[str]:
+    """The device's IS-IS adjacencies that are down, as "its interface ↔ far device far interface"."""
+    out: set[str] = set()
+    for ev in case.evidence:
+        if ev.get("kind") != "spine" or ev.get("role") != "isis":
+            continue
+        for edge in (ev.get("payload") or {}).get("operational_edges") or []:
+            parts = str(edge.get("id") or "").split(":")
+            if ((edge.get("state") or {}).get("status") != "down" or len(parts) != 5
+                    or "?" in parts or device not in (parts[1], parts[3])):
+                continue
+            (_, near), far = ((parts[1], parts[2]), (parts[3], parts[4])) if parts[1] == device \
+                else ((parts[3], parts[4]), (parts[1], parts[2]))
+            out.add(f"{near} ↔ {far[0]} {far[1]}")
+    return sorted(out)
+
+
 def _dependents(case: CaseFile, device: str):
     """Services on the device that do not pass and whose own config names another device."""
     diagnosed = {
@@ -475,12 +492,15 @@ async def run_device_investigations(
             break
         n = len(target["sessions_down"])
         target = {**target, "services": sorted(str(r["name"]) for _ev, r in dependents)}
+        # The far end of each lost adjacency, so the investigation can compare both directions.
+        lost = lost_adjacencies(case, device)
         payload = await _investigate(
             client, settings, case, target, kind=DEVICE_SOURCE, code="device_cut_off", layer="routing",
             edge_id=f"device:{device}",
             message=(f"{device} answered this scan's queries but has no IS-IS adjacency up and "
                      f"{n} BGP session{'s' if n != 1 else ''} down, none up; "
-                     f"{len(dependents)} of its services use another device"),
+                     f"{len(dependents)} of its services use another device"
+                     + (f"; its IS-IS adjacencies that are down: {'; '.join(lost)}" if lost else "")),
             prompt=_device_prompt(), device_names=device_names, openai_client=openai_client, tool_loop=tool_loop,
             confirm=lambda readings, device=device: {"sessions_now": _sessions_state(device, readings)})
         if not payload["concluded"] or payload["sessions_now"] != "down":

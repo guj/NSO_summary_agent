@@ -19,12 +19,34 @@ def test_primary_reason(gap, expected):
 
 def test_gate_review_requires_evidence_and_reason():
     dx = {'source':'gate', 'verification_gap':{'next_check':'Change configuration'}}
-    assert 'Review the gate' in _incomplete_dig_next_action(dx)
+    # A refused verdict's own suggestion never reaches the reader.
+    step = _incomplete_dig_next_action(dx)
+    assert 'Change configuration' not in step and 'not accepted' in step and 'not a fault' in step
     dx['gate_review'] = {'outcome':'contradiction_confirmed'}
     assert category_for(dx) == 'forwarding_incomplete'
     dx['gate_review'].update(reason='Scoped evidence contradicts rejection', evidence_ids=['ev_2'])
     assert category_for(dx) == 'gate_contradiction'
-    assert 'configuration changes' in next_step(dx)
+    assert 'configuration change' in next_step(dx) and 'maintainers' in next_step(dx)
+
+
+def test_a_refused_up_is_explained_with_the_checks_own_reason():
+    from diagnostic_mas.operator_report import _incomplete_dig_followup
+
+    dx = {'source': 'llm',
+          'verification_gap': {'blocker': 'gate_rejected',
+                               'next_check': 'Collect the evidence required by the rejected conclusion before reassessing.'},
+          'cause': '[gate] l2sts up refused: required bidirectional forwarding evidence is incomplete. '
+                   'Preserve the verified checks and named remaining gap in the observations. (LLM claimed up: No fault)'}
+    step = _incomplete_dig_next_action(dx)
+    follow = _incomplete_dig_followup('link_d-1', dx)
+
+    assert step.startswith('The investigation reported up, but that was not accepted: '
+                           'required bidirectional forwarding evidence is incomplete.')
+    assert follow.startswith('`link_d-1` stays Unknown: its investigation reported up, but that was not accepted '
+                             '(required bidirectional forwarding evidence is incomplete).')
+    for text in (step, follow):
+        assert 'not a fault' in text.lower() and 'next scan' in text
+        assert 'gate' not in text.lower() and 'Preserve' not in text and 'replay' not in text
 
 
 def test_normalization_preserves_verified_direction_but_not_llm_gate_claim():
@@ -55,6 +77,20 @@ def test_breakdown_excludes_passes_and_not_checked_and_counts_once(monkeypatch):
     assert 'Access failure: **1**' in text
     assert 'Service identity missing: **1**' in text
     assert 'Forwarding evidence incomplete: **2**' in text
-    assert 'Gate contradiction: **0**' in text
-    assert '1 of the forwarding-incomplete' in text
+    assert 'Gate contradiction' not in text                 # a category with no services is not listed
+    assert "1 of them: the evidence check did not accept its investigation's verdict." in text
+    assert 'replay' not in text and 'pending review' not in text
+    assert 'finish the missing direction' not in text       # written for the reader, not the investigator
     assert rows['pass']['dataplane_status'] == 'up'
+
+
+def test_one_unknown_service_is_counted_in_the_singular(monkeypatch):
+    from diagnostic_mas import operator_report, device_health
+    monkeypatch.setattr(operator_report, '_dataplane_by_name',
+                        lambda case: {'gate': {'dataplane_status': 'unknown', 'source': 'gate'}})
+    monkeypatch.setattr(device_health, 'services_from_case', lambda case: {'gate': {'name': 'gate'}})
+    text = '\n'.join(format_unknown_breakdown(SimpleNamespace(service_coverage={})))
+    assert 'Unknown breakdown (1 service):' in text
+    bullets = [line for line in text.splitlines() if line.startswith('- ')]
+    assert bullets == ["- Forwarding evidence incomplete: **1** — the checks that ran passed, but one piece of "
+                       "evidence is missing (named in the service's details); not a fault."]
