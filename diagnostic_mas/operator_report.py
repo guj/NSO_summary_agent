@@ -530,6 +530,42 @@ def _drill_findings_by_issue_key(case: CaseFile) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _routing_findings(case: CaseFile) -> list[tuple[str, tuple[str, str], dict[str, Any]]]:
+    """Concluded LLM drill findings on an IS-IS adjacency or BGP session: (edge id, its devices, finding).
+
+    The latest finding per edge. One that found a BGP session Established has its own line
+    on the Routing line (``_bgp_routing_qualification``) and is left out here.
+    """
+    out: dict[str, tuple[str, tuple[str, str], dict[str, Any]]] = {}
+    for ev in case.evidence:
+        payload = ev.get("payload") if ev.get("kind") == "drill_finding" else None
+        if not isinstance(payload, dict):
+            continue
+        edge = str(payload.get("issue_edge_id") or "")
+        parts = edge.split(":")
+        pair = ((parts[1], parts[3]) if parts[0] == "isis" and len(parts) == 5
+                else _devices_from_bgp_edge_id(edge) if parts[0] == "bgp" else None)
+        if pair and payload.get("session_state") != "established":
+            out[edge] = (edge, pair, payload)
+    return list(out.values())
+
+
+def _routing_finding_lines(case: CaseFile, device: str) -> list[str]:
+    from diagnostic_mas.port_investigation import brief
+
+    lines = []
+    for edge, (a, b), finding in _routing_findings(case):
+        if device not in (a, b):
+            continue
+        what = "IS-IS adjacency" if edge.startswith("isis:") else "BGP session"
+        line = (f"**Investigated by LLM** (confidence {finding.get('confidence') or 'not given'}; not verified): "
+                f"{what} {a} ↔ {b} — {scrub_internal_ids(brief(finding.get('cause'), 500))}")
+        # Room for the evidence sentence and the first step: these findings write long sentences.
+        then = scrub_internal_ids(brief(finding.get("fix_suggestion"), 360))
+        lines.append(line + (f" Next: {then}" if then else ""))
+    return lines
+
+
 def _bgp_routing_qualification(
     case: CaseFile, device: str, bgp_count: str
 ) -> tuple[str, str | None]:
@@ -1071,6 +1107,10 @@ def format_devices_operator(case: CaseFile) -> list[str]:
                 lines.append("")
                 for item in attention:
                     lines.append(f"- {item}")
+            lines.append("")
+        investigated = _routing_finding_lines(case, device)
+        if investigated:
+            lines.extend(investigated)
             lines.append("")
     return lines
 
@@ -1941,15 +1981,22 @@ def format_followup_operator(case: CaseFile) -> list[str]:
 
     sessions_down = _bgp_sessions_down_text(case, limit=6)
     if sessions_down:
+        down_sessions = {str(i.get("edge_id") or "") for i in case.issues if str(i.get("code") or "") == "session_down"}
+        found = any(edge in down_sessions for edge, _pair, _finding in _routing_findings(case))
         items.append(
-            f"Investigate {sessions_down} (reported by the devices). "
-            "Services on these devices may share this cause."
+            f"Investigate {sessions_down} (reported by the devices"
+            + ("; an LLM investigation's finding is in the devices' blocks" if found else "")
+            + "). Services on these devices may share this cause."
         )
     adjacencies_down = _isis_adjacencies_down_text(case, limit=6)
     if adjacencies_down:
+        down_edges = {str(i.get("edge_id") or "") for i in case.issues
+                      if str(i.get("code") or "") in _ADJACENCY_DOWN_CODES}
+        found = any(edge in down_edges for edge, _pair, _finding in _routing_findings(case))
         items.append(
-            f"Investigate {adjacencies_down} (each router's view and port state are in its Attention line). "
-            "Services on these devices may share this cause."
+            f"Investigate {adjacencies_down} (each router's view and port state are in its Attention line"
+            + ("; an LLM investigation's finding is in the devices' blocks" if found else "")
+            + "). Services on these devices may share this cause."
         )
 
     # 1) One action per device for live-MCP quarantine and/or sync unknowns.
