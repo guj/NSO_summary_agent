@@ -124,3 +124,10 @@ def test_send_test_email_sends_message(monkeypatch):
     assert len(sent) == 1
     assert sent[0]["To"] == "ops@example.com"
     assert "email configuration test" in sent[0].get_content()
+
+
+def test_recipients_may_be_separated_by_commas_or_semicolons():
+    from agent.config import _parse_email_list
+
+    assert _parse_email_list("a@example.org, b@example.org; c@example.org;") == [
+        "a@example.org", "b@example.org", "c@example.org"]

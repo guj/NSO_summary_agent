@@ -13,7 +13,7 @@ For a non-Docker install, see [DIAGNOSTIC_RUNNER.md](DIAGNOSTIC_RUNNER.md).
 
 ## Build
 
-The build needs this repo and a checkout of the FABRIC MCP server. The Dockerfile copies the MCP server from that checkout instead of installing it from GitHub during the build.
+The build needs this repo and a checkout of the FABRIC MCP server. The Dockerfile copies the MCP server from that checkout instead of installing it from GitHub during the build. That repository is private, so the clone needs your GitHub sign-in, as in [step 1 of the diagnostic guide](DIAGNOSTIC_RUNNER.md#1-get-this-repository); its `main` from 21 October 2026 (pull request #11) or later is needed.
 
 ```bash
 git clone https://github.com/fabric-testbed/fabric-nso-mcp-server /path/to/fabric-nso-mcp-server

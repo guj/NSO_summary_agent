@@ -1,6 +1,6 @@
 # Prometheus + Grafana (local monitoring stack)
 
-Optional **Pushgateway → Prometheus → Grafana** stack for NSO summary time-series metrics. The NSO agent runs on the **host** (cron/launchd); this compose file runs the metrics backends in Docker.
+Optional **Pushgateway → Prometheus → Grafana** stack for the diagnostic runner's time-series metrics. The NSO agent runs on the **host** (cron/launchd); this compose file runs the metrics backends in Docker.
 
 ```
 nso-diagnostic-run (host)  --POST-->  Pushgateway :9091
@@ -37,7 +37,7 @@ docker compose ps
 | Prometheus | http://localhost:9090 | — |
 | Grafana | http://localhost:3000 | `admin` / `admin` |
 
-Grafana provisions the **Prometheus** datasource and loads dashboard **NSO Summary** (folder **NSO**).
+Grafana provisions the **Prometheus** datasource and loads two dashboards in folder **NSO**: **NSO Diagnostic**, the scan results, and **NSO Summary**, a Pushgateway smoke test.
 
 ## Which folder the stack reads from
 
@@ -116,7 +116,7 @@ Use this for a simple “is it working?” check.
 
 Switch **Graph** / **Table** above the results. Set time range top-right (e.g. **Last 15 minutes**).
 
-**Dashboard (optional):** **☰ → Dashboards → NSO → NSO Summary**
+**Dashboards (optional):** **☰ → Dashboards → NSO → NSO Diagnostic** for scan results; **NSO Summary** shows the smoke-test metric.
 
 ## View what is in Pushgateway
 
@@ -170,7 +170,8 @@ deploy/monitoring/
       datasources/prometheus.yml
       dashboards/dashboards.yml
     dashboards/
-      nso-summary.json        # starter dashboard
+      nso-diagnostic.json     # scan results (NSO Diagnostic)
+      nso-summary.json        # Pushgateway smoke test (NSO Summary)
   README.md                   # this file
 ```
 
@@ -192,7 +193,7 @@ docker compose restart prometheus
 
 ## Using an existing Prometheus
 
-If you keep your current `prometheus` container (e.g. `4efce14ee42c`):
+If you keep your current `prometheus` container:
 
 1. Merge the `pushgateway` job from `prometheus/prometheus.yml` into your live config.
 2. Ensure Prometheus can reach Pushgateway:
@@ -206,25 +207,26 @@ docker run -d --name nso-pushgateway -p 9091:9091 prom/pushgateway:v1.11.0
 
 4. Point Grafana at your Prometheus URL in `grafana/provisioning/datasources/prometheus.yml` if not using compose networking.
 
-## NSO agent integration (Phase 1)
+## NSO agent integration
 
-Set in the agent project `.env` (see `.env.example`):
+Set in the agent project `.env` (see `.env.example`), or answer yes to the Pushgateway
+question in `nso-diagnostic-run --configure`:
 
 ```bash
 PROMETHEUS_PUSHGATEWAY_URL=http://127.0.0.1:9091
-PROMETHEUS_JOB=nso-summary
-PROMETHEUS_INSTANCE=laptop
+PROMETHEUS_JOB=nso-summary        # the default job name
+PROMETHEUS_INSTANCE=laptop        # default: default
 ```
 
-After each successful **non-dry-run**, the agent PUTs gauges to:
+After each scan that is not a dry run, the agent PUTs gauges to:
 
 `http://localhost:9091/metrics/job/nso-summary/instance/<PROMETHEUS_INSTANCE>`
 
-Phase 1+ names include: `nso_summary_run_success`, `nso_summary_last_run_timestamp_seconds`, `nso_summary_run_duration_seconds`, `nso_fleet_devices_total`, `nso_fleet_devices_in_sync`, `nso_fleet_devices_out_of_sync`, `nso_fleet_devices_sync_error`, `nso_services_up` / `nso_services_down` (`service_type` label), `nso_isis_adjacencies_up` / `_down`, `nso_bgp_sessions_up` / `_down`, `nso_physical_links_up` / `_down`, `nso_infra_cpu_alerts` / `nso_infra_memory_alerts`, `nso_hardware_*_alerts`, `nso_inventory_review_devices`, `nso_delta_*`, `nso_topology_issues` (`layer` label). Every series includes `pipeline="agent"` or `pipeline="multi-agent"`.
+Every scan pushes these counts: `nso_summary_run_success`, `nso_summary_last_run_timestamp_seconds`, `nso_summary_run_duration_seconds`, `nso_fleet_devices_total`, `nso_fleet_devices_in_sync`, `nso_fleet_devices_out_of_sync`, `nso_fleet_devices_sync_error`, `nso_services_up` / `nso_services_down` (`service_type` label), `nso_isis_adjacencies_up` / `_down`, `nso_bgp_sessions_up` / `_down`, `nso_physical_links_up` / `_down`, `nso_infra_cpu_alerts` / `nso_infra_memory_alerts`, `nso_hardware_*_alerts`, `nso_inventory_review_devices`, `nso_delta_*`, `nso_topology_issues` (`layer` label). Every series carries `pipeline="diagnostic"`. The `nso_delta_*` counts are always 0: changes since the previous scan are in the report, not in metrics.
 
-Unset `PROMETHEUS_PUSHGATEWAY_URL` to skip. If Pushgateway is down, the agent logs a warning and still finishes the report.
+Unset `PROMETHEUS_PUSHGATEWAY_URL` to skip, or add `--skip-metrics` for one scan. If Pushgateway is down, the agent logs a warning and still finishes the report.
 
-The diagnostic runner also pushes:
+It also pushes:
 
 | Metric | Meaning |
 |---|---|

@@ -861,6 +861,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Archive complete MCP responses locally, including during dry runs; no publishing",
     )
     parser.add_argument(
+        "--configure",
+        action="store_true",
+        help=(
+            "Ask for the NSO, LLM, Slack, email and Pushgateway settings and write them "
+            "into .env in the current directory, then offer --check-connection; Enter "
+            "keeps a current value"
+        ),
+    )
+    parser.add_argument(
         "--check-connection",
         action="store_true",
         help=(
@@ -963,7 +972,17 @@ def main(argv: list[str] | None = None) -> int:
     # --max-drills is a deprecated alias for --max-tools-per-drill
     if getattr(args, "max_drills", None) is not None:
         args.max_tools_per_drill = int(args.max_drills)
-    return asyncio.run(_run(args))
+    if args.configure:
+        from agent.configure import configure_from_cli
+
+        return configure_from_cli()
+    from agent.config import SettingsError
+
+    try:
+        return asyncio.run(_run(args))
+    except SettingsError as exc:
+        print(f"Settings: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

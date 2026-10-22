@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import math
 import re
+import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -128,7 +130,7 @@ def _mcp_args() -> list[str]:
         f"--nso-scheme={os.environ.get('NSO_SCHEME', 'https')}",
         f"--nso-address={os.environ['NSO_ADDRESS']}",
         f"--nso-port={os.environ.get('NSO_PORT', '443')}",
-        f"--nso-username={os.environ.get('NSO_USERNAME', 'admin')}",
+        f"--nso-username={os.environ.get('NSO_USERNAME') or 'admin'}",
         f"--nso-timeout={os.environ.get('NSO_TIMEOUT', '10')}",
     ]
     # MCP default is verify=True; pass an explicit flag either way.
@@ -191,24 +193,66 @@ def _parse_keep_days(raw: str | None) -> int:
     return value
 
 
+# .env.example's placeholders: a setting still holding one has not been filled in.
+EXAMPLE_VALUES: dict[str, frozenset[str]] = {
+    "NSO_ADDRESS": frozenset({"0.0.0.0"}),
+    "FABRIC_AI_MODEL": frozenset({"your-claude-opus5"}),
+}
+
+
+class SettingsError(RuntimeError):
+    """Required settings are missing; the message names every one of them."""
+
+
+def missing_settings(values: Mapping[str, str | None], *, require_llm_key: bool) -> list[str]:
+    """What a scan still needs from .env, all at once."""
+    problems = []
+    address = (values.get("NSO_ADDRESS") or "").strip()
+    if not address:
+        problems.append("NSO_ADDRESS is required")
+    elif address in EXAMPLE_VALUES["NSO_ADDRESS"]:
+        problems.append(f"NSO_ADDRESS is required (still the example value {address})")
+    if not values.get("NSO_PASSWORD"):
+        problems.append("NSO_PASSWORD is required")
+    if require_llm_key and not values.get("FABRIC_AI_API_KEY"):
+        problems.append("FABRIC_AI_API_KEY is required (or run with --skip-llm)")
+    return problems
+
+
+def shell_path(path: Path, *, pwd: str | None = None, cwd: str | None = None) -> Path:
+    """``path`` named through the shell's current folder ($PWD) when it lies under it.
+
+    On macOS /tmp is a link to /private/tmp, and Python reports the /private form; the
+    shell keeps the name that was typed. A $PWD that is not the current folder is ignored.
+    """
+    pwd = os.environ.get("PWD") if pwd is None else pwd
+    cwd = os.getcwd() if cwd is None else cwd
+    if not pwd or not os.path.isabs(pwd) or os.path.realpath(pwd) != os.path.realpath(cwd):
+        return path
+    try:
+        inside = Path(os.path.realpath(path)).relative_to(os.path.realpath(pwd))
+    except ValueError:
+        return path
+    return Path(pwd) / inside if inside.parts else Path(pwd)
+
+
+def _default_mcp_server_cmd(executable: str | None = None) -> str:
+    """The MCP server installed next to this Python (install.py puts both in one .venv), else PATH."""
+    candidate = Path(executable or sys.executable).parent / "cisco-nso-mcp-server"
+    return str(candidate) if candidate.exists() else "cisco-nso-mcp-server"
+
+
 def load_settings(*, require_llm_key: bool = True) -> Settings:
-    nso_password = os.environ.get("NSO_PASSWORD")
-    if not nso_password:
-        raise RuntimeError("NSO_PASSWORD is required")
-
+    problems = missing_settings(os.environ, require_llm_key=require_llm_key)
+    if problems:
+        raise SettingsError("; ".join(problems)
+                            + ". Set them in .env, or run: nso-diagnostic-run --configure")
+    nso_password = os.environ["NSO_PASSWORD"]
     fabric_key = os.environ.get("FABRIC_AI_API_KEY") or ""
-    if require_llm_key and not fabric_key:
-        raise RuntimeError("FABRIC_AI_API_KEY is required")
+    nso_address = os.environ["NSO_ADDRESS"]
 
-    nso_address = os.environ.get("NSO_ADDRESS")
-    if not nso_address:
-        raise RuntimeError("NSO_ADDRESS is required")
-
-    root = Path(__file__).resolve().parent.parent
-    mcp_cmd = os.environ.get(
-        "MCP_SERVER_CMD",
-        "cisco-nso-mcp-server",
-    )
+    root = shell_path(Path(__file__).resolve().parent.parent)
+    mcp_cmd = os.environ.get("MCP_SERVER_CMD") or _default_mcp_server_cmd()
 
     return Settings(
         mcp_server_cmd=mcp_cmd,
@@ -288,7 +332,8 @@ def _parse_optional_path(value: str | None) -> Path | None:
 
 
 def _parse_email_list(value: str) -> list[str]:
-    return [part.strip() for part in value.split(",") if part.strip()]
+    # Commas, or semicolons as Outlook writes address lists.
+    return [part.strip() for part in re.split(r"[,;]", value) if part.strip()]
 
 
 def _parse_ignore_service_types(value: str | None) -> frozenset[str]:

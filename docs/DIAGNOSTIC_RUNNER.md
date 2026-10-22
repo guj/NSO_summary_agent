@@ -1,23 +1,145 @@
 # Diagnostic runner
 
-## Independent checkout
+## New machine, step by step
 
-Use Python 3.12 or newer. From the checkout root:
+For Linux or macOS with nothing installed but Python and, ideally, git. You need a
+GitHub account that can read the fabric-testbed repositories (the MCP server's is
+private), network access to GitHub and PyPI while installing, HTTPS access to your NSO
+server (through a VPN if your site requires one), and an NSO account. An
+OpenAI-compatible LLM endpoint and key are optional.
+
+### 1. Get this repository
+
+With git:
+
+```sh
+git clone -b <branch> <URL of this repository> nso-agent
+```
+
+For a private repository, git needs your GitHub sign-in: over HTTPS, your username and a
+personal access token as the password (or one already stored by a credential helper or
+`gh auth login`); over SSH (`git@github.com:…`), a key added to your GitHub account. On a
+Mac without the developer tools, `git --version` offers to install them.
+
+Without git: use **Code → Download ZIP** on this repository's GitHub page, signed in, on
+the branch you are reading, unpack it (for example `python3 -m zipfile -e <file>.zip .`),
+and rename the folder to `nso-agent`. Step 2 then needs a token, as described there.
+
+### 2. Install
+
+```sh
+cd nso-agent
+python3 install.py
+```
+
+It needs Python 3.12 or newer. If `python3` is older, it looks for `python3.12` or newer
+on your PATH and uses that. If there is none, it stops and says how to install one: the
+installer from <https://www.python.org/downloads/> on macOS,
+`sudo apt install python3.12 python3.12-venv` on Ubuntu or Debian, or
+`sudo dnf install python3.12` on RHEL, Rocky or Alma 9.
+
+It then:
+
+- puts the NSO MCP server into `mcp-server/`, at the version this agent was tested with
+  (`--mcp-ref main` takes the latest instead). With git, it clones it the way you cloned
+  this repository, SSH or HTTPS, with the same sign-in. Without git, or when that clone
+  fails, it downloads it through GitHub's API with a personal access token that can read
+  `fabric-testbed/fabric-nso-mcp-server` (a classic token needs the `repo` scope):
+  `GITHUB_TOKEN=<token> python3 install.py`. The token is used for that download only and
+  is not saved;
+- creates `.venv` and installs the MCP server and the agent into it;
+- copies `.env.example` to `.env`, only if `.env` does not exist yet;
+- asks for your settings and writes them into `.env` (step 3).
+
+It does not start Pushgateway, Prometheus or Grafana. They are optional and run in
+Docker: for the Grafana dashboards, start them with `docker compose up -d` in
+`deploy/monitoring`, as described in [deploy/monitoring/README.md](../deploy/monitoring/README.md),
+and answer yes to the Pushgateway question. Scans run and report the same without them.
+
+Running it again is safe: it keeps your `.env`, and changes the MCP server only for a
+different version. Do not `pip install cisco-nso-mcp-server` from PyPI instead:
+that is Cisco's upstream package, without the FABRIC tools this agent uses.
+
+### 3. Answer the setting questions
+
+At the end of the install, the agent asks for its settings and writes them into `.env`:
+
+| Section | Asked | What it asks |
+|---|---|---|
+| NSO | always | hostname (one that its HTTPS certificate names), username, password, whether to skip certificate verification (`NSO_VERIFY=0`, as for a self-signed certificate), and if not, a CA bundle path if NSO's certificate is from a private CA |
+| LLM | if you want one | base URL, API key, model id, temperature |
+| Slack | if you want reports there | a bot token and channel ID to upload the HTML report, or a webhook URL for a one-line notice |
+| Email | if you want reports by email | SMTP host and port, login if needed, from and to addresses |
+| Pushgateway | if you run Grafana | the Pushgateway URL (default `http://127.0.0.1:9091`); the stack itself you start as in [deploy/monitoring/README.md](../deploy/monitoring/README.md) |
+
+Press Enter to keep the value shown in brackets. Passwords, keys and tokens are typed
+without echo and shown only as "(set)". A section you answer "no" to is left as it was.
+Without an LLM, add `--skip-llm` to every scan. At the end it offers to run the
+connection check.
+
+To change settings later, run the same questions again from the checkout root:
+
+```sh
+.venv/bin/nso-diagnostic-run --configure
+```
+
+You can also edit `.env` directly; keep it private. `MCP_SERVER_CMD` is not needed: the
+agent uses the MCP server installed next to it in `.venv`. If a required setting is
+missing, a scan stops with one message naming each of them.
+
+### 4. Check, then scan
+
+```sh
+.venv/bin/nso-diagnostic-run --check-connection
+.venv/bin/nso-diagnostic-run --skip-llm --dry-run
+```
+
+`--check-connection` starts the MCP server and asks NSO for its device list, and checks
+the LLM key and delivery settings when they are set. The second command runs a full scan
+without the LLM and prints the report; nothing is saved or sent. The sections below cover
+LLM use, publishing to Slack and email, and scheduling.
+
+### Using your own MCP server installation
+
+Set `MCP_SERVER_CMD` in `.env` to the absolute path of its `cisco-nso-mcp-server`
+command. It must be fabric-nso-mcp-server's `main` from 21 October 2026 (pull request
+#11) or later, which provides the `get_bgp_summary` tool the agent reads BGP state with.
+
+## Manual installation
+
+The same result as `install.py`, step by step, with git. Both projects need Python 3.12
+or newer: if `python3 --version` shows an older one, use `python3.12` (or newer) in the
+first line, installed as in [step 2](#2-install). From the checkout root:
 
 ```sh
 python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e .
-cp .env.example .env
-nso-diagnostic-run --help
+git clone https://github.com/fabric-testbed/fabric-nso-mcp-server.git ../fabric-nso-mcp-server
+.venv/bin/python -m pip install ../fabric-nso-mcp-server
+.venv/bin/python -m pip install -e .
+.venv/bin/nso-diagnostic-run --configure
+.venv/bin/nso-diagnostic-run --check-connection
 ```
 
-Install the [Cisco NSO MCP server](https://github.com/fabric-testbed/fabric-nso-mcp-server)
-separately, following its installation instructions. Set `MCP_SERVER_CMD` to its
-executable (absolute path if not on PATH), and configure NSO address and credentials
-in your local `.env`. No credentials, virtual environments or previous run state
-are shipped. Run from the checkout root so local configuration is unambiguous.
-Use `nso-diagnostic-run` directly; concurrency is built into this command.
+The [FABRIC NSO MCP server](https://github.com/fabric-testbed/fabric-nso-mcp-server)
+repository is private, so the clone needs your GitHub sign-in, as in
+[step 1](#1-get-this-repository). Its `main` from 21 October 2026 (pull request #11) or
+later works. To match the version `install.py` installs, run
+`git -C ../fabric-nso-mcp-server checkout <commit>` before installing it, with the commit
+named `MCP_REF` in `install.py`. Clone it outside this checkout: `mcp-server/` belongs to
+`install.py`. To update it later, `git -C ../fabric-nso-mcp-server pull` and run its
+`pip install` line again.
+
+Installed into the same `.venv`, the MCP server is found without `MCP_SERVER_CMD`. Its
+own README installs it with `uv` into its own environment instead; that also works, with
+`MCP_SERVER_CMD` set as in
+[Using your own MCP server installation](#using-your-own-mcp-server-installation). Its
+`uvx` example runs Cisco's package from PyPI, which lacks the FABRIC tools.
+
+`--configure` creates `.env` from `.env.example` and asks for the settings, as in
+[step 3](#3-answer-the-setting-questions); you can also copy `.env.example` to `.env`
+and edit it. No credentials, virtual environments or previous run state are shipped.
+Run from the checkout root so local configuration is unambiguous. Use
+`nso-diagnostic-run` directly; concurrency is built into this command.
 
 LLM settings are `FABRIC_AI_API_KEY`, `FABRIC_AI_API_URL`, and `FABRIC_AI_MODEL`.
 Use an OpenAI-compatible chat-completions endpoint, not an Anthropic-only endpoint.
@@ -88,9 +210,10 @@ regular installed copy are separate steps.
 
 Edit `.env` before a live run. Do not commit it.
 
-- **NSO access:** set `MCP_SERVER_CMD` to the separately installed MCP executable,
-  `NSO_ADDRESS` to your NSO hostname or IP, `NSO_USERNAME` to your account, and
-  `NSO_PASSWORD` to its password. HTTPS port 443 is the default.
+- **NSO access:** set `NSO_ADDRESS` to your NSO hostname or IP, `NSO_USERNAME` to your
+  account, and `NSO_PASSWORD` to its password. HTTPS port 443 is the default. Set
+  `MCP_SERVER_CMD` only for an MCP server installed elsewhere; the one `install.py`
+  puts in `.venv` is found on its own.
 - **Certificate verification:** enabled by default (`NSO_VERIFY=1`). Use a hostname
   covered by the certificate and, for a private CA, `NSO_CA_BUNDLE`. A CA bundle
   does not fix a hostname/IP mismatch. `NSO_VERIFY=0` disables verification; use
@@ -133,7 +256,7 @@ report link; it does not upload or host files itself.
 ### Email: SMTP host is required
 
 To enable email, set **all three** of `SMTP_HOST`, `EMAIL_FROM`, and `EMAIL_TO`.
-The HTML report is attached. `EMAIL_TO` accepts comma-separated recipients.
+The HTML report is attached. `EMAIL_TO` accepts several recipients, separated by commas or semicolons.
 
 - `SMTP_HOST` is the mail server hostname, not an email address.
 - `SMTP_PORT` defaults to 587 and `SMTP_USE_TLS` to 1 (STARTTLS); use settings

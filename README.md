@@ -15,11 +15,12 @@ LLM settings use the env names `FABRIC_AI_API_KEY`, `FABRIC_AI_API_URL`, and
 Anthropic-only bases (for example `…/anthropic`) are not supported.
 
 **Quick start:** follow [docs/DIAGNOSTIC_RUNNER.md](docs/DIAGNOSTIC_RUNNER.md) to install, configure, and run `nso-diagnostic-run`.
+On a machine with nothing but Python, start with its [step-by-step section](docs/DIAGNOSTIC_RUNNER.md#new-machine-step-by-step).
 
 ## Prerequisites
 
 - Python 3.12+
-- Running [fabric-nso-mcp-server](https://github.com/fabric-testbed/fabric-nso-mcp-server), a version that provides `get_bgp_summary` (BGP session state is read through it)
+- The FABRIC [NSO MCP server](https://github.com/fabric-testbed/fabric-nso-mcp-server): `install.py` installs it, cloning it with git (its repository is private) or downloading it with a `GITHUB_TOKEN`. Your own installation must be its `main` from 21 October 2026 (pull request #11) or later, which provides `get_bgp_summary`; not the `cisco-nso-mcp-server` package on PyPI, which lacks the FABRIC tools
 - Optional LLM API access via `FABRIC_AI_API_KEY` / `FABRIC_AI_API_URL` / `FABRIC_AI_MODEL` (OpenAI-compatible). Run `nso-diagnostic-run --skip-llm` without a model. Free/institutional access depends on provider eligibility and quotas; paid endpoints also work. See [model choices and our trial experience](docs/DIAGNOSTIC_RUNNER.md#running-without-an-llm-and-choosing-a-model).
 
 ## Diagnostic runner: standalone checkout
@@ -27,8 +28,9 @@ Anthropic-only bases (for example `…/anthropic`) are not supported.
 All diagnostic code, service prompts, operational checks and HTML topology assets
 are included here. No other checkout is required. Install
 and configure this checkout as below, then see [the diagnostic guide](docs/DIAGNOSTIC_RUNNER.md).
-The external Cisco NSO MCP server must be installed separately and reachable via
-`MCP_SERVER_CMD`; this repository does not vendor that server or credentials.
+`install.py` clones the FABRIC NSO MCP server into `mcp-server/` and installs it next
+to the agent; it is not part of this repository. To use your own installation, set
+`MCP_SERVER_CMD`. No credentials are included.
 
 ## Setup
 
@@ -36,14 +38,15 @@ Prefer Docker (no local Python venv)? See [docs/DOCKER.md](docs/DOCKER.md).
 
 ```bash
 cd /path/to/checkout
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-
-cp .env.example .env
-# Edit .env: NSO_PASSWORD, FABRIC_AI_API_KEY, NSO_ADDRESS, etc.
-# MCP_SERVER_CMD: absolute path to cisco-nso-mcp-server if not on PATH
+python3 install.py                          # MCP server and agent into .venv, then asks for the settings
+.venv/bin/nso-diagnostic-run --check-connection
+.venv/bin/nso-diagnostic-run --configure    # change the settings later
 ```
+
+For a manual installation, or to use your own MCP server, see
+[the diagnostic guide](docs/DIAGNOSTIC_RUNNER.md#manual-installation).
+`install.py` does not start the optional Pushgateway, Prometheus and Grafana; to run them in
+Docker, see [Local Prometheus + Grafana](#local-prometheus--grafana).
 
 The setup uses an editable install (`-e`), so most source edits apply on the next run. Regular installs copy code into `site-packages` and must be reinstalled after source updates. See [installation modes and refresh commands](docs/DIAGNOSTIC_RUNNER.md#editable-versus-regular-installation).
 
@@ -233,7 +236,7 @@ See [deploy/monitoring/README.md](deploy/monitoring/README.md) for:
 | `FABRIC_AI_KEY_EXPIRES`       | no       | Fallback expiry date if `/key/info` is unavailable (FABRIC-oriented) |
 | `FABRIC_AI_KEY_CREATED`       | no       | Fallback key creation date (used with `FABRIC_AI_KEY_LIFETIME_DAYS`) |
 | `FABRIC_AI_KEY_LIFETIME_DAYS` | no       | Fallback lifetime in days (default `30`) |
-| `MCP_SERVER_CMD`              | no       | Path to `cisco-nso-mcp-server` binary                                     |
+| `MCP_SERVER_CMD`              | no       | Path to `cisco-nso-mcp-server`. Default: the one installed in the agent's own environment (`install.py` puts it there), else `PATH` |
 | `STATE_DIR`                   | no       | Default `./state`                                                         |
 | `MCP_RESULTS_KEEP_DAYS`       | no       | Days a `--save-mcp-results` archive is kept (default `7`; `0` keeps all). See [Preserve MCP responses](#preserve-mcp-responses) |
 | `NOTIFICATION_DIGEST`         | no       | `1` sends a short digest with the HTML report to Slack and email; default sends one line naming the run. See [Compact diagnostic notifications and HTML reports](#compact-diagnostic-notifications-and-html-reports) |
@@ -575,6 +578,7 @@ The section of an l3rt service that is OpUp ends with a **Delivery check for an 
 
 | Flag | Role |
 |------|------|
+| `--configure` | Ask for the NSO, LLM, Slack, email and Pushgateway settings and write them into `.env` in the current directory; Enter keeps a current value |
 | `--skip-llm` | Spines only; no dataplane/drill/summary LLM |
 | `--deterministic-summary` | Skip final Summary chat; restate dataplane diagnoses/findings (default is LLM Summary) |
 | `--service-type` / `--service-id` | **Service-first** (implies lean service-only): match instances, basic checks for all; with LLM enabled, an explicit `--service-id` also investigates instances whose basic checks pass (within budget); type-only focus investigates suspicious instances; no whole-NSO topology unless evidence expands. Combined = intersection; exit if nothing matches |

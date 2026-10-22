@@ -39,3 +39,4 @@ config/to_confirm.*
 
 liteLLM/
 BASELINE_SOURCE_HASHES.json
+mcp-server/
