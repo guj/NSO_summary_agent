@@ -384,6 +384,7 @@ Parse neighbor rows for **Established** / **Idle** / **Active** / … — same b
 | `one_sided_session` | A Established; B not Established (or vice versa) |
 | `session_down` | Neither end Established, and at least one end reports a failed state such as Idle |
 | `live_session_not_in_config` | Live pair not reflected in BGP neighbor config |
+| `missing_reverse_session` | A's table lists B, and B's table was read but has no row for A. Not raised when B's table could not be read: the session keeps A's reading through its configured edge |
 | `configured_no_session` | Static session; no operational Established state |
 | `unknown_neighbor_address` | Neighbor IP is no NSO device's router ID, and its AS is one NSO's devices use (or unknown) |
 | `outside_bgp_session_not_established` | Neighbor in an AS no NSO device uses (another network's router), and this end is not Established |

@@ -95,8 +95,10 @@ def device_interfaces_label(
             continue
         if (e.get("local") or {}).get("device") != device:
             continue
-        recorded = True
         pair = _iface_pair_status(e)
+        if pair == "not-read":
+            continue
+        recorded = True
         if pair in {"up/down", "unknown"}:
             return INVENTORY_REVIEW_STATUS
         edge_id = str(e.get("id") or "")
@@ -109,7 +111,7 @@ def device_interfaces_label(
             continue
         if issue.get("device") == device:
             return INVENTORY_REVIEW_STATUS
-    # No interface on record for the device (none in NSO, nothing read): nothing was checked.
+    # No interface read for the device (none in NSO, or the read failed): nothing was checked.
     return "Healthy" if recorded else "—"
 
 

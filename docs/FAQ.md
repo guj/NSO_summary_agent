@@ -87,7 +87,6 @@ Common causes:
 1. **Speed or breakout drift.** NSO still has `FourHundredGigE…/32` while the device shows `Hu…/32`
    or breakout members such as `Te…/36/0–3`.
 2. **Stale configuration.** NSO lists a port the device does not have.
-3. **Collection error.** The live interface query failed for that device.
 
 For case 1, an administrator can record the confirmed NSO-to-device name mapping in a JSON file
 and point `INTERFACE_EQUIVALENCES_FILE` at it. The schema is shown in
@@ -95,7 +94,9 @@ and point `INTERFACE_EQUIVALENCES_FILE` at it. The schema is shown in
 
 An interface the device lists but reports no state for, such as a Ciena's management ports, is
 not a mapping problem: the device's interface summary counts it under "No state", and it does not
-set this label.
+set this label. Nor does a device whose interfaces could not be read at all, because NSO could not
+connect to it or it is southbound locked: its health line says the interface status was not
+collected, and its interface summary counts them under "Not read".
 
 ### Where do names like `HundredGigE0/0/0/9` and `Hu0/0/0/9` come from?
 

@@ -534,6 +534,8 @@ def _interfaces_summary_section(device: str, phys: list) -> list[str]:
         lines.insert(5, f"{_I2}Up/down:     {counts['up/down']}")
     if counts.get("no-state"):
         lines.append(f"{_I2}No state:    {counts['no-state']}")
+    if counts.get("not-read"):
+        lines.append(f"{_I2}Not read:    {counts['not-read']}")
     return lines
 
 
@@ -900,9 +902,12 @@ def _admin_oper(edge: dict[str, Any]) -> tuple[str, str]:
 def _iface_pair_status(edge: dict[str, Any]) -> str:
     """Composite Status/Protocol label for Devices rollups.
 
+    ``not-read``: the device's interfaces could not be read at all this run.
     ``no-state``: the device lists the interface but reports no state for it, so it is
     neither a mapping problem nor a down link.
     """
+    if (edge.get("state") or {}).get("not_read"):
+        return "not-read"
     if (edge.get("state") or {}).get("no_state"):
         return "no-state"
     admin, oper = _admin_oper(edge)

@@ -126,7 +126,7 @@ async def collect_operational_physical(
             )
             for edge in static_by_device[device]:
                 operational_edges.append(
-                    _unknown_operational_edge(edge["id"], str(exc))
+                    _unread_operational_edge(edge["id"], str(exc))
                 )
             continue
 
@@ -319,7 +319,7 @@ async def _operational_interfaces_for_device(
             live, unread, message = await _states_from_interface_health(client, device, message)
         if live is None:
             return (
-                [_unknown_operational_edge(edge["id"], message) for edge in static_edges],
+                [_unread_operational_edge(edge["id"], message) for edge in static_edges],
                 [
                     {
                         "severity": "medium",
@@ -643,6 +643,14 @@ def _unknown_operational_edge(edge_id: str, detail: str) -> dict[str, Any]:
     return {
         "id": edge_id,
         "state": {"status": "unknown", "detail": detail},
+    }
+
+
+def _unread_operational_edge(edge_id: str, detail: str) -> dict[str, Any]:
+    """The device's interfaces could not be read at all: unknown, and not a naming mismatch."""
+    return {
+        "id": edge_id,
+        "state": {"status": "unknown", "detail": detail, "not_read": True},
     }
 
 

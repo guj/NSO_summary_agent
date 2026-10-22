@@ -124,6 +124,7 @@ async def collect_static_routing(
             observations,
             neighbor_configs,
             router_ids,
+            unread_devices=_unread_bgp_devices(live_issues),
         )
         issues.extend(pair_issues)
         for edge in paired:
@@ -169,6 +170,7 @@ async def collect_operational_routing(
         observations,
         neighbor_configs,
         router_ids,
+        unread_devices=_unread_bgp_devices(issues),
     )
     issues.extend(pair_issues)
 
@@ -290,12 +292,27 @@ def unmatched_bgp_neighbors(
     ]
 
 
+def _unread_bgp_devices(issues: list[dict[str, Any]]) -> set[str]:
+    """Devices whose BGP table was not read, from this module's own collection issues."""
+    return {
+        str(issue.get("message") or "").split(":", 1)[0].strip()
+        for issue in issues
+        if issue.get("code") == "collection_error" and issue.get("layer") == "routing"
+    }
+
+
 def pair_bgp_observations(
     observations: list[BgpSessionObservation],
     neighbor_configs: dict[str, list[BgpNeighborConfig]],
     router_ids: dict[str, str],
+    *,
+    unread_devices: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Pair one-way BGP summary rows into bidirectional routing edges."""
+    """Pair one-way BGP summary rows into bidirectional routing edges.
+
+    A peer in ``unread_devices`` had no table to read, so its missing row is not
+    reported; the session keeps the read end's state through its configured edge.
+    """
     issues: list[dict[str, Any]] = []
     by_device: dict[str, list[BgpSessionObservation]] = {}
     for obs in observations:
@@ -355,6 +372,8 @@ def pair_bgp_observations(
             used_remote=used_remote,
         )
         if obs_b is None:
+            if remote_device in unread_devices:
+                continue
             issues.append(
                 {
                     "severity": "medium",

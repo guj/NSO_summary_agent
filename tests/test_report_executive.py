@@ -376,6 +376,36 @@ def test_port_the_device_gives_no_state_for_is_not_a_mapping_problem():
     assert "Fo0/0/0/34 → (not on box)" in "\n".join(device_detail_lines(topology)["uky-data-sw"])
 
 
+def test_device_whose_interfaces_were_not_read_is_not_a_mapping_problem():
+    """As cape-data-sw (NSO could not connect) and brist-data-sw (southbound locked)."""
+    from agent.report_executive import device_notes_label
+    from diagnostic_mas.operator_report import _health_prose
+    from nso_facts.fleet_rollups import device_needs_inventory_review
+    from nso_report.devices import device_detail_lines
+
+    def edge(device, name, state):
+        return {"id": f"if:{device}:{name}", "local": {"device": device, "interface": name}, "state": state}
+
+    unread = {"status": "unknown", "detail": "Device brist-data-sw is southbound locked", "not_read": True}
+    no_state = {"status": "unknown", "detail": "no interface state from get_interface_health", "no_state": True}
+    phys = [edge("brist-data-sw", "Hu0/0/0/1", unread), edge("brist-data-sw", "Hu0/0/0/2", unread),
+            edge("cien-data-sw", "14", {"admin": "up", "oper": "up", "status": "up"}),
+            edge("cien-data-sw", "m1", no_state)]
+
+    assert device_interfaces_label("brist-data-sw", phys, {}) == "—"
+    assert device_notes_label("brist-data-sw", phys, {}) == ""
+    assert (_health_prose({"interfaces": "—", "hardware": "Unavailable", "notes": ""})
+            == "Interface and hardware status not collected for this run")
+    # The fleet count behind Grafana agrees with the report, for unread and stateless ports alike.
+    assert not device_needs_inventory_review("brist-data-sw", phys, {})
+    assert not device_needs_inventory_review("cien-data-sw", phys, {})
+
+    topology = {"operational": {"layers": {"physical": {"edges": phys}, "underlay": {"edges": []},
+                                           "routing": {"edges": []}}}}
+    brist = "\n".join(device_detail_lines(topology)["brist-data-sw"])
+    assert "Mapping Unknown: 0" in brist and "Not read:    2" in brist and "not on box" not in brist
+
+
 def test_device_with_no_interface_records_is_not_called_healthy():
     """scm-data-sw: NSO holds no interfaces for it and it did not answer, so nothing was checked."""
     from diagnostic_mas.operator_report import _health_prose

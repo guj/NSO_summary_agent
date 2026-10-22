@@ -470,6 +470,8 @@ async def test_other_exec_failures_and_a_failed_fallback_leave_interfaces_unknow
         _iface_edges("brist-data-sw", ["HundredGigE0/0/0/1"]) + _iface_edges("cien-data-sw", ["14"]), monkeypatch)
 
     assert {state["status"] for state in states.values()} == {"unknown"}
+    # The whole device went unread: no interface of it is a naming mismatch.
+    assert all(state.get("not_read") is True for state in states.values())
     messages = sorted(i["message"] for i in issues if i["code"] == "collection_error")
     assert messages[0] == "brist-data-sw: Device brist-data-sw is southbound locked"
     assert messages[1].startswith("cien-data-sw: ") and "too slow" in messages[1]

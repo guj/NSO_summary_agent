@@ -263,6 +263,12 @@ def _admin_oper(edge: dict[str, Any]) -> tuple[str, str]:
 
 
 def iface_pair_status(edge: dict[str, Any]) -> str:
+    # Same markers as the report's: a port with no state, or a device not read, is not a mapping gap.
+    state = edge.get("state") or {}
+    if state.get("not_read"):
+        return "not-read"
+    if state.get("no_state"):
+        return "no-state"
     admin, oper = _admin_oper(edge)
     if admin == "admin-down" or oper == "admin-down":
         return "admin-down"
