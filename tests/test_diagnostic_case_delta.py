@@ -925,3 +925,21 @@ def test_a_newly_detected_fault_names_its_lane_and_whether_that_lane_was_down_be
     # Not explained by a port investigation: unchanged.
     delta = compute_case_delta(case_to_dict(_dp_case()), case_to_dict(_dp_case("down")))
     assert "last flapped" not in delta["newly_failed_services"][0]["detail"]
+
+
+def test_the_summary_gets_links_gaining_errors_one_line_per_link():
+    from diagnostic_mas.case_delta import compact_delta_for_llm
+
+    def end(device, port, far, far_port, crc):
+        return {"device": device, "port": port, "description": "", "gained": {"crc": crc}, "state_changes": 18,
+                "minutes": 792, "services": 0, "adjacency": True, "device_services": 74,
+                "far_end": {"device": far, "interface": far_port}}
+
+    rows = [end("salt-data-sw", "HundredGigE0/0/0/17", "kans-data-sw", "HundredGigE0/0/0/23.3000", 5),
+            end("kans-data-sw", "HundredGigE0/0/0/23", "salt-data-sw", "HundredGigE0/0/0/17.3000", 7)]
+    sent = compact_delta_for_llm({"links_gaining_errors": rows})["links_gaining_errors"]
+
+    assert sent["count"] == 1 and len(sent["links"]) == 1
+    assert sent["links"][0].startswith("salt-data-sw HundredGigE0/0/0/17 ↔ kans-data-sw HundredGigE0/0/0/23, one IS-IS link")
+    assert "not a fault" in sent["note"]
+    assert "links_gaining_errors" not in compact_delta_for_llm({})

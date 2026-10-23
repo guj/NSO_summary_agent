@@ -33,6 +33,10 @@ When ``changes_since_previous`` is present in the JSON:
   newly missing evidence, and persistent open problems.
 - Do NOT re-list unchanged PE-side-up dig observations as new findings.
 - Persistent: count + highest-impact names only unless status changed.
+- links_gaining_errors are leads on links that are still up. In at most one
+  bullet, name the worst (many state changes at both ends, or a large error
+  count) with both ends, and say so when several share a device or site.
+  Never call them faults or the cause of a service status.
 
 When ``changes_since_previous`` is absent: summarize this run only;
 do not invent a prior baseline.
@@ -108,9 +112,9 @@ Structure (keep total reply brief):
 1) One short headline sentence (prefer delta framing when
    changes_since_previous is present).
 
-2) If changes_since_previous is present: at most 4 bullets for newly
+2) If changes_since_previous is present: at most 5 bullets for newly
    failed / recovered devices / newly missing evidence / persistent
-   (count + names). Skip empty categories.
+   (count + names) / links gaining errors. Skip empty categories.
 
 3) Bullets for each material *new or changed* dataplane / drill
    conclusion only (skip unchanged dataplane=up repeats):

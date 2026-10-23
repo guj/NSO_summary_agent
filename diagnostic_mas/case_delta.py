@@ -1309,12 +1309,13 @@ def format_changes_since_previous(
         lines.append("")
     gaining = list(delta.get("links_gaining_errors") or [])
     if gaining:
-        from diagnostic_mas.port_counters import gain_line
+        from diagnostic_mas.port_counters import gain_lines
 
-        # A lead on a link that still works; no service status rests on it.
+        # A lead on a link that still works; no service status rests on it. One line per link.
+        links = gain_lines(gaining)
         lines.append("**Links gaining errors while up:**")
-        lines.extend(f"- {gain_line(row)}" for row in gaining[:persistent_limit])
-        extra = len(gaining) - persistent_limit
+        lines.extend(f"- {line}" for line in links[:persistent_limit])
+        extra = len(links) - persistent_limit
         if extra > 0:
             lines.append(f"- …and {extra} more")
         lines.append("")
@@ -1422,6 +1423,11 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
     interfaces = list(delta.get("interfaces_lost") or [])
     cleared = [row["service"] for row in delta.get("service_faults_cleared") or []]
     new = list(delta.get("new_problems") or [])
+    links: list[str] = []
+    if delta.get("links_gaining_errors"):
+        from diagnostic_mas.port_counters import gain_lines
+
+        links = [line.replace("`", "") for line in gain_lines(list(delta["links_gaining_errors"]))]
     return {
         **({"service_faults_cleared": {
             "count": len(cleared),
@@ -1446,6 +1452,12 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
             "note": ("Up in the previous run. Either the devices now report the "
                      "session down, or it is absent although both devices answered."),
         }} if lost else {}),
+        **({"links_gaining_errors": {
+            "count": len(links),
+            "links": links[:10],
+            "note": ("Up now; gained errors or changed state since the previous scan. A lead on a "
+                     "working link, not a fault: no service status rests on it."),
+        }} if links else {}),
         **({"services_no_longer_present": {
             "count": len(gone),
             "services": gone[:20],

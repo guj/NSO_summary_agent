@@ -169,9 +169,30 @@ def _age_seconds(text: Any) -> int | None:
     return ((years * 365 + weeks * 7 + days) * 24 + hours) * 3600
 
 
+def _far_ends(case: dict[str, Any]) -> dict[tuple[str, str], dict[str, str]]:
+    """(device, port) -> the other end of the IS-IS adjacency on that port, from the scan's IS-IS collection."""
+    out: dict[tuple[str, str], dict[str, str]] = {}
+    for ev in case.get("evidence") or []:
+        if not isinstance(ev, dict) or ev.get("kind") != "spine" or ev.get("role") != "isis":
+            continue
+        for edge in (ev.get("payload") or {}).get("operational_edges") or []:
+            parts = str((edge or {}).get("id") or "").split(":")
+            if len(parts) != 5:
+                continue
+            ends = ((parts[1], parts[2]), (parts[3], parts[4]))
+            for (device, interface), (far, far_interface) in (ends, ends[::-1]):
+                if interface != "?":
+                    out.setdefault((device, _parent_port(interface)), {"device": far, "interface": far_interface})
+    return out
+
+
 def links_gaining_errors(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[str, Any]]:
-    """Ports that are up now and gained errors, or changed state and came back, since the previous scan."""
+    """Ports that are up now and gained errors, or changed state and came back, since the previous scan.
+
+    One row per port, the far end of its IS-IS adjacency attached; ``gain_lines`` puts a link's ends together.
+    """
     before, now = _saved(older), _saved(newer)
+    far_ends = _far_ends(newer)
     try:
         elapsed = (datetime.fromisoformat(now["read_at"]) - datetime.fromisoformat(before["read_at"])).total_seconds()
     except (KeyError, TypeError, ValueError):
@@ -209,8 +230,10 @@ def links_gaining_errors(older: dict[str, Any], newer: dict[str, Any]) -> list[d
         if not gained and not state_changes and not bounced:
             continue
         device, _, port = key.partition(":")
+        far = far_ends.get((device, port)) if reading.get("adjacency") else None
         rows.append({"device": device, "port": port, "description": reading.get("description") or "",
                      "gained": gained, "state_changes": state_changes, **({"bounced": True} if bounced else {}),
+                     **({"far_end": far} if far else {}),
                      "minutes": round(elapsed / 60) if elapsed is not None else None,
                      "services": int(reading.get("services") or 0), "adjacency": bool(reading.get("adjacency")),
                      "device_services": int(reading.get("device_services") or 0)})
@@ -219,20 +242,59 @@ def links_gaining_errors(older: dict[str, Any], newer: dict[str, Any]) -> list[d
                                          row["device"], row["port"]))
 
 
-def gain_line(row: dict[str, Any]) -> str:
+def _changes(row: dict[str, Any], *, bounced: str) -> list[str]:
     parts = [f"+{row['gained'][name]} {label}" for name, label in _ERRORS.items() if name in row["gained"]]
     if row["state_changes"]:
         parts.append(f"{row['state_changes']} state change{'' if row['state_changes'] == 1 else 's'}")
     elif row.get("bounced"):
-        parts.append("went down and came back since the previous scan (count not reported)")
+        parts.append(bounced)
+    return parts
+
+
+def _took(row: dict[str, Any]) -> str:
     minutes = row.get("minutes")
-    took = "" if minutes is None else f" in {minutes // 60} h {minutes % 60} min" if minutes >= 60 else f" in {minutes} min"
+    return "" if minutes is None else f" in {minutes // 60} h {minutes % 60} min" if minutes >= 60 else f" in {minutes} min"
+
+
+def gain_line(row: dict[str, Any]) -> str:
+    parts = _changes(row, bounced="went down and came back since the previous scan (count not reported)")
     services = row["services"]
+    far = row.get("far_end") or {}
     carries = " and ".join(part for part in (
-        "an IS-IS adjacency" if row["adjacency"] else "",
+        "an IS-IS adjacency" if row["adjacency"] and not far else "",
         f"{services} service{'' if services == 1 else 's'}" if services else "") if part)
     held = row.get("device_services") or 0
     described = f' ("{row["description"]}")' if row.get("description") else ""
-    return (f"`{row['device']}` {row['port']}{described}: {', '.join(parts)}{took}"
+    if far:
+        towards = f"`{far['device']}`" + (f" {far['interface']}" if far.get("interface") not in (None, "?") else "")
+        described += f" (IS-IS link to {towards})"
+    return (f"`{row['device']}` {row['port']}{described}: {', '.join(parts)}{_took(row)}"
             + (f"; carries {carries}" if carries else "")
             + (f"; {held} service{'' if held == 1 else 's'} on this device" if row["adjacency"] and held else ""))
+
+
+def gain_lines(rows: list[dict[str, Any]]) -> list[str]:
+    """One line per link, worst first: the two ends of an IS-IS link together when both are listed."""
+    listed = {(row["device"], row["port"]): row for row in rows}
+    done: set[tuple[str, str]] = set()
+    lines = []
+    for row in rows:
+        key = (row["device"], row["port"])
+        if key in done:
+            continue
+        done.add(key)
+        far = row.get("far_end") or {}
+        other_key = (far.get("device"), _parent_port(far["interface"])) if far.get("interface") not in (None, "?") else None
+        other = listed.get(other_key) if other_key not in done else None
+        if other is None:
+            lines.append(gain_line(row))
+            continue
+        done.add(other_key)
+        short = lambda r: str(r["device"]).split("-", 1)[0]
+        ends = "; ".join(f"{short(r)} {', '.join(_changes(r, bounced='went down and came back'))}" for r in (row, other))
+        held = [r.get("device_services") or 0 for r in (row, other)]
+        took = _took(row)
+        lines.append(f"`{row['device']}` {row['port']} ↔ `{other['device']}` {other['port']}, one IS-IS link"
+                     f"{',' + took if took else ''}: {ends}."
+                     + (f" {held[0]} and {held[1]} services on these devices." if any(held) else ""))
+    return lines

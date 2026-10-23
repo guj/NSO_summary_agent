@@ -208,13 +208,14 @@ def digest_changes(delta: dict[str, Any] | None, previous_run_id: str | None,
     lines.append("")
     gaining = list((delta or {}).get("links_gaining_errors") or [])
     if gaining:
-        from diagnostic_mas.port_counters import gain_line
+        from diagnostic_mas.port_counters import gain_lines
 
         # Its own block, one link per line; the rows arrive largest first.
-        lines.append(f"**Links gaining errors while up:** {len(gaining)}" + (", largest first" if len(gaining) > 1 else ""))
-        lines.extend(f"- {gain_line(row)}" for row in gaining[:3])
-        if len(gaining) > 3:
-            lines.append(f"- …and {len(gaining) - 3} more")
+        links = gain_lines(gaining)
+        lines.append(f"**Links gaining errors while up:** {len(links)}" + (", largest first" if len(links) > 1 else ""))
+        lines.extend(f"- {line}" for line in links[:3])
+        if len(links) > 3:
+            lines.append(f"- …and {len(links) - 3} more")
         lines.append("")
     services = sum(len(group["services"]) for group in groups)
     heading = "**Open service faults:**" if delta is None else "**Still open:**"

@@ -404,3 +404,55 @@ def test_ciena_port_whose_last_change_is_after_the_previous_scan_went_down_and_c
 ])
 def test_no_bounce_without_a_later_change_on_a_port_that_is_up(before, now):
     assert _ciena_scans(before, now) == []
+
+
+# --- one line per link: both ends of an IS-IS adjacency together ------------------
+
+def _two_scans(edges: list[str], **changed_by_port) -> tuple[dict, dict]:
+    """Earlier and later scans: every port starts clean; ``changed_by_port`` holds the later readings."""
+    def scan(read_at: str, ports: dict) -> dict:
+        return {"evidence": [
+            {"kind": "port_counters", "role": "physical", "payload": {"read_at": read_at, "ports": ports}},
+            {"kind": "spine", "role": "isis", "payload": {"operational_edges": [{"id": e} for e in edges]}}]}
+    before = {key: _reading(description="") for key in changed_by_port}
+    later = {key: _reading(description="") | changed for key, changed in changed_by_port.items()}
+    return scan(EARLIER, before), scan(LATER, later)
+
+
+def test_the_two_ends_of_a_link_are_one_line_and_a_lone_end_names_its_far_end():
+    from diagnostic_mas.port_counters import gain_lines
+    from nso_facts.topology.graph import isis_edge_id
+
+    salt, kans, toky, seat = "salt-data-sw", "kans-data-sw", "toky-data-sw", "seat-data-sw"
+    edges = [isis_edge_id(salt, "HundredGigE0/0/0/17.3000", kans, "HundredGigE0/0/0/23.3000"),
+             isis_edge_id(seat, "HundredGigE0/0/0/19.1491", toky, "TenGigE0/0/0/18/0.1491"),
+             isis_edge_id(salt, "?", seat, "HundredGigE0/0/0/23.3000")]
+    rows = links_gaining_errors(*_two_scans(edges, **{
+        f"{salt}:HundredGigE0/0/0/17": {"crc": 5, "input_errors": 20, "transitions": 44, "device_services": 74},
+        f"{kans}:HundredGigE0/0/0/23": {"crc": 7, "input_errors": 9, "transitions": 44, "device_services": 208},
+        f"{toky}:TenGigE0/0/0/18/0": {"crc": 95704, "input_errors": 95704, "device_services": 53},
+        f"{seat}:HundredGigE0/0/0/23": {"transitions": 30, "device_services": 39},
+        f"{salt}:HundredGigE0/0/0/5": {"crc": 2, "adjacency": False, "services": 3, "device_services": 0}}))
+
+    assert len(rows) == 5 and all(row["port"] for row in rows)            # per port still, for Grafana
+    assert gain_lines(rows) == [
+        f"`{toky}` TenGigE0/0/0/18/0 (IS-IS link to `{seat}` HundredGigE0/0/0/19.1491): "
+        "+95704 CRC, +95704 input errors in 1 h 47 min; 53 services on this device",
+        f"`{salt}` HundredGigE0/0/0/17 ↔ `{kans}` HundredGigE0/0/0/23, one IS-IS link, in 1 h 47 min: "
+        "salt +5 CRC, +20 input errors, 18 state changes; kans +7 CRC, +9 input errors, 18 state changes. "
+        "74 and 208 services on these devices.",
+        f"`{salt}` HundredGigE0/0/0/5: +2 CRC in 1 h 47 min; carries 3 services",
+        f"`{seat}` HundredGigE0/0/0/23 (IS-IS link to `{salt}`): 4 state changes in 1 h 47 min; "
+        "39 services on this device",
+    ]
+
+
+def test_the_changes_section_counts_links_not_ports():
+    from diagnostic_mas.case_delta import format_changes_since_previous
+    from nso_facts.topology.graph import isis_edge_id
+
+    edge = isis_edge_id("salt-data-sw", "HundredGigE0/0/0/17.3000", "kans-data-sw", "HundredGigE0/0/0/23.3000")
+    rows = links_gaining_errors(*_two_scans([edge], **{
+        "salt-data-sw:HundredGigE0/0/0/17": {"transitions": 44}, "kans-data-sw:HundredGigE0/0/0/23": {"transitions": 44}}))
+    text = "\n".join(format_changes_since_previous({"links_gaining_errors": rows}))
+    assert text.count("one IS-IS link") == 1 and "…and" not in text

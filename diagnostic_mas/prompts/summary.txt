@@ -23,6 +23,10 @@ When ``changes_since_previous`` is present in the JSON:
   detail.
 - Mention persistent items only by count / highest-impact names unless a
   status actually changed.
+- links_gaining_errors are leads on links that are still up. In at most one
+  bullet, name the worst (many state changes at both ends, or a large error
+  count) with both ends, and say so when several share a device or site.
+  Never call them faults or the cause of a service status.
 
 When ``changes_since_previous`` is absent: no prior snapshot — summarize
 this run only without inventing a baseline.
@@ -103,9 +107,10 @@ Structure (keep total reply brief):
 1) One short headline sentence on overall fleet/service health
    (prefer delta framing when changes_since_previous is present).
 
-2) If changes_since_previous is present: at most 4 bullets covering
+2) If changes_since_previous is present: at most 5 bullets covering
    newly failed / recovered devices / newly missing evidence /
-   persistent (count + names only). Skip categories that are empty.
+   persistent (count + names only) / links gaining errors. Skip
+   categories that are empty.
 
 3) Bullets for each material *new or changed* service diagnosis only
    (skip unchanged dataplane=up repeats):
