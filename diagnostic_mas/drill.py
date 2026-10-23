@@ -226,6 +226,22 @@ def _probe_fingerprint_from_payload(payload: dict[str, Any]) -> str | None:
     return " ".join(bits)
 
 
+# Issues whose earlier-scan conclusion is handed to the next scan's drill: IS-IS adjacencies and BGP sessions.
+_CARRIED_ISSUES = ("isis:", "bgp:")
+
+
+def previous_findings(previous_case: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """The last published scan's concluded drill findings on routing Issues, the latest per issue edge id."""
+    out: dict[str, dict[str, Any]] = {}
+    for ev in (previous_case or {}).get("evidence") or []:
+        payload = ev.get("payload") if isinstance(ev, dict) and ev.get("kind") == "drill_finding" else None
+        edge = str((payload or {}).get("issue_edge_id") or "")
+        if edge.startswith(_CARRIED_ISSUES) and payload.get("cause"):
+            out[edge] = {key: payload[key] for key in ("cause", "confidence", "fix_suggestion", "observed")
+                         if payload.get(key)}
+    return out
+
+
 def prior_exploration_for_issue(
     case: CaseFile, issue: dict[str, Any]
 ) -> dict[str, Any]:
@@ -319,7 +335,7 @@ def prior_exploration_for_issue(
                 }
             )
 
-    return {
+    out: dict[str, Any] = {
         "note": (
             "Do not repeat probes in already_run_probes; ground new calls on gaps only."
         ),
@@ -328,6 +344,14 @@ def prior_exploration_for_issue(
         "already_run_probes": already_run[:40],
         "prior_tool_traces": tool_traces[:20],
     }
+    earlier = (getattr(case, "previous_findings", None) or {}).get(edge)
+    if earlier:
+        lead = dict(earlier)
+        if lead.get("observed"):
+            lead["observed"] = _clip_prior_text(lead["observed"], limit=1200)
+        lead["note"] = "The last published scan's conclusion on this Issue: a lead, not current evidence."
+        out["previous_scan_finding"] = lead
+    return out
 
 
 # Inventory / mapping noise — keep on Issues list, do not spend drill LLM tokens.

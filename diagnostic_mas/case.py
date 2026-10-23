@@ -68,6 +68,9 @@ class CaseFile:
     # Set when provider LLM spend budget is exceeded; stop further LLM calls.
     # Historical faults are not current evidence or fresh diagnoses.
     last_known_service_faults: list[dict[str, Any]] = field(default_factory=list)
+    # The last published scan's routing drill findings, by issue edge id: leads for this
+    # scan's drills. Not current evidence, and not saved with this case.
+    previous_findings: dict[str, dict[str, Any]] = field(default_factory=dict)
     # Token counts for the scan, and its cost and the budget when the provider reports them.
     llm_usage: dict[str, Any] = field(default_factory=dict)
     # MCP calls of the scan: all, from cache, and those made during LLM investigations.

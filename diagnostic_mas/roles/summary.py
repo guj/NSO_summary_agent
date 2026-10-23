@@ -256,6 +256,19 @@ def _collection_gap_devices(case: CaseFile) -> dict[str, dict[str, Any]]:
     return out
 
 
+# Evidence records the summary sees. Conclusions come first, so a long scan's late
+# findings (routing drills run after the port investigations) are not cut off.
+_SUMMARY_EVIDENCE_MAX = 40
+_CONCLUSIONS = frozenset({"drill_finding", "dataplane_finding", "dataplane_incomplete"})
+
+
+def _evidence_for_summary(case: CaseFile) -> list[dict[str, Any]]:
+    """Up to the ceiling, conclusions before traces, kept in the order they were recorded."""
+    ranked = sorted(range(len(case.evidence)),
+                    key=lambda n: (case.evidence[n].get("kind") not in _CONCLUSIONS, n))
+    return [case.evidence[n] for n in sorted(ranked[:_SUMMARY_EVIDENCE_MAX])]
+
+
 def _compact_case_for_llm(
     case: CaseFile,
     *,
@@ -264,7 +277,7 @@ def _compact_case_for_llm(
 ) -> dict[str, Any]:
     """Operator-facing fields only — omit internal is_/ev_/ho_/hy_ ids."""
     evidence_brief = []
-    for ev in case.evidence[:40]:
+    for ev in _evidence_for_summary(case):
         row: dict[str, Any] = {
             "kind": ev.get("kind"),
             "role": ev.get("role"),

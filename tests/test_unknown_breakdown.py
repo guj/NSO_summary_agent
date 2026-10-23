@@ -94,3 +94,18 @@ def test_one_unknown_service_is_counted_in_the_singular(monkeypatch):
     bullets = [line for line in text.splitlines() if line.startswith('- ')]
     assert bullets == ["- Forwarding evidence incomplete: **1** — the checks that ran passed, but one piece of "
                        "evidence is missing (named in the service's details); not a fault."]
+
+
+def test_a_reason_worded_without_refused_is_read_too():
+    from diagnostic_mas.operator_report import _incomplete_dig_followup
+
+    # test63, CEPH_STORAGE_IPv-ca2c5a3f: the evidence check's reason, then the investigation's own claim.
+    dx = {'source': 'llm', 'verification_gap': {'blocker': 'gate_rejected'},
+          'cause': '[gate] the fixed checks could not read cien-data-sw; an Up needs a fixed-check reading from '
+                   'every device of the service (LLM claimed up: Passed PE-side readiness checks. AC port UP.)'}
+    reason = ('the fixed checks could not read cien-data-sw; an Up needs a fixed-check reading from every device '
+              'of the service')
+    assert _incomplete_dig_next_action(dx).startswith(f'The investigation reported up, but that was not accepted: {reason}.')
+    assert _incomplete_dig_followup('ceph-1', dx).startswith(
+        f'`ceph-1` stays Unknown: its investigation reported up, but that was not accepted ({reason}).')
+    assert 'Passed PE-side' not in _incomplete_dig_next_action(dx)        # the investigation's claim is not the reason

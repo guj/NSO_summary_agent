@@ -262,3 +262,19 @@ def test_compact_case_omits_collection_gap_devices_when_collection_was_complete(
     case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0), device_names=["pe1"])
 
     assert "collection_gap_devices" not in _compact_case_for_llm(case)
+
+
+def test_late_findings_reach_the_summary_before_raw_traces():
+    case = CaseFile(budget=Budget(max_deep_checks=1, max_handoffs=1))
+    add_evidence(case, {"kind": "spine", "role": "isis", "layer": "underlay", "payload": {}})
+    for n in range(50):        # earlier investigations' tool calls
+        add_evidence(case, {"kind": "drill", "role": "drill", "payload": {"check": "exec_show", "args": {"n": n}}})
+    add_evidence(case, {"kind": "drill_finding", "role": "drill", "payload": {
+        "issue_edge_id": "isis:salt-data-sw:?:seat-data-sw:HundredGigE0/0/0/23.3000",
+        "cause": "seat's hellos never reach salt's VLAN 3000 sub-interface", "confidence": "high"}})
+
+    evidence = _compact_case_for_llm(case)["evidence"]
+    assert len(evidence) == 40                                        # the ceiling is unchanged
+    assert evidence[-1]["cause"] == "seat's hellos never reach salt's VLAN 3000 sub-interface"
+    assert evidence[0]["kind"] == "spine"                             # still in the order recorded
+    assert sum(1 for row in evidence if row["kind"] == "drill") == 38

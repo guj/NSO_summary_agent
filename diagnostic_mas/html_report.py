@@ -106,6 +106,34 @@ def _device_details(case: dict | None) -> dict[str, str]:
     }
 
 
+def _routing_finding_details(case: dict | None) -> dict[str, str]:
+    """A collapsed full LLM finding per IS-IS adjacency or BGP session, for each router it names.
+
+    The text report gives these findings one shortened line; their readings belong here.
+    """
+    if not isinstance(case, dict):
+        return {}
+    from types import SimpleNamespace
+
+    from diagnostic_mas.operator_report import _routing_findings
+
+    def para(label: str, text: object) -> str:
+        text = str(text or "").replace("**", "").strip()
+        return f"<p><strong>{label}:</strong> {html.escape(text)}</p>" if text else ""
+
+    out: dict[str, str] = {}
+    for edge, (a, b), finding in _routing_findings(SimpleNamespace(evidence=case.get("evidence") or [])):
+        what = "IS-IS adjacency" if edge.startswith("isis:") else "BGP session"
+        block = (f'<details class="device-detail finding"><summary>Full finding: {html.escape(f"{what} {a} ↔ {b}")}'
+                 f'</summary><p><em>LLM investigation (confidence {html.escape(str(finding.get("confidence") or "not given"))}); '
+                 "not verified. Suggested steps are not applied.</em></p>"
+                 + para("Observed", finding.get("observed")) + para("Cause", finding.get("cause"))
+                 + para("Next steps", finding.get("fix_suggestion")) + "</details>")
+        for device in dict.fromkeys((a, b)):
+            out[device] = out.get(device, "") + block
+    return out
+
+
 def _check_sources(case: dict | None) -> dict[str, list[dict]]:
     """Service name -> its fixed-check verdicts, in the order the report lists them."""
     found: dict[str, list[dict]] = {}
@@ -230,6 +258,7 @@ def render_html_report(report: str, run_id: str, *, case: dict | None = None) ->
     from diagnostic_mas.service_topology import render_service_topology
     service_topology = render_service_topology(case)
     device_details = _device_details(case)
+    routing_findings = _routing_finding_details(case)
     check_sources = _check_sources(case)
     nav, blocks = [], []
     if service_topology:
@@ -260,6 +289,7 @@ def render_html_report(report: str, run_id: str, *, case: dict | None = None) ->
                 body = _link_check_lines(body, check_sources.get(service_id[1]) or [])
             record = (f'<details class="record" data-status="{status}" data-service="{str(title == "Services").lower()}">'
                       f'<summary>{label}{badge}</summary>{body}'
+                      f'{routing_findings.get(name.strip(), "") if title == "Devices" else ""}'
                       f'{device_details.get(name.strip(), "") if title == "Devices" else ""}</details>')
             records.append(({'down':0,'degraded':1,'unknown':2,'passed':3,'basic':4}[status],j,record))
         if title == 'Services':
@@ -275,7 +305,7 @@ header{padding:24px 32px;background:#172536;color:white}header h1{margin:0;font-
 nav{position:sticky;top:0;background:white;padding:12px 24px;border-bottom:1px solid #dce2e8;display:flex;gap:16px;flex-wrap:wrap;z-index:1}a{color:#155d98}
 main{max-width:1200px;margin:auto;padding:24px}.controls{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}input,select,button{font:inherit;padding:8px;border:1px solid #adb9c4;border-radius:4px}input{flex:1;min-width:220px}
 .section{background:white;border:1px solid #dce2e8;margin:16px 0;padding:16px}.section>summary{font-size:20px;font-weight:650;cursor:pointer}.record{border-top:1px solid #dce2e8;padding:12px 0}.record>summary{cursor:pointer;overflow-wrap:anywhere;font-weight:600}
-.device-detail{margin-top:8px}.device-detail>summary{font-size:14px;font-weight:600;cursor:pointer}.badge{display:block;font-weight:400;font-size:13px;color:#526071}pre{overflow:auto;background:#f1f4f7;padding:12px}table{border-collapse:collapse;width:100%;font-size:14px}td,th{padding:6px 10px;border-bottom:1px solid #dce2e8;text-align:left}.status-definitions{margin:12px 0;font-size:14px}.status-definitions>summary{cursor:pointer;font-weight:600}code{overflow-wrap:anywhere}.collector .check{margin:1px 0;overflow-wrap:anywhere}.collector div.check{padding-left:1.1em}.collector details.check>summary{cursor:pointer}.collector ul{margin:2px 0 6px 1.1em;padding-left:1.2em;font-size:14px}[hidden]{display:none!important}#count{color:#526071}
+.device-detail{margin-top:8px}.finding p{white-space:pre-wrap;margin:6px 0;font-size:14px}.device-detail>summary{font-size:14px;font-weight:600;cursor:pointer}.badge{display:block;font-weight:400;font-size:13px;color:#526071}pre{overflow:auto;background:#f1f4f7;padding:12px}table{border-collapse:collapse;width:100%;font-size:14px}td,th{padding:6px 10px;border-bottom:1px solid #dce2e8;text-align:left}.status-definitions{margin:12px 0;font-size:14px}.status-definitions>summary{cursor:pointer;font-weight:600}code{overflow-wrap:anywhere}.collector .check{margin:1px 0;overflow-wrap:anywhere}.collector div.check{padding-left:1.1em}.collector details.check>summary{cursor:pointer}.collector ul{margin:2px 0 6px 1.1em;padding-left:1.2em;font-size:14px}[hidden]{display:none!important}#count{color:#526071}
 </style></head><body><header><h1>NSO diagnostic report</h1><div>''' + html.escape(run_id) + '''</div></header><nav>''' + ''.join(nav) + '''</nav><main>''' + _body(sections[0]) + '''
 <div class="controls"><input id="search" aria-label="Search report details" placeholder="Search service ID, device, type or evidence">
 <select id="status" aria-label="Service status"><option value="all">All service statuses</option><option value="down">Down</option><option value="degraded">Degraded</option><option value="unknown">Unknown / incomplete</option><option value="passed">PE-readiness passed</option><option value="basic">Basic checks only</option></select>

@@ -893,3 +893,35 @@ def test_summary_input_says_what_each_new_problem_is():
     assert [(p["code"], p["message"]) for p in new["sample"]] == [(peering["code"], peering["message"])]
     assert "does not prove a new failure" in new["note"]
     assert "new_problems" not in compact_delta_for_llm(compute_case_delta(_bgp_scan([]), _bgp_scan([])))
+
+
+def _with_lane(case, links: dict, ages: dict):
+    from diagnostic_mas.case import add_evidence
+
+    add_evidence(case, {"kind": "port_investigation", "role": "port", "layer": "physical", "payload": {
+        "device": "fiu-data-sw", "port": "HundredGigE0/0/0/24", "concluded": True, "links": links, "link_ages": ages}})
+    return case
+
+
+def test_a_newly_detected_fault_names_its_lane_and_whether_that_lane_was_down_before():
+    from diagnostic_mas.case_delta import compact_delta_for_llm, format_changes_since_previous
+
+    lane0, lane1 = "HundredGigE0/0/0/24/0", "HundredGigE0/0/0/24/1"
+    before = _with_lane(_dp_case(), {lane0: ["deleted-since"]}, {lane0: "2d01h"})   # its owner replaced the service
+
+    # A new service on a lane that was already down.
+    delta = compute_case_delta(case_to_dict(before),
+                               case_to_dict(_with_lane(_dp_case("down"), {lane0: ["circuit"]}, {lane0: "2d03h"})))
+    note = f"; on fiu-data-sw {lane0}, last flapped 2d03h ago; that lane was down in the previous run too"
+    assert delta["newly_failed_services"][0]["detail"].endswith(note)
+    assert note in "\n".join(format_changes_since_previous(delta))
+    assert compact_delta_for_llm(delta)["newly_failed_services"][0]["detail"].endswith(note)
+
+    # A lane newly down: its age only.
+    delta = compute_case_delta(case_to_dict(before),
+                               case_to_dict(_with_lane(_dp_case("down"), {lane1: ["circuit"]}, {lane1: "02:15:40"})))
+    assert delta["newly_failed_services"][0]["detail"].endswith(f"; on fiu-data-sw {lane1}, last flapped 02:15:40 ago")
+
+    # Not explained by a port investigation: unchanged.
+    delta = compute_case_delta(case_to_dict(_dp_case()), case_to_dict(_dp_case("down")))
+    assert "last flapped" not in delta["newly_failed_services"][0]["detail"]

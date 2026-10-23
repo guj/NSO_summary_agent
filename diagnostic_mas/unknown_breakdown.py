@@ -36,13 +36,24 @@ def pending_gate_review(dx):
 
 
 def _refusal(dx):
-    """(verdict the investigation reached, the evidence check's reason), read from the recorded cause."""
-    match = re.search(r'\b(up|down|degraded)\s+refused:\s*(.+)', str(dx.get('cause') or ''))
-    if not match:
-        return None, None
+    """(verdict the investigation reached, the evidence check's reason), read from the recorded cause.
+
+    The cause reads "[gate] <reason> (LLM claimed <verdict>: <its own text>)"; some reasons
+    begin "<type> <verdict> refused: ".
+    """
+    cause = str(dx.get('cause') or '')
+    claimed = re.search(r'\(LLM claimed (up|down|degraded)\b', cause)
+    head = cause.split(' (LLM claimed', 1)[0]
+    refused = re.search(r'\b(up|down|degraded)\s+refused:\s*(.+)', head)
+    if refused:
+        text, verdict = refused[2], refused[1]
+    elif head.startswith('[gate]'):
+        text, verdict = head[len('[gate]'):], claimed[1] if claimed else None
+    else:
+        return (claimed[1] if claimed else None), None
     # The reason's first sentence is for the reader; what follows it is guidance for the model.
-    reason = re.split(r'\s+\(LLM claimed|\.\s', match[2], maxsplit=1)[0].strip().rstrip('.')
-    return match[1], reason or None
+    reason = re.split(r'\.\s', text, maxsplit=1)[0].strip().rstrip('.')
+    return verdict, reason or None
 
 
 def refused_verdict(dx):

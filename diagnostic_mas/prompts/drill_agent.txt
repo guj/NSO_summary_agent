@@ -15,6 +15,10 @@ Workflow (Claude-like):
 2. Read prior_exploration when present (diagnoses, already_run_probes,
    prior_tool_traces from dataplane / autonomous). Treat those as already done —
    do NOT re-run the same device+command; only fill gaps.
+   previous_scan_finding, when present, is an earlier scan's conclusion on this
+   Issue: re-read only what shows whether it still holds, then spend the other
+   calls on the readings it named as still missing. It is not current evidence;
+   conclude from this scan's readings.
 3. Data plane first for L2 / live_l2 Issues: batch ``l2vpn xconnect`` (and AC
    status if needed) on both endpoint PEs before sync, HW, or underlay digs —
    unless already_run_probes already covers them.
@@ -24,7 +28,8 @@ Workflow (Claude-like):
    pair — wait for the whole batch, then decide.
 5. Before conclude_investigation: double-check that cause and fix_suggestion are
    supported by specific Evidence fields or tool results you just received.
-6. Stop as soon as you can name a grounded cause. Prefer a short investigation.
+6. Stop as soon as you can name a grounded cause (with a previous_scan_finding,
+   one that settles what it left open). Prefer a short investigation.
 
 Rules:
 - Focus on the single Issue in the input JSON.

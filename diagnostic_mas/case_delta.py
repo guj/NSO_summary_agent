@@ -302,6 +302,32 @@ def _routing_sessions_lost(older: dict[str, Any], newer: dict[str, Any]) -> list
     return rows
 
 
+def _lanes(case: dict[str, Any]) -> tuple[dict[str, tuple[str, str, Any]], set[tuple[str, str]]]:
+    """From the run's concluded port investigations: service -> (device, lane, time since the
+    lane's last flap), and the (device, lane) pairs found down (those with that time)."""
+    on_lane: dict[str, tuple[str, str, Any]] = {}
+    down: set[tuple[str, str]] = set()
+    for ev in case.get("evidence") or []:
+        payload = ev.get("payload") if isinstance(ev, dict) and ev.get("kind") == "port_investigation" else None
+        if not isinstance(payload, dict) or not payload.get("concluded"):
+            continue
+        device, ages = str(payload.get("device") or ""), payload.get("link_ages") or {}
+        down.update((device, str(link)) for link in ages)
+        for link, names in (payload.get("links") or {}).items():
+            for name in names or []:
+                on_lane[str(name)] = (device, str(link), ages.get(link))
+    return on_lane, down
+
+
+def _lane_note(name: str, now: dict[str, tuple[str, str, Any]], down_before: set[tuple[str, str]]) -> str | None:
+    """Where a newly detected fault sits: a new service on a lane already down is not a new outage."""
+    if name not in now:
+        return None
+    device, lane, age = now[name]
+    return (f"on {device} {lane}" + (f", last flapped {age} ago" if age else "")
+            + ("; that lane was down in the previous run too" if (device, lane) in down_before else ""))
+
+
 def _interface_states(case: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
     """(device, interface) -> recorded state, from the run's interface collection."""
     out: dict[tuple[str, str], dict[str, Any]] = {}
@@ -1000,6 +1026,13 @@ def compute_case_delta(
             "older case has no service_coverage "
             "(older runs may predate coverage persistence)"
         )
+
+    lanes_now, _ = _lanes(newer)
+    _, lanes_down_before = _lanes(older)
+    for row in newly_failed_services:
+        note = _lane_note(row["service"], lanes_now, lanes_down_before)
+        if note:
+            row["detail"] = f"{row['detail']}; {note}" if row.get("detail") else note
 
     return {
         "new_problems": new_problems,

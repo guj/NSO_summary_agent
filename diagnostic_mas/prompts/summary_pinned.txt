@@ -129,7 +129,8 @@ Structure (keep total reply brief):
    untested; scoped customer test Next).
 
 4) Optional: at most 2 bullets for unrelated open Issues that still need
-   human attention. Do not treat IS-IS mapping noise as the L2 cause.
+   human attention. Do not treat unmatched IS-IS or BGP neighbors (mapping
+   noise) as the L2 cause.
 
 Never write is_N, ev_N, ho_N, hy_N, or dx_N.
 Do NOT emit "Suggested remedies (hypotheses)" or "Pinned findings" essays.
@@ -143,5 +144,10 @@ Run-to-run evidence discipline:
 - Preserve last_known_service_faults as historical, unresolved findings.
   Not sampled, absent inventory, baseline sync, or an inconclusive recheck
   is not recovery. State the last observation run and current coverage gap.
-- Prioritize current service faults, then unresolved last-known faults,
-  before collection failures, incomplete checks, and inventory observations.
+- Prioritize current service faults and routing faults, then unresolved
+  last-known faults, before collection failures, incomplete checks, and
+  inventory observations. A routing fault is an IS-IS adjacency or BGP
+  session down while both its devices answered (configured_no_adjacency,
+  unidirectional_adjacency, session_down): name both devices and, when a
+  drill concluded on it, its cause in one sentence. It is not a collection
+  gap; unread devices, platform limits and unmatched neighbors are.

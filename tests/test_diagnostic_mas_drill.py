@@ -1448,3 +1448,42 @@ def test_drill_finding_keeps_a_valid_session_state_only():
     assert parse_drill_finding(base | {"session_state": "established"})["session_state"] == "established"
     assert "session_state" not in parse_drill_finding(base | {"session_state": "up-ish"})
     assert "session_state" not in parse_drill_finding(base)
+
+
+# The last published scan's routing finding on the same Issue: a lead for this scan's drill.
+SALT_SEAT = "isis:salt-data-sw:?:seat-data-sw:HundredGigE0/0/0/23.3000"
+
+
+def _earlier_scan() -> dict:
+    def finding(edge, cause, **extra):
+        return {"kind": "drill_finding", "payload": {"issue_edge_id": edge, "cause": cause, **extra}}
+    return {"evidence": [
+        finding(SALT_SEAT, "older cause"),
+        finding(SALT_SEAT, "salt's VLAN 3000 sub-interface receives nothing", confidence="high",
+                fix_suggestion="Read seat's isis interface HundredGigE0/0/0/23.3000.", observed="salt: 0 packets input"),
+        finding("if:mich-data-sw:HundredGigE0/0/0/24", "no light on all lanes"),     # a port: not carried
+    ]}
+
+
+def test_the_previous_scans_routing_finding_reaches_the_drill_as_a_lead():
+    from diagnostic_mas.drill import previous_findings, prior_exploration_for_issue
+    from diagnostic_mas.state_paths import case_to_dict
+
+    carried = previous_findings(_earlier_scan())
+    assert list(carried) == [SALT_SEAT]                                  # the latest per issue, routing only
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    case.previous_findings = carried
+    issue_id = open_issue(case, code="unidirectional_adjacency", message="IS-IS adjacency down", evidence_ids=[],
+                          layer="underlay", edge_id=SALT_SEAT)
+    issue = next(i for i in case.issues if i["id"] == issue_id)
+
+    lead = prior_exploration_for_issue(case, issue)["previous_scan_finding"]
+    assert lead["cause"] == "salt's VLAN 3000 sub-interface receives nothing" and lead["confidence"] == "high"
+    assert lead["fix_suggestion"].startswith("Read seat's isis interface") and lead["observed"] == "salt: 0 packets input"
+    assert "not current evidence" in lead["note"]
+
+    other = open_issue(case, code="session_down", message="BGP down", evidence_ids=[], layer="routing",
+                       edge_id="bgp:10.0.0.1:10.0.0.2:a-data-sw:b-data-sw")
+    assert "previous_scan_finding" not in prior_exploration_for_issue(case, next(i for i in case.issues if i["id"] == other))
+    assert "previous_findings" not in case_to_dict(case)                # never saved with this scan
+    assert previous_findings(None) == {}

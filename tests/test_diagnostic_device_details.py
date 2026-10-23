@@ -136,3 +136,42 @@ def test_device_with_no_interface_or_hardware_data_gets_no_details():
     case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0), device_names=["pe3"])
 
     assert device_detail_lines(case, live_verified=["pe3"]) == {}
+
+
+def _record(doc: str, device: str) -> str:
+    """One device's HTML block: from its summary to the next device block."""
+    start = doc.index(f"<summary>{device}")
+    end = doc.find('<details class="record"', start)
+    return doc[start:end if end > 0 else len(doc)]
+
+
+def test_a_routing_finding_is_given_in_full_in_both_routers_html_blocks():
+    from diagnostic_mas.case import open_issue
+
+    salt, seat, star = "salt-data-sw", "seat-data-sw", "star-data-sw"
+    edge = f"isis:{salt}:?:{seat}:HundredGigE0/0/0/23.3000"
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0), device_names=[salt, seat, star])
+    open_issue(case, code="unidirectional_adjacency", severity="high", layer="underlay", evidence_ids=[],
+               edge_id=edge, devices=[salt, seat], message=f"IS-IS adjacency down: {salt} does not list it; "
+                                                           f"{seat} HundredGigE0/0/0/23.3000 lists it as Init")
+    add_evidence(case, {"kind": "drill_finding", "role": "drill", "payload": {
+        "issue_edge_id": edge, "confidence": "medium",
+        "observed": "salt lldp neighbors shows NO neighbour on Hu0/0/0/21,\nwhile seat lists salt Port ID HundredGigE0/0/0/21.",
+        "cause": "Physical-path asymmetry seat->salt, **not** configuration. " + "Long evidence sentence. " * 40,
+        "fix_suggestion": "1. Trace and re-seat the seat Hu0/0/0/23 -> salt Hu0/0/0/21 fibre pair."}})
+    add_evidence(case, {"kind": "drill_finding", "role": "drill", "payload": {
+        "issue_edge_id": f"if:{star}:HundredGigE0/0/0/64", "cause": "No light on lanes 1 and 2."}})
+    text = render_report(case)
+
+    doc = render_html_report(text, "run", case=case_to_dict(case))
+
+    summary = f"<summary>Full finding: IS-IS adjacency {salt} ↔ {seat}</summary>"
+    for device in (salt, seat):
+        block = _record(doc, device)
+        assert summary in block and block.index("Investigated by LLM") < block.index(summary)
+        assert "salt lldp neighbors shows NO neighbour on Hu0/0/0/21,\nwhile seat lists salt" in block
+        assert "not verified" in block and "1. Trace and re-seat the seat Hu0/0/0/23" in block
+        assert ("Long evidence sentence. " * 40).strip() in block          # uncut
+        assert "**not**" not in block and "Physical-path asymmetry seat-&gt;salt, not configuration." in block
+    assert "Full finding" not in _record(doc, star)                     # a port finding has its own place
+    assert "Full finding" not in text                                    # the text report keeps the one-line version

@@ -444,14 +444,18 @@ async def _run_after_accounting(
 
         case.focus_devices = list(focus)
 
-        # The last published scan's IS-IS adjacencies: one both routers now omit is Down.
+        # The last published scan: its IS-IS adjacencies (one both routers now omit is Down)
+        # and its routing drill findings (leads for this scan's drills, never proof).
+        from diagnostic_mas.case_delta import load_previous_case
+        from diagnostic_mas.drill import previous_findings
+
+        previous_case = load_previous_case(diagnostic_mas_state_dir(settings))[0]
+        case.previous_findings = previous_findings(previous_case)
         expected_isis_edges = None
         if run_isis:
-            from diagnostic_mas.case_delta import load_previous_case
             from diagnostic_mas.roles.isis import expected_adjacencies
 
-            expected_isis_edges = expected_adjacencies(
-                load_previous_case(diagnostic_mas_state_dir(settings))[0])
+            expected_isis_edges = expected_adjacencies(previous_case)
 
         set_mcp_stage("spines")
         await run_mandatory_spines(
