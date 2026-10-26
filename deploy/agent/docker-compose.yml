@@ -1,0 +1,16 @@
+# The NSO diagnostic agent, run on demand or from cron, for example:
+#   docker compose run --rm agent --check-connection
+#   docker compose run --rm agent --publish
+# Keep this file in a folder with nso-diagnostic.env and a state/ folder. See docs/DOCKER.md.
+services:
+  agent:
+    image: nso-diagnostic-agent:latest
+    # The host's network: NSO, the LLM endpoint and a Pushgateway on this host, as the host reaches them.
+    network_mode: host
+    # Files in state/ belong to this user; set AGENT_UID and AGENT_GID (the folder's .env) to yours.
+    user: "${AGENT_UID:-1000}:${AGENT_GID:-1000}"
+    volumes:
+      # The settings, read and written by --configure as a .env file (quotes and # are handled).
+      - ./nso-diagnostic.env:/app/.env
+      # Saved runs: the next scan compares with them, so this folder must persist.
+      - ./state:/app/state

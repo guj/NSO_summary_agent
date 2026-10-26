@@ -34,7 +34,8 @@ to the agent; it is not part of this repository. To use your own installation, s
 
 ## Setup
 
-Prefer Docker (no local Python venv)? See [docs/DOCKER.md](docs/DOCKER.md).
+To run it in Docker on a server next to NSO, from a ready-made image, see
+[docs/DOCKER.md](docs/DOCKER.md).
 
 ```bash
 cd /path/to/checkout
@@ -622,10 +623,11 @@ agent/            # shared config, LLM client, Slack/email publishing, markdown 
 multi_agent/      # shared spine collection, deep checks and tool gating
 docs/
   DIAGNOSTIC_RUNNER.md  # install, configure, run, read the report
-  DOCKER.md             # build and run in a container
+  DOCKER.md             # run from the image on a server; build the image
   FAQ.md                # operator FAQ
 state/            # gitignored; diagnostic_mas/runs/<run-id>/ holds case.json, report.md, report.html
 deploy/
+  agent/                        # image build script, compose file, pinned package versions
   com.esnet.nso-summary.plist   # example launchd schedule
   monitoring/                   # docker compose, Prometheus and Grafana dashboards
 ```

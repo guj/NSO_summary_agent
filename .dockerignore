@@ -15,6 +15,7 @@ logs/
 .DS_Store
 docs/superpowers/
 deploy/monitoring/
+mcp-server/
 *.egg-info/
 dist/
 build/
