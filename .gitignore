@@ -19,6 +19,7 @@ htmlcov/
 .DS_Store
 .env.*
 !.env.example
+nso-diagnostic.env
 state_*/
 logs/
 *.log

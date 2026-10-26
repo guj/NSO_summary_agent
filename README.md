@@ -623,11 +623,11 @@ agent/            # shared config, LLM client, Slack/email publishing, markdown 
 multi_agent/      # shared spine collection, deep checks and tool gating
 docs/
   DIAGNOSTIC_RUNNER.md  # install, configure, run, read the report
-  DOCKER.md             # run from the image on a server; build the image
+  DOCKER.md             # run the agent from the image on a server
   FAQ.md                # operator FAQ
 state/            # gitignored; diagnostic_mas/runs/<run-id>/ holds case.json, report.md, report.html
 deploy/
-  agent/                        # image build script, compose file, pinned package versions
+  agent/                        # building the image (README.md), compose file, pinned versions
   com.esnet.nso-summary.plist   # example launchd schedule
   monitoring/                   # docker compose, Prometheus and Grafana dashboards
 ```

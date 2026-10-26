@@ -40,3 +40,16 @@ def test_dashboard_queries_only_metrics_a_scan_pushes():
     assert queries, "the dashboard has no queries"
     asked = {name for query in queries for name in re.findall(r"\bnso_[a-z0-9_]+", query)}
     assert asked - pushed == set()
+
+
+def test_dashboard_shows_one_agent_at_a_time():
+    # Each agent pushes under its own instance; summed together, two scans add up.
+    dashboard = json.loads(DASHBOARD.read_text())
+    variables = {v["name"]: v for v in dashboard["templating"]["list"]}
+
+    assert "instance" in variables
+    assert not variables["instance"].get("includeAll")
+    assert not variables["instance"].get("multi")
+    for query in _queries(dashboard["panels"]):
+        for selector in re.findall(r"\bnso_[a-z0-9_]+(\{[^}]*\})?", query):
+            assert 'instance="$instance"' in selector, query

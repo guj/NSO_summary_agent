@@ -222,6 +222,15 @@ After each scan that is not a dry run, the agent PUTs gauges to:
 
 `http://localhost:9091/metrics/job/nso-summary/instance/<PROMETHEUS_INSTANCE>`
 
+Each `PROMETHEUS_INSTANCE` is its own group, and Pushgateway keeps a group until it is
+deleted. The NSO Diagnostic dashboard shows one agent at a time: pick it in the **Agent**
+menu at the top. A setup you no longer scan from (for example after moving from a checkout
+to Docker) keeps its last numbers there; remove its group with:
+
+```bash
+curl -X DELETE http://localhost:9091/metrics/job/nso-summary/instance/<PROMETHEUS_INSTANCE>
+```
+
 Every scan pushes these counts: `nso_summary_run_success`, `nso_summary_last_run_timestamp_seconds`, `nso_summary_run_duration_seconds`, `nso_fleet_devices_total`, `nso_fleet_devices_in_sync`, `nso_fleet_devices_out_of_sync`, `nso_fleet_devices_sync_error`, `nso_services_up` / `nso_services_down` (`service_type` label), `nso_isis_adjacencies_up` / `_down`, `nso_bgp_sessions_up` / `_down`, `nso_physical_links_up` / `_down`, `nso_infra_cpu_alerts` / `nso_infra_memory_alerts`, `nso_hardware_*_alerts`, `nso_inventory_review_devices`, `nso_delta_*`, `nso_topology_issues` (`layer` label). Every series carries `pipeline="diagnostic"`. The `nso_delta_*` counts are always 0: changes since the previous scan are in the report, not in metrics.
 
 Unset `PROMETHEUS_PUSHGATEWAY_URL` to skip, or add `--skip-metrics` for one scan. If Pushgateway is down, the agent logs a warning and still finishes the report.

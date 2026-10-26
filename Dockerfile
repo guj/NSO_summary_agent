@@ -16,6 +16,7 @@ COPY --from=mcp cisco_nso_mcp_server /tmp/fabric-nso-mcp-server/cisco_nso_mcp_se
 
 # Editable install keeps Path(__file__) under /app so config/ resolves.
 # .env.example and the compose file ship in the image, so the image alone is enough to set up.
+# Only named files from deploy/agent: settings or saved runs left there never reach the image.
 COPY pyproject.toml README.md .env.example ./
 COPY agent ./agent
 COPY nso_facts ./nso_facts
@@ -23,7 +24,7 @@ COPY nso_report ./nso_report
 COPY multi_agent ./multi_agent
 COPY diagnostic_mas ./diagnostic_mas
 COPY config ./config
-COPY deploy/agent ./deploy/agent
+COPY deploy/agent/docker-compose.yml deploy/agent/constraints.txt ./deploy/agent/
 
 # Pinned to the tested versions (deploy/agent/constraints.txt), so a later build installs the same.
 RUN pip install --no-cache-dir -c deploy/agent/constraints.txt /tmp/fabric-nso-mcp-server \

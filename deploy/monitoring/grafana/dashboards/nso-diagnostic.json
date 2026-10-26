@@ -19,7 +19,30 @@
     "list": []
   },
   "templating": {
-    "list": []
+    "list": [
+      {
+        "name": "instance",
+        "label": "Agent",
+        "description": "PROMETHEUS_INSTANCE of the agent to show. Each agent pushes its own numbers; this dashboard shows one agent at a time.",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "definition": "label_values(nso_services{pipeline=\"diagnostic\"}, instance)",
+        "query": {
+          "query": "label_values(nso_services{pipeline=\"diagnostic\"}, instance)",
+          "refId": "instance"
+        },
+        "refresh": 2,
+        "sort": 1,
+        "includeAll": false,
+        "multi": false,
+        "current": {},
+        "options": [],
+        "hide": 0
+      }
+    ]
   },
   "links": [],
   "panels": [
@@ -57,7 +80,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "time() - max(nso_summary_last_run_timestamp_seconds{pipeline=\"diagnostic\"})",
+          "expr": "time() - max(nso_summary_last_run_timestamp_seconds{instance=\"$instance\",pipeline=\"diagnostic\"})",
           "refId": "A",
           "instant": true,
           "range": false
@@ -127,7 +150,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max(nso_scan_last_attempt_success{pipeline=\"diagnostic\"})",
+          "expr": "max(nso_scan_last_attempt_success{instance=\"$instance\",pipeline=\"diagnostic\"})",
           "refId": "A",
           "instant": true,
           "range": false
@@ -205,7 +228,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max(nso_scan_last_attempt_nso_unreachable{pipeline=\"diagnostic\"})",
+          "expr": "max(nso_scan_last_attempt_nso_unreachable{instance=\"$instance\",pipeline=\"diagnostic\"})",
           "refId": "A",
           "instant": true,
           "range": false
@@ -283,7 +306,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max(nso_summary_run_duration_seconds{pipeline=\"diagnostic\"})",
+          "expr": "max(nso_summary_run_duration_seconds{instance=\"$instance\",pipeline=\"diagnostic\"})",
           "refId": "A",
           "instant": true,
           "range": false
@@ -345,7 +368,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max(nso_fleet_devices_not_covered{pipeline=\"diagnostic\"})",
+          "expr": "max(nso_fleet_devices_not_covered{instance=\"$instance\",pipeline=\"diagnostic\"})",
           "refId": "A",
           "instant": true,
           "range": false
@@ -424,7 +447,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(nso_services{pipeline=\"diagnostic\",status=\"up\"})",
+          "expr": "sum(nso_services{instance=\"$instance\",pipeline=\"diagnostic\",status=\"up\"})",
           "refId": "A",
           "instant": true,
           "range": false
@@ -486,7 +509,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(nso_services{pipeline=\"diagnostic\",status=\"down\"})",
+          "expr": "sum(nso_services{instance=\"$instance\",pipeline=\"diagnostic\",status=\"down\"})",
           "refId": "A",
           "instant": true,
           "range": false
@@ -552,7 +575,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(nso_services{pipeline=\"diagnostic\",status=\"degraded\"})",
+          "expr": "sum(nso_services{instance=\"$instance\",pipeline=\"diagnostic\",status=\"degraded\"})",
           "refId": "A",
           "instant": true,
           "range": false
@@ -618,7 +641,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(nso_services{pipeline=\"diagnostic\",status=\"unknown\"})",
+          "expr": "sum(nso_services{instance=\"$instance\",pipeline=\"diagnostic\",status=\"unknown\"})",
           "refId": "A",
           "instant": true,
           "range": false
@@ -684,7 +707,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (status) (nso_services{pipeline=\"diagnostic\",status!=\"up\"})",
+          "expr": "sum by (status) (nso_services{instance=\"$instance\",pipeline=\"diagnostic\",status!=\"up\"})",
           "refId": "A",
           "instant": false,
           "range": true,
@@ -785,7 +808,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (service_type, status) (nso_services{pipeline=\"diagnostic\"})",
+          "expr": "sum by (service_type, status) (nso_services{instance=\"$instance\",pipeline=\"diagnostic\"})",
           "refId": "A",
           "instant": true,
           "range": false,
@@ -850,7 +873,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sort_desc(sum by (device, service_type, status) (nso_service_faults{pipeline=\"diagnostic\"}) > 0)",
+          "expr": "sort_desc(sum by (device, service_type, status) (nso_service_faults{instance=\"$instance\",pipeline=\"diagnostic\"}) > 0)",
           "refId": "A",
           "instant": true,
           "range": false,
@@ -908,7 +931,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (device) (nso_service_faults{pipeline=\"diagnostic\"})",
+          "expr": "sum by (device) (nso_service_faults{instance=\"$instance\",pipeline=\"diagnostic\"})",
           "refId": "A",
           "instant": false,
           "range": true,
@@ -963,7 +986,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "nso_link_crc_per_minute{pipeline=\"diagnostic\"}",
+          "expr": "nso_link_crc_per_minute{instance=\"$instance\",pipeline=\"diagnostic\"}",
           "refId": "A",
           "instant": false,
           "range": true,
@@ -974,7 +997,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "nso_link_state_changes{pipeline=\"diagnostic\"}",
+          "expr": "nso_link_state_changes{instance=\"$instance\",pipeline=\"diagnostic\"}",
           "refId": "B",
           "instant": false,
           "range": true,
@@ -1108,7 +1131,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "nso_scan_info{pipeline=\"diagnostic\"}",
+          "expr": "nso_scan_info{instance=\"$instance\",pipeline=\"diagnostic\"}",
           "refId": "A",
           "instant": true,
           "range": false,
@@ -1188,7 +1211,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max(nso_bgp_sessions_down{pipeline=\"diagnostic\"})",
+          "expr": "max(nso_bgp_sessions_down{instance=\"$instance\",pipeline=\"diagnostic\"})",
           "refId": "A",
           "instant": true,
           "range": false
@@ -1254,7 +1277,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max(nso_isis_adjacencies_down{pipeline=\"diagnostic\"})",
+          "expr": "max(nso_isis_adjacencies_down{instance=\"$instance\",pipeline=\"diagnostic\"})",
           "refId": "A",
           "instant": true,
           "range": false
@@ -1320,7 +1343,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max(nso_fleet_devices_out_of_sync{pipeline=\"diagnostic\"}) + max(nso_fleet_devices_sync_error{pipeline=\"diagnostic\"})",
+          "expr": "max(nso_fleet_devices_out_of_sync{instance=\"$instance\",pipeline=\"diagnostic\"}) + max(nso_fleet_devices_sync_error{instance=\"$instance\",pipeline=\"diagnostic\"})",
           "refId": "A",
           "instant": true,
           "range": false
