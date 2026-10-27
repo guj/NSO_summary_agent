@@ -167,6 +167,13 @@ direction's fibre, connectors or optics, even while the receive level is still i
 numbers are readings only; the report draws no conclusion from them. "Not read" means that end's output could not
 be read or parsed (for example a platform without that output).
 
+"Packets since the previous scan (11 h 20 min): A → B: N sent, M received; B → A: …" subtracts the last published
+scan's packet counters from this scan's at both ends, so what one end sent is set against what the other received
+over the same time. The counts are for the whole port, every VLAN on it. "Not compared" names why: "no earlier
+reading" (the previous scan did not read that port), "counters restarted" (cleared, or the router restarted, in
+between) or "not read" (this scan could not read it). A scan with nothing published before it says "no earlier scan
+to compare with".
+
 ### What do "Established here, far end not read" and "not read on <device>" mean?
 
 ```text

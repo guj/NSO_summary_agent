@@ -1092,11 +1092,13 @@ def format_devices_operator(case: CaseFile) -> list[str]:
             if mapped and issue.get("code") in _ADJACENCY_DOWN_CODES:
                 from diagnostic_mas.link_lldp import lldp_line
                 from diagnostic_mas.link_optics import optics_line
+                from diagnostic_mas.link_traffic import traffic_line
 
                 ports = _adjacency_ports(case, str(issue.get("edge_id") or ""))
                 mapped = f"{mapped.rstrip('.')}. {ports}" if ports else mapped
                 for reading in (lldp_line(case, str(issue.get("edge_id") or "")),
-                                optics_line(case, str(issue.get("edge_id") or ""))):
+                                optics_line(case, str(issue.get("edge_id") or "")),
+                                traffic_line(case, str(issue.get("edge_id") or ""))):
                     mapped = f"{mapped} {reading}" if reading else mapped
             if mapped:
                 attention.append(mapped)

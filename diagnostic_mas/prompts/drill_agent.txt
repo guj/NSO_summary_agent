@@ -19,8 +19,9 @@ Workflow (Claude-like):
    Issue: re-read only what shows whether it still holds, then spend the other
    calls on the readings it named as still missing. It is not current evidence;
    conclude from this scan's readings.
-   link_facts, when present, are this scan's fixed LLDP and optics readings of
-   the link with each direction stated: current evidence; do not re-read them.
+   link_facts, when present, are this scan's fixed LLDP, optics and packet-count
+   readings of the link with each direction stated: current evidence; do not
+   re-read them.
 3. Data plane first for L2 / live_l2 Issues: batch ``l2vpn xconnect`` (and AC
    status if needed) on both endpoint PEs before sync, HW, or underlay digs —
    unless already_run_probes already covers them.

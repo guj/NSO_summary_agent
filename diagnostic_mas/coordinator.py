@@ -92,6 +92,11 @@ async def run_mandatory_spines(
             operational_edges=spine.get("operational_edges"),
             extra={"coverage": spine.get("coverage")},
         )
+        # Both ends' LLDP for each IS-IS adjacency down: it tells each direction and names a far
+        # port the adjacency left unknown, before the counters and optics read the ports.
+        from diagnostic_mas.link_lldp import record_link_lldp
+
+        await record_link_lldp(client, case, workers=spine_concurrent_devices)
 
     if run_bgp:
         spine = await run_bgp_spine(client, device_names)
@@ -130,20 +135,20 @@ async def run_mandatory_spines(
             operational_edges=spine.get("operational_edges"),
             extra=spine.get("extra"),
         )
-        # Counters of the ports under services and adjacencies, for the next scan to subtract.
+        # Counters of the ports under services and adjacencies, for the next scan to subtract;
+        # the previous scan's are subtracted now at both ends of each IS-IS adjacency down.
         if max_port_counter_reads > 0:
+            from diagnostic_mas.link_traffic import record_link_traffic
             from diagnostic_mas.port_counters import record_port_counters
 
             await record_port_counters(client, case, ceiling=max_port_counter_reads,
                                        workers=spine_concurrent_devices)
+            record_link_traffic(case)
 
     if run_isis:
-        # Both ends' LLDP, then optics, for each IS-IS adjacency down: LLDP tells each direction and
-        # names a far port the adjacency left unknown; the optics set one direction against the other.
-        from diagnostic_mas.link_lldp import record_link_lldp
+        # Both ends' optics for each IS-IS adjacency down, so the report can set one direction against the other.
         from diagnostic_mas.link_optics import record_link_optics
 
-        await record_link_lldp(client, case, workers=spine_concurrent_devices)
         await record_link_optics(client, case, workers=spine_concurrent_devices)
 
     if run_device:

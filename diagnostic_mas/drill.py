@@ -347,8 +347,10 @@ def prior_exploration_for_issue(
     if edge.startswith("isis:"):
         from diagnostic_mas.link_lldp import lldp_line
         from diagnostic_mas.link_optics import optics_line
+        from diagnostic_mas.link_traffic import traffic_line
 
-        readings = [line for line in (lldp_line(case, edge), optics_line(case, edge)) if line]
+        readings = [line for line in (lldp_line(case, edge), optics_line(case, edge), traffic_line(case, edge))
+                    if line]
         if readings:
             out["link_facts"] = {
                 "note": "This scan's fixed readings of the link, each direction stated: current evidence.",

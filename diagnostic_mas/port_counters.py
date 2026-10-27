@@ -24,6 +24,8 @@ _NUMBERS = {
     "crc": r"^\s+\d+ input errors, (\d+) CRC",
     "output_drops": r"(\d+) total output drops",
     "output_errors": r"^\s+(\d+) output errors,",
+    "packets_in": r"^\s+(\d+) packets input,",
+    "packets_out": r"^\s+(\d+) packets output,",
 }
 _ERRORS = {"crc": "CRC", "input_errors": "input errors", "output_errors": "output errors"}
 
@@ -71,10 +73,12 @@ def counter_targets(case: CaseFile) -> dict[tuple[str, str], dict[str, Any]]:
                     riders.setdefault((end["device"], _parent_port(end["ac"])), set()).add(str(record.get("name")))
                     on_device.setdefault(end["device"], set()).add(str(record.get("name")))
         elif ev.get("role") == "isis":
+            from diagnostic_mas.link_lldp import edge_ports
+
+            # An end whose port IS-IS leaves unknown counts when the other end's LLDP named it.
             for edge in payload.get("operational_edges") or []:
-                parts = str((edge or {}).get("id") or "").split(":")
-                if len(parts) == 5:
-                    adjacent.update({(parts[1], _parent_port(parts[2])), (parts[3], _parent_port(parts[4]))})
+                adjacent.update((device, port) for device, port in edge_ports(case, str((edge or {}).get("id") or ""))
+                                if port)
     # Services attach to access ports, not to an uplink: an uplink says how many its device holds.
     return {key: {"services": len(riders.get(key, ())), "adjacency": key in adjacent}
             | ({"device_services": len(on_device.get(key[0], ()))} if key in adjacent else {})

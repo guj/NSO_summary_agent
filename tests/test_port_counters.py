@@ -52,7 +52,8 @@ RP/0/RP0/CPU0:rutg-data-sw#"""
 def test_reads_one_ports_counters_from_its_interface_output():
     assert parse_port_counters(SHOWN, UPLINK) == {
         "state": "up", "transitions": 26, "cleared": "never", "description": "uplink to star, panel 4",
-        "input_errors": 843, "crc": 843, "output_errors": 0, "input_drops": 0, "output_drops": 12}
+        "input_errors": 843, "crc": 843, "output_errors": 0, "input_drops": 0, "output_drops": 12,
+        "packets_in": 569938104308, "packets_out": 461680525836}
     down = parse_port_counters(SHOWN.replace("is up, line protocol is up", "is down, line protocol is down"), "Hu0/0/0/23")
     assert down["state"] == "down"
     # Another port's output, two ports at once, or a failed command is not this port's reading.

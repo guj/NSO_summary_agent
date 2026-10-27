@@ -449,8 +449,11 @@ async def _run_after_accounting(
         from diagnostic_mas.case_delta import load_previous_case
         from diagnostic_mas.drill import previous_findings
 
+        from diagnostic_mas.port_counters import _saved as saved_port_counters
+
         previous_case = load_previous_case(diagnostic_mas_state_dir(settings))[0]
         case.previous_findings = previous_findings(previous_case)
+        case.previous_port_counters = saved_port_counters(previous_case or {})
         expected_isis_edges = None
         if run_isis:
             from diagnostic_mas.roles.isis import expected_adjacencies

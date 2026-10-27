@@ -1,0 +1,97 @@
+"""Packets each end of an IS-IS adjacency down sent and received since the previous scan."""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from diagnostic_mas.case import add_evidence
+from diagnostic_mas.drill import prior_exploration_for_issue
+from diagnostic_mas.link_lldp import record_link_lldp
+from diagnostic_mas.link_traffic import record_link_traffic, traffic_line
+from diagnostic_mas.operator_report import format_devices_operator
+from diagnostic_mas.port_counters import counter_targets, parse_port_counters, record_port_counters
+from test_link_lldp import EDGE, OUTPUTS, SALT, SEAT, _call, _case
+from test_port_counters import SHOWN
+
+SALT_PORT, SEAT_PORT = "HundredGigE0/0/0/21", "HundredGigE0/0/0/23"
+
+
+def _shown(port: str, packets_in: int, packets_out: int) -> str:
+    """``show interfaces <port>`` with these packet counts (rutg's output of 8 October 2026 otherwise)."""
+    return (SHOWN.replace("HundredGigE0/0/0/23 is up", f"{port} is up")
+            .replace("569938104308 packets input", f"{packets_in} packets input")
+            .replace("461680525836 packets output", f"{packets_out} packets output"))
+
+
+async def _scanned(salt: tuple[int, int] | None, seat: tuple[int, int] | None, previous: dict | None):
+    """A scan of the salt–seat adjacency: LLDP, then each end's counters, then the comparison."""
+    case = _case()
+    add_evidence(case, {"kind": "spine", "role": "isis", "layer": "underlay",
+                        "payload": {"operational_edges": [{"id": EDGE, "state": {"status": "down"}}]}})
+    case.previous_port_counters = previous or {}
+    outputs = dict(OUTPUTS)
+    if salt:
+        outputs[SALT, f"interfaces {SALT_PORT}"] = _shown(SALT_PORT, *salt)
+    if seat:
+        outputs[SEAT, f"interfaces {SEAT_PORT}"] = _shown(SEAT_PORT, *seat)
+    await record_link_lldp(None, case, call=_call(outputs, []))
+    await record_port_counters(None, case, ceiling=10, call=_call(outputs, []))
+    record_link_traffic(case)
+    return case
+
+
+def _before(**ports: tuple[int, int]) -> dict:
+    """The previous scan's counters, 11 h 20 min ago: (packets in, packets out) per end."""
+    read_at = (datetime.now(timezone.utc) - timedelta(hours=11, minutes=20)).isoformat()
+    names = {"salt": f"{SALT}:{SALT_PORT}", "seat": f"{SEAT}:{SEAT_PORT}"}
+    return {"read_at": read_at, "ports": {names[end]: {"state": "up", "cleared": "never", "packets_in": counts[0],
+                                                       "packets_out": counts[1]} for end, counts in ports.items()}}
+
+
+def test_packet_counts_are_read_with_the_error_counters():
+    reading = parse_port_counters(_shown(SALT_PORT, 1038504, 465806), SALT_PORT)
+    assert (reading["packets_in"], reading["packets_out"]) == (1038504, 465806)
+
+
+@pytest.mark.asyncio
+async def test_the_port_lldp_named_has_its_counters_read():
+    case = await _scanned((1250, 1280), (1975, 1234572890), None)
+
+    targets = counter_targets(case)
+    assert (SALT, SALT_PORT) in targets and (SEAT, SEAT_PORT) in targets
+    assert not any(port == "?" for _, port in targets)
+
+
+@pytest.mark.asyncio
+async def test_each_direction_sets_what_one_end_sent_against_what_the_other_received():
+    case = await _scanned((1250, 1280), (1975, 1234572890), _before(salt=(200, 300), seat=(1000, 5000)))
+
+    assert traffic_line(case, EDGE) == (
+        f"Packets since the previous scan (11 h 20 min): {SALT} → {SEAT}: 980 sent, 975 received; "
+        f"{SEAT} → {SALT}: 1,234,567,890 sent, 1,050 received.")
+
+
+@pytest.mark.asyncio
+async def test_a_port_without_an_earlier_reading_or_with_restarted_counters_is_not_compared():
+    # salt's port was first read in this scan; seat's counters went back (cleared or restarted).
+    case = await _scanned((1250, 1280), (10, 20), _before(seat=(1000, 5000)))
+
+    assert traffic_line(case, EDGE) == (
+        f"Packets since the previous scan (11 h 20 min): {SALT} → {SEAT}: not compared (no earlier reading on "
+        f"{SALT}; counters restarted on {SEAT}); {SEAT} → {SALT}: not compared (counters restarted on {SEAT}; "
+        f"no earlier reading on {SALT}).")
+
+    first = await _scanned((1250, 1280), (1975, 1234572890), None)
+    assert traffic_line(first, EDGE) == "Packets: no earlier scan to compare with."
+
+
+@pytest.mark.asyncio
+async def test_the_report_and_the_drill_get_the_packet_line():
+    case = await _scanned((1250, 1280), (1975, 1234572890), _before(salt=(200, 300), seat=(1000, 5000)))
+    line = traffic_line(case, EDGE)
+
+    text = "\n".join(format_devices_operator(case))
+    assert line in text.split(f"### {SALT}\n", 1)[1].split("\n### ", 1)[0]
+    assert line in prior_exploration_for_issue(case, case.issues[0])["link_facts"]["readings"]

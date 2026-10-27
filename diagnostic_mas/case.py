@@ -71,6 +71,8 @@ class CaseFile:
     # The last published scan's routing drill findings, by issue edge id: leads for this
     # scan's drills. Not current evidence, and not saved with this case.
     previous_findings: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # The last published scan's port counters, to subtract from this scan's. Not saved with this case.
+    previous_port_counters: dict[str, Any] = field(default_factory=dict)
     # Token counts for the scan, and its cost and the budget when the provider reports them.
     llm_usage: dict[str, Any] = field(default_factory=dict)
     # MCP calls of the scan: all, from cache, and those made during LLM investigations.
