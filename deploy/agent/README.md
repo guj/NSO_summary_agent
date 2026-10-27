@@ -18,7 +18,8 @@ deploy/agent/build_image.sh --save
 ```
 
 It writes `dist/nso-diagnostic-agent-<version>-amd64.tar.gz` (about 80 MB). Git and Docker
-builds ignore `dist/`.
+builds ignore `dist/`. The image holds a copy of the code: rebuild it after every change to the
+source, or scans keep running the old code.
 
 - The script clones the [FABRIC NSO MCP server](https://github.com/fabric-testbed/fabric-nso-mcp-server)
   into a temporary folder, at the commit `install.py` pins (`MCP_REF`). That repository is

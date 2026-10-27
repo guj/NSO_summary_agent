@@ -51,17 +51,19 @@ def _ends(edge_id: str) -> list[tuple[str, str]]:
 
 
 def optics_targets(case: CaseFile) -> list[tuple[str, str]]:
-    """(device, port) at each end of an adjacency down whose interface is known, in issue order."""
-    from diagnostic_mas.port_counters import _parent_port
+    """(device, port) at each end of an adjacency down whose port is known, in issue order.
+
+    A port the adjacency leaves unknown counts when the other end's LLDP named it.
+    """
+    from diagnostic_mas.link_lldp import edge_ports
 
     out: list[tuple[str, str]] = []
     for issue in case.issues:
         if issue.get("code") not in _ADJACENCY_DOWN:
             continue
-        for device, interface in _ends(str(issue.get("edge_id") or "")):
-            key = (device, _parent_port(interface))
-            if interface != "?" and key not in out:
-                out.append(key)
+        for device, port in edge_ports(case, str(issue.get("edge_id") or "")):
+            if port and (device, port) not in out:
+                out.append((device, port))
     return out
 
 
@@ -120,15 +122,14 @@ def _direction(source: str, target: str, sent: dict[str, Any] | None, got: dict[
 
 def optics_line(case: CaseFile, edge_id: str) -> str | None:
     """Both directions of an adjacency's link in numbers, or None when this scan read no optics."""
-    from diagnostic_mas.port_counters import _parent_port
+    from diagnostic_mas.link_lldp import edge_ports
 
-    saved, ends = _saved(case), _ends(edge_id)
+    saved, ends = _saved(case), edge_ports(case, edge_id)
     if saved is None or not ends:
         return None
     ports = saved.get("ports") or {}
-    (a, if_a), (b, if_b) = ends
-    read = {device: ports.get(f"{device}:{_parent_port(interface)}") if interface != "?" else None
-            for device, interface in ends}
+    (a, _), (b, _) = ends
+    read = {device: ports.get(f"{device}:{port}") if port else None for device, port in ends}
     if not read[a] and not read[b]:
         return "Optics not read."
     alarms = [f"{device}: {reading['alarms']}" for device, reading in read.items()

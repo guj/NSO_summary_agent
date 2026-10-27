@@ -704,7 +704,7 @@ def _views_issue(edge: dict[str, Any]) -> dict[str, Any]:
     def view(end: dict[str, Any], state: str) -> str:
         device, interface = end.get("device"), end.get("interface")
         if state == NOT_LISTED:
-            return (f"{device} does not list it (its interface is not known)" if interface == UNREAD_INTERFACE
+            return (f"{device} does not list it (its IS-IS names no interface)" if interface == UNREAD_INTERFACE
                     else f"{device} {interface} does not list it")
         return f"{device} {interface} lists it as {state.capitalize()}"
 

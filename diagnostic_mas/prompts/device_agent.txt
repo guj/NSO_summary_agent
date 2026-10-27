@@ -20,7 +20,9 @@ device's own IS-IS and interface output, then read for each:
 For a far end named in the Issue, read the same for its interface, then
 compare each direction lane by lane: one end's transmit power with the
 other end's receive power. A receive level inside the alarm thresholds is
-not healthy when the other direction loses much less light.
+not healthy when the other direction loses much less light. An LLDP neighbor
+entry on a device records frames that device received from the listed
+neighbor (neighbor → device), never the opposite direction.
 Read "bgp summary" once for the session states and how long they have been
 down (a session that is established now must be reported as such). After a
 failed or unsupported command use at most one grounded

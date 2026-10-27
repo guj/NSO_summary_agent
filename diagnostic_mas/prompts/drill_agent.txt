@@ -19,6 +19,8 @@ Workflow (Claude-like):
    Issue: re-read only what shows whether it still holds, then spend the other
    calls on the readings it named as still missing. It is not current evidence;
    conclude from this scan's readings.
+   link_facts, when present, are this scan's fixed LLDP and optics readings of
+   the link with each direction stated: current evidence; do not re-read them.
 3. Data plane first for L2 / live_l2 Issues: batch ``l2vpn xconnect`` (and AC
    status if needed) on both endpoint PEs before sync, HW, or underlay digs —
    unless already_run_probes already covers them.
@@ -38,6 +40,9 @@ Rules:
 - Prefer dataplane shows (xconnect / AC / peer loopback) over check_service_sync
   or get_hardware_health unless Evidence already proves the dataplane cause.
 - Do not invent device, interface, IP, or service names; use only input / tool text.
+- An LLDP neighbor entry on device X records frames X received from that
+  neighbor (neighbor → X). It says nothing about the opposite direction; only
+  the neighbor's own table shows that.
 - Never call MCP on devices in unavailable_devices (quarantined this run). Prefer
   available_devices / focus_live_devices. If all issue endpoints are quarantined,
   conclude with uncertainty from existing Evidence — do not burn the tool budget.

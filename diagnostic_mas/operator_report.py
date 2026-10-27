@@ -444,10 +444,14 @@ def _adjacency_ports(case: CaseFile, edge_id: str) -> str | None:
     for edge in extra.get("physical_operational_edges") or []:
         device, _, interface = str((edge or {}).get("id") or "").removeprefix("if:").partition(":")
         states[device, interface] = (edge or {}).get("state") or {}
+    from diagnostic_mas.link_lldp import far_port
+
     ends = []
-    for device, interface in ((parts[1], parts[2]), (parts[3], parts[4])):
+    for (device, interface), other in (((parts[1], parts[2]), parts[3]), ((parts[3], parts[4]), parts[1])):
         if interface == "?":
-            ends.append(f"{device} interface not known")
+            named = far_port(case, edge_id, device)
+            ends.append(f"{device} {named} (named by {other}'s LLDP) {_port_words(states.get((device, named)))}"
+                        if named else f"{device} interface not known")
             continue
         # A sub-interface that was not read shares its parent port's link.
         state = states.get((device, interface)) or states.get((device, interface.split(".", 1)[0]))
@@ -1086,12 +1090,14 @@ def format_devices_operator(case: CaseFile) -> list[str]:
         for issue in _issues_for_device(case, device):
             mapped = _mapping_attention(issue, unmatched)
             if mapped and issue.get("code") in _ADJACENCY_DOWN_CODES:
+                from diagnostic_mas.link_lldp import lldp_line
                 from diagnostic_mas.link_optics import optics_line
 
                 ports = _adjacency_ports(case, str(issue.get("edge_id") or ""))
                 mapped = f"{mapped.rstrip('.')}. {ports}" if ports else mapped
-                optics = optics_line(case, str(issue.get("edge_id") or ""))
-                mapped = f"{mapped} {optics}" if optics else mapped
+                for reading in (lldp_line(case, str(issue.get("edge_id") or "")),
+                                optics_line(case, str(issue.get("edge_id") or ""))):
+                    mapped = f"{mapped} {reading}" if reading else mapped
             if mapped:
                 attention.append(mapped)
             elif str(issue.get("code") or "") not in _MAPPING_CODES:
@@ -2551,11 +2557,12 @@ def format_run_details(
         lines.append(
             f"**Port and device investigations:** {b.port_investigations_used} / {b.max_port_investigations} "
             f"(tools used {b.port_tools_used}); {by_port} service{'s' if by_port != 1 else ''} explained")
+    from diagnostic_mas.link_lldp import lldp_reads_line
     from diagnostic_mas.link_optics import optics_reads_line
 
-    optics_reads = optics_reads_line(case)
-    if optics_reads:
-        lines.append(optics_reads)
+    for reads in (lldp_reads_line(case), optics_reads_line(case)):
+        if reads:
+            lines.append(reads)
     if any((b.max_deep_checks, b.max_handoffs, b.deep_checks_used, b.handoffs_used)):
         lines.append(
             f"**Deep checks / handoffs:** "

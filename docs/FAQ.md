@@ -153,6 +153,13 @@ match. The port states help tell these apart. "Both routers answered without it;
 lists it now. The port states are each end's interface as `show interfaces brief` read it: "link down" is a
 lost link, "shut down by configuration" is a deliberate one.
 
+"LLDP: A → B heard (B's port lists A's port); B → A not heard (A's port lists no LLDP neighbor)" comes from both
+ends' `show lldp neighbors`, read in the same scan. An LLDP entry on a router records frames that router received,
+so each direction is told by the receiving end's table: B listing A shows that A → B works, and says nothing about
+B → A. "Not heard" is a reading: frames from that side are not arriving, or are not sent. "Lists … instead" names
+another router heard on that port, as a fibre patched to the wrong place would show. When a router does not list
+the adjacency, its port is taken from the other end's LLDP ("named by …'s LLDP"), so its optics can still be read.
+
 When the line goes on with "Optics: A → B: transmitted …, received …, loss … dB per lane; B → A: …", both ends'
 `show controllers <port>` were read in the same scan: each direction is one end's transmit power against the
 other end's receive power, lane by lane. A direction losing several dB more than the other points at that

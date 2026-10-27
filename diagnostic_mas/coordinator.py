@@ -138,9 +138,12 @@ async def run_mandatory_spines(
                                        workers=spine_concurrent_devices)
 
     if run_isis:
-        # Both ends' optics for each IS-IS adjacency down, so the report can set one direction against the other.
+        # Both ends' LLDP, then optics, for each IS-IS adjacency down: LLDP tells each direction and
+        # names a far port the adjacency left unknown; the optics set one direction against the other.
+        from diagnostic_mas.link_lldp import record_link_lldp
         from diagnostic_mas.link_optics import record_link_optics
 
+        await record_link_lldp(client, case, workers=spine_concurrent_devices)
         await record_link_optics(client, case, workers=spine_concurrent_devices)
 
     if run_device:

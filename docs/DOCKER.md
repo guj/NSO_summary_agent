@@ -132,6 +132,8 @@ Use cron on the server; the times are an example:
 ## Upgrade
 
 Load the new image file, then run step 4 again. Settings and saved scans stay as they are.
+If you build the image from a checkout, rebuild it after each update of the checkout: the
+image holds its own copy of the code, so scans run the old code until you do.
 
 ```bash
 docker load < nso-diagnostic-agent-<new-version>-amd64.tar.gz

@@ -71,7 +71,7 @@ def _investigated() -> CaseFile:
     case.device_names = [CAPE, SALT, SEAT, STAR]
     open_issue(case, code="unidirectional_adjacency", severity="high", layer="underlay", evidence_ids=[],
                edge_id=ISIS_EDGE, devices=[SALT, SEAT],
-               message=f"IS-IS adjacency down: {SALT} does not list it (its interface is not known); "
+               message=f"IS-IS adjacency down: {SALT} does not list it (its IS-IS names no interface); "
                        f"{SEAT} HundredGigE0/0/0/23.3000 lists it as Init")
     _finding(case, ISIS_EDGE, "Seat's hellos never reach salt's VLAN 3000 sub-interface.",
              "On seat-data-sw run show isis interface HundredGigE0/0/0/23.3000.")

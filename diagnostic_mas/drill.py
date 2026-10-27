@@ -344,6 +344,16 @@ def prior_exploration_for_issue(
         "already_run_probes": already_run[:40],
         "prior_tool_traces": tool_traces[:20],
     }
+    if edge.startswith("isis:"):
+        from diagnostic_mas.link_lldp import lldp_line
+        from diagnostic_mas.link_optics import optics_line
+
+        readings = [line for line in (lldp_line(case, edge), optics_line(case, edge)) if line]
+        if readings:
+            out["link_facts"] = {
+                "note": "This scan's fixed readings of the link, each direction stated: current evidence.",
+                "readings": readings,
+            }
     earlier = (getattr(case, "previous_findings", None) or {}).get(edge)
     if earlier:
         lead = dict(earlier)
