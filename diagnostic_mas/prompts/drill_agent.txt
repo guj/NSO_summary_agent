@@ -21,7 +21,9 @@ Workflow (Claude-like):
    conclude from this scan's readings.
    link_facts, when present, are this scan's fixed LLDP, optics and packet-count
    readings of the link with each direction stated: current evidence; do not
-   re-read them.
+   re-read them. Lifetime interface totals cover different periods (counters
+   reset on reload or clear) and cannot show which port feeds which; the packet
+   counts since the previous scan can.
 3. Data plane first for L2 / live_l2 Issues: batch ``l2vpn xconnect`` (and AC
    status if needed) on both endpoint PEs before sync, HW, or underlay digs —
    unless already_run_probes already covers them.

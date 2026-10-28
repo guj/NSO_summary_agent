@@ -169,10 +169,12 @@ be read or parsed (for example a platform without that output).
 
 "Packets since the previous scan (11 h 20 min): A → B: N sent, M received; B → A: …" subtracts the last published
 scan's packet counters from this scan's at both ends, so what one end sent is set against what the other received
-over the same time. The counts are for the whole port, every VLAN on it. "Not compared" names why: "no earlier
-reading" (the previous scan did not read that port), "counters restarted" (cleared, or the router restarted, in
-between) or "not read" (this scan could not read it). A scan with nothing published before it says "no earlier scan
-to compare with".
+over the same time. The counts are for the whole port, every VLAN on it. When both scans counted bytes, "(bytes: X
+sent, Y received)" follows each direction: frames that grew or shrank on the way (an added VLAN tag is 4 bytes) show
+there even when the packet counts match; compare with the other direction, which shows how the two routers count
+bytes. "Not compared" names why: "no earlier reading" (the previous scan did not read that port), "counters
+restarted" (cleared, or the router restarted, in between) or "not read" (this scan could not read it). A scan with
+nothing published before it says "no earlier scan to compare with".
 
 ### What do "Established here, far end not read" and "not read on <device>" mean?
 

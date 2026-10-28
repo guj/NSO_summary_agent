@@ -59,19 +59,39 @@ def test_normalization_preserves_verified_direction_but_not_llm_gate_claim():
     assert 'category' not in normalize_gap(gap)
 
 
-def test_breakdown_excludes_passes_and_not_checked_and_counts_once(monkeypatch):
-    from diagnostic_mas import operator_report, device_health
-    rows = {
-      'access': {'complete':False,'verification_gap':{'blocker':'endpoint_access_unavailable'}},
-      'identity': {'dataplane_status':'unknown','verification_gap':{'blocker':'identity_unverified'}},
-      'gate': {'dataplane_status':'unknown','source':'gate'},
-      'pass': {'dataplane_status':'up','complete':True},
-      'outside': {'dataplane_status':'unknown'},
-    }
-    monkeypatch.setattr(operator_report, '_dataplane_by_name', lambda case: rows)
-    names = ['access','identity','gate','pass','pending','not_checked']
-    monkeypatch.setattr(device_health, 'services_from_case', lambda case: {n:{'name':n} for n in names})
-    case = SimpleNamespace(service_coverage={'gate':'unresolved','pending':'investigated','not_checked':'baseline_only'})
+def _scan(services, digs=None, coverage=None):
+    """A scan's case: l3rt services on one router each, their fixed-check status, and any LLM investigation."""
+    from diagnostic_mas.case import Budget, CaseFile, add_evidence
+
+    case = CaseFile(budget=Budget(0, 0))
+    records = {}
+    for name, status in services.items():
+        sync = "out-of-sync" if status == "out-of-sync" else "in-sync"
+        records[f"l3rt/{name}"] = {"service_type": "l3rt", "name": name, "devices": ["pe-1"],
+                                   "device_sync": {"pe-1": sync},
+                                   "basic_checks": {"status": "up" if status == "out-of-sync" else status}}
+    add_evidence(case, {"kind": "spine", "role": "service", "layer": "services",
+                        "payload": {"extra": {"services": records}}})
+    for name, dx in (digs or {}).items():
+        case.diagnoses.append({"kind": "dataplane", "subject": {"name": name, "service_type": "l3rt"}, **dx})
+    case.service_coverage = dict(coverage or {})
+    return case
+
+
+def _bullets(text):
+    return [line for line in text.splitlines() if line.startswith('- ')]
+
+
+def test_breakdown_excludes_passes_and_counts_each_unknown_once():
+    case = _scan(
+        {'access': 'unknown', 'identity': 'unknown', 'gate': 'unknown', 'pass': 'unknown', 'pending': 'unknown',
+         'baseline': 'up'},
+        digs={'access': {'source': 'llm', 'status': 'unknown', 'complete': False,
+                         'verification_gap': {'blocker': 'endpoint_access_unavailable'}},
+              'identity': {'source': 'llm', 'status': 'unknown', 'verification_gap': {'blocker': 'identity_unverified'}},
+              'gate': {'source': 'gate', 'status': 'unknown'},
+              'pass': {'source': 'llm', 'status': 'up', 'complete': True}},
+        coverage={'gate': 'unresolved', 'pending': 'investigated', 'baseline': 'basic_passed'})
     text = '\n'.join(format_unknown_breakdown(case))
     assert 'Unknown breakdown (4 services)' in text
     assert 'Access failure: **1**' in text
@@ -81,19 +101,40 @@ def test_breakdown_excludes_passes_and_not_checked_and_counts_once(monkeypatch):
     assert "1 of them: the evidence check did not accept its investigation's verdict." in text
     assert 'replay' not in text and 'pending review' not in text
     assert 'finish the missing direction' not in text       # written for the reader, not the investigator
-    assert rows['pass']['dataplane_status'] == 'up'
 
 
-def test_one_unknown_service_is_counted_in_the_singular(monkeypatch):
-    from diagnostic_mas import operator_report, device_health
-    monkeypatch.setattr(operator_report, '_dataplane_by_name',
-                        lambda case: {'gate': {'dataplane_status': 'unknown', 'source': 'gate'}})
-    monkeypatch.setattr(device_health, 'services_from_case', lambda case: {'gate': {'name': 'gate'}})
-    text = '\n'.join(format_unknown_breakdown(SimpleNamespace(service_coverage={})))
+def test_one_unknown_service_is_counted_in_the_singular():
+    case = _scan({'gate': 'unknown'}, digs={'gate': {'source': 'gate', 'status': 'unknown'}})
+    text = '\n'.join(format_unknown_breakdown(case))
     assert 'Unknown breakdown (1 service):' in text
-    bullets = [line for line in text.splitlines() if line.startswith('- ')]
-    assert bullets == ["- Forwarding evidence incomplete: **1** — the checks that ran passed, but one piece of "
-                       "evidence is missing (named in the service's details); not a fault."]
+    assert _bullets(text) == ["- Forwarding evidence incomplete: **1** — the checks that ran passed, but one piece of "
+                              "evidence is missing (named in the service's details); not a fault."]
+
+
+def test_the_breakdown_counts_exactly_the_tables_unknown_services():
+    from diagnostic_mas.service_final_status import final_service_counts
+
+    # test9 (27 Oct 2026): inference-fabnet's investigation was incomplete; test1's fixed check could not
+    # confirm its routes and it was not investigated. The table counted 2 Unknown, the breakdown 1.
+    case = _scan(
+        {'inference-fabnet': 'unknown', 'test1': 'unknown', 'unsynced': 'out-of-sync', 'down-anyway': 'down'},
+        digs={'inference-fabnet': {'source': 'llm', 'status': 'unknown', 'complete': False,
+                                   'verification_gap': {'blocker': 'endpoint_access_unavailable'}},
+              # An incomplete investigation keeps the fixed check's Down: the table does not call it Unknown.
+              'down-anyway': {'source': 'llm', 'status': 'unknown', 'complete': False,
+                              'verification_gap': {'blocker': 'llm_timeout'}}},
+        coverage={'inference-fabnet': 'unresolved', 'test1': 'collection_concluded'})
+    text = '\n'.join(format_unknown_breakdown(case))
+
+    assert final_service_counts(case)['l3rt']['unknown'] == 3
+    assert 'Unknown breakdown (3 services):' in text
+    assert _bullets(text) == [
+        "- Access failure: **1** — a device or endpoint the check needed could not be read; once that access "
+        "works, the next scan retries.",
+        "- Not investigated: **1** — a fixed check could not confirm the service and no LLM investigation ran "
+        "this scan (its details name the check); the next scan checks it again.",
+        "- Sync not confirmed: **1** — a device of the service is out of sync with NSO, or its sync state could "
+        "not be read; the service is assessed once the sync is confirmed."]
 
 
 def test_a_reason_worded_without_refused_is_read_too():

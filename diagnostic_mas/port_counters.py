@@ -26,6 +26,8 @@ _NUMBERS = {
     "output_errors": r"^\s+(\d+) output errors,",
     "packets_in": r"^\s+(\d+) packets input,",
     "packets_out": r"^\s+(\d+) packets output,",
+    "bytes_in": r"^\s+\d+ packets input, (\d+) bytes",
+    "bytes_out": r"^\s+\d+ packets output, (\d+) bytes",
 }
 _ERRORS = {"crc": "CRC", "input_errors": "input errors", "output_errors": "output errors"}
 

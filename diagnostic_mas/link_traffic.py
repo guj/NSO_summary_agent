@@ -2,9 +2,11 @@
 
 The port counters are read once per scan. For each adjacency down, this subtracts the last
 published scan's packet counts from this scan's at both ends, so what one end sent can be set
-against what the other received over the same time. It is worked out when the scan runs and kept
-with it, so the report never needs the earlier scan. Numbers only: the report draws no conclusion.
-A port not read in both scans, or whose counters restarted in between, is not compared.
+against what the other received over the same time. Bytes go beside the packets when both scans
+counted them, so frames that changed size on the way show too. It is worked out when the scan
+runs and kept with it, so the report never needs the earlier scan. Numbers only: the report draws
+no conclusion. A port not read in both scans, or whose counters restarted in between, is not
+compared.
 """
 from __future__ import annotations
 
@@ -37,6 +39,9 @@ def _gained(now: dict[str, Any] | None, before: dict[str, Any] | None, elapsed: 
         if age is None or elapsed is None or age < elapsed:
             return {"why": "counters restarted"}
     gained = {"in": now["packets_in"] - before["packets_in"], "out": now["packets_out"] - before["packets_out"]}
+    if all(isinstance(reading.get(name), int) for reading in (now, before) for name in ("bytes_in", "bytes_out")):
+        gained |= {"bytes_in": now["bytes_in"] - before["bytes_in"],
+                   "bytes_out": now["bytes_out"] - before["bytes_out"]}
     return {"why": "counters restarted"} if min(gained.values()) < 0 else gained
 
 
@@ -71,7 +76,9 @@ def _direction(source: str, target: str, link: dict[str, Any]) -> str:
     sent, got = link.get(source) or {"why": "not read"}, link.get(target) or {"why": "not read"}
     head = f"{source} → {target}"
     if "out" in sent and "in" in got:
-        return f"{head}: {sent['out']:,} sent, {got['in']:,} received"
+        size = (f" (bytes: {sent['bytes_out']:,} sent, {got['bytes_in']:,} received)"
+                if "bytes_out" in sent and "bytes_in" in got else "")
+        return f"{head}: {sent['out']:,} sent, {got['in']:,} received{size}"
     reasons = [f"{end['why']} on {device}" for device, end in ((source, sent), (target, got)) if "why" in end]
     return f"{head}: not compared ({'; '.join(dict.fromkeys(reasons))})"
 

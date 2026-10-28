@@ -6,6 +6,9 @@ CATEGORIES = {
     'identity_missing': 'Service identity missing',
     'forwarding_incomplete': 'Forwarding evidence incomplete',
     'gate_contradiction': 'Gate contradiction',
+    # Unknown without an LLM investigation.
+    'not_investigated': 'Not investigated',
+    'sync_unconfirmed': 'Sync not confirmed',
 }
 
 
@@ -91,31 +94,40 @@ def next_step(dx):
 
 def format_unknown_breakdown(case):
     from diagnostic_mas.operator_report import _dataplane_by_name
-    from diagnostic_mas.device_health import services_from_case
+    from diagnostic_mas.service_final_status import final_service_assessments
     rows = _dataplane_by_name(case)
-    services = services_from_case(case)
-    names = {str(r.get('name') or k.split('/', 1)[-1]) for k, r in services.items()}
-    if services:
-        rows = {k: v for k, v in rows.items() if k in names}
-    unknown = {k:v for k,v in rows.items() if v.get('complete') is False or v.get('dataplane_status') == 'unknown'}
-    for name, coverage in (case.service_coverage or {}).items():
-        if name not in rows and (not services or name in names) and coverage in {'unresolved','investigated'}:
-            unknown[name] = {}  # Coverage without a finding cannot prove readiness.
+    coverage = case.service_coverage or {}
+    # The services the status table calls Unknown, each with its investigation, if any.
+    unknown, categories = [], []
+    for _kind, name, _service, status, reason in final_service_assessments(case):
+        if status != 'unknown':
+            continue
+        if name in rows:
+            dx = rows[name]
+            category = category_for(dx)
+        elif coverage.get(name) in {'unresolved', 'investigated'}:
+            dx, category = {}, 'forwarding_incomplete'  # Coverage without a finding cannot prove readiness.
+        else:
+            dx, category = {}, 'sync_unconfirmed' if reason.startswith('Sync') else 'not_investigated'
+        unknown.append(dx)
+        categories.append(category)
     if not unknown:
         return []
     counts = {key:0 for key in CATEGORIES}
-    for dx in unknown.values():
-        counts[category_for(dx)] += 1
+    for category in categories:
+        counts[category] += 1
     lines = [f"**Unknown breakdown ({len(unknown)} service{'' if len(unknown) == 1 else 's'}):**", '']
     guidance = {
         'access_failure': 'a device or endpoint the check needed could not be read; once that access works, the next scan retries',
         'identity_missing': "the service's devices or interfaces could not be confirmed from NSO; check its definition in NSO",
         'forwarding_incomplete': "the checks that ran passed, but one piece of evidence is missing (named in the service's details); not a fault",
         'gate_contradiction': "the evidence check wrongly rejected a verdict, as a review confirmed; report it to the agent's maintainers",
+        'not_investigated': 'a fixed check could not confirm the service and no LLM investigation ran this scan (its details name the check); the next scan checks it again',
+        'sync_unconfirmed': 'a device of the service is out of sync with NSO, or its sync state could not be read; the service is assessed once the sync is confirmed',
     }
     # Only reasons some service has: a zero would read as a statement about the whole scan.
     lines += [f'- {label}: **{counts[key]}** — {guidance[key]}.' for key,label in CATEGORIES.items() if counts[key]]
-    pending = sum(pending_gate_review(dx) for dx in unknown.values())
+    pending = sum(pending_gate_review(dx) for dx in unknown)
     if pending == 1:
         lines += ['', "1 of them: the evidence check did not accept its investigation's verdict."]
     elif pending:

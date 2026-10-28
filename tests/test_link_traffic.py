@@ -18,14 +18,17 @@ from test_port_counters import SHOWN
 SALT_PORT, SEAT_PORT = "HundredGigE0/0/0/21", "HundredGigE0/0/0/23"
 
 
-def _shown(port: str, packets_in: int, packets_out: int) -> str:
-    """``show interfaces <port>`` with these packet counts (rutg's output of 8 October 2026 otherwise)."""
+def _shown(port: str, packets_in: int, packets_out: int, bytes_in: int = 1315276986914302,
+           bytes_out: int = 1378183884420187) -> str:
+    """``show interfaces <port>`` with these counts (rutg's output of 8 October 2026 otherwise)."""
     return (SHOWN.replace("HundredGigE0/0/0/23 is up", f"{port} is up")
-            .replace("569938104308 packets input", f"{packets_in} packets input")
-            .replace("461680525836 packets output", f"{packets_out} packets output"))
+            .replace("569938104308 packets input, 1315276986914302 bytes",
+                     f"{packets_in} packets input, {bytes_in} bytes")
+            .replace("461680525836 packets output, 1378183884420187 bytes",
+                     f"{packets_out} packets output, {bytes_out} bytes"))
 
 
-async def _scanned(salt: tuple[int, int] | None, seat: tuple[int, int] | None, previous: dict | None):
+async def _scanned(salt: tuple[int, ...] | None, seat: tuple[int, ...] | None, previous: dict | None):
     """A scan of the salt–seat adjacency: LLDP, then each end's counters, then the comparison."""
     case = _case()
     add_evidence(case, {"kind": "spine", "role": "isis", "layer": "underlay",
@@ -42,12 +45,13 @@ async def _scanned(salt: tuple[int, int] | None, seat: tuple[int, int] | None, p
     return case
 
 
-def _before(**ports: tuple[int, int]) -> dict:
-    """The previous scan's counters, 11 h 20 min ago: (packets in, packets out) per end."""
+def _before(**ports: tuple[int, ...]) -> dict:
+    """The previous scan's counters, 11 h 20 min ago: (packets in, packets out[, bytes in, bytes out]) per end."""
     read_at = (datetime.now(timezone.utc) - timedelta(hours=11, minutes=20)).isoformat()
     names = {"salt": f"{SALT}:{SALT_PORT}", "seat": f"{SEAT}:{SEAT_PORT}"}
-    return {"read_at": read_at, "ports": {names[end]: {"state": "up", "cleared": "never", "packets_in": counts[0],
-                                                       "packets_out": counts[1]} for end, counts in ports.items()}}
+    return {"read_at": read_at, "ports": {names[end]: {"state": "up", "cleared": "never"}
+                                          | dict(zip(("packets_in", "packets_out", "bytes_in", "bytes_out"), counts))
+                                          for end, counts in ports.items()}}
 
 
 def test_packet_counts_are_read_with_the_error_counters():
@@ -71,6 +75,25 @@ async def test_each_direction_sets_what_one_end_sent_against_what_the_other_rece
     assert traffic_line(case, EDGE) == (
         f"Packets since the previous scan (11 h 20 min): {SALT} → {SEAT}: 980 sent, 975 received; "
         f"{SEAT} → {SALT}: 1,234,567,890 sent, 1,050 received.")
+
+
+@pytest.mark.asyncio
+async def test_bytes_go_beside_the_packets_when_both_scans_counted_them():
+    # Here seat → salt received 4 bytes per frame more than was sent, as a tag added on the way would show.
+    case = await _scanned((1190, 1280, 86_960, 81_000), (1980, 2890, 91_000, 99_000),
+                          _before(salt=(200, 300, 10_000, 20_000), seat=(1000, 1900, 30_000, 26_000)))
+
+    assert traffic_line(case, EDGE) == (
+        f"Packets since the previous scan (11 h 20 min): {SALT} → {SEAT}: 980 sent, 980 received "
+        f"(bytes: 61,000 sent, 61,000 received); {SEAT} → {SALT}: 990 sent, 990 received "
+        f"(bytes: 73,000 sent, 76,960 received).")
+
+    # A previous scan saved before bytes were kept still compares packets.
+    older = await _scanned((1190, 1280, 86_960, 81_000), (1980, 2890, 91_000, 99_000),
+                           _before(salt=(200, 300), seat=(1000, 1900)))
+    assert traffic_line(older, EDGE) == (
+        f"Packets since the previous scan (11 h 20 min): {SALT} → {SEAT}: 980 sent, 980 received; "
+        f"{SEAT} → {SALT}: 990 sent, 990 received.")
 
 
 @pytest.mark.asyncio

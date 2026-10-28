@@ -238,7 +238,7 @@ def test_a_listing_the_other_router_does_not_share_is_kept_with_each_view():
                       "local": {"device": NEWY, "interface": NEWY_IF}, "remote": {"device": RUTG, "interface": "?"},
                       "state": {"local": "init", "remote": "not listed", "status": "down"}}]
     assert [i["message"] for i in issues] == [
-        f"IS-IS adjacency down: {NEWY} {NEWY_IF} lists it as Init; {RUTG} does not list it (its IS-IS names no interface)"]
+        f"IS-IS adjacency down: {NEWY} {NEWY_IF} lists it as Init; {RUTG} does not list it (no entry in its IS-IS adjacency table)"]
     assert set(issues[0]["devices"]) == {NEWY, RUTG}
 
     # The far interface comes from a known adjacency, such as the previous scan's.
