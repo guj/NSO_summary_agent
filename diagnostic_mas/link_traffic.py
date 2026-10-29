@@ -6,7 +6,8 @@ against what the other received over the same time. Bytes go beside the packets 
 counted them, so frames that changed size on the way show too. It is worked out when the scan
 runs and kept with it, so the report never needs the earlier scan. Numbers only: the report draws
 no conclusion. A port not read in both scans, or whose counters restarted in between, is not
-compared.
+compared. When LLDP shows another device on the link, a port's counts include traffic to and
+from that device, so each port is given on its own.
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from datetime import datetime
 from typing import Any
 
 from diagnostic_mas.case import CaseFile, add_evidence
-from diagnostic_mas.link_lldp import edge_ports
+from diagnostic_mas.link_lldp import ANOTHER_DEVICE, edge_ports, hears_another_device
 from diagnostic_mas.link_optics import _ADJACENCY_DOWN
 
 KIND = "link_traffic"
@@ -83,6 +84,11 @@ def _direction(source: str, target: str, link: dict[str, Any]) -> str:
     return f"{head}: not compared ({'; '.join(dict.fromkeys(reasons))})"
 
 
+def _alone(device: str, link: dict[str, Any]) -> str:
+    end = link.get(device) or {"why": "not read"}
+    return f"{device}: {end['in']:,} in, {end['out']:,} out" if "in" in end else f"{device}: {end['why']}"
+
+
 def traffic_line(case: CaseFile, edge_id: str) -> str | None:
     """Both directions of an adjacency's link in packets since the previous scan, or None when not worked out."""
     saved = _saved(case)
@@ -96,4 +102,7 @@ def traffic_line(case: CaseFile, edge_id: str) -> str | None:
     took = ("" if minutes is None else f" ({minutes // 60} h {minutes % 60} min)" if minutes >= 60
             else f" ({minutes} min)")
     (a, _), (b, _) = ends
+    if hears_another_device(case, edge_id):
+        return (f"Packets since the previous scan{took}, each port on its own ({ANOTHER_DEVICE}): "
+                f"{_alone(a, link)}; {_alone(b, link)}.")
     return f"Packets since the previous scan{took}: {_direction(a, b, link)}; {_direction(b, a, link)}."

@@ -259,12 +259,30 @@ def _adjacency_ends(edge_id: str) -> list[tuple[str, str]]:
     return [(parts[1], parts[2]), (parts[3], parts[4])] if len(parts) == 5 and parts[0] == "isis" else []
 
 
+def _session_devices(edge_id: str) -> tuple[str, str] | None:
+    """The devices whose views are recorded as ``local`` and ``remote``, in the id's order."""
+    parts = edge_id.split(":")
+    if len(parts) != 5:
+        return None
+    return {"isis": (parts[1], parts[3]), "bgp": (parts[3], parts[4])}.get(parts[0])
+
+
+def _seen_up_at(state: dict[str, Any]) -> str | None:
+    """``local`` or ``remote``: the one end that listed a session up while the other was not read."""
+    for side, other in (("local", "remote"), ("remote", "local")):
+        if state.get(side) in {"up", "established"} and state.get(other) in {None, "", "unknown"}:
+            return side
+    return None
+
+
 def _routing_sessions_lost(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[str, str]]:
     """Sessions and adjacencies up in the older run that are not up in the newer one.
 
     A session the devices now report down is always listed. One that is
     merely absent is listed only when both of its devices answered this
     protocol's query in a full scan; otherwise absence is not evidence.
+    A session up at the one end that was read is held to that end's view:
+    lost when that end now reports it down, or answers without it.
     """
     known = set(older.get("device_names") or []) | set(newer.get("device_names") or [])
     rows: list[dict[str, str]] = []
@@ -280,25 +298,40 @@ def _routing_sessions_lost(older: dict[str, Any], newer: dict[str, Any]) -> list
             end for current_id, current_state in now.items() if current_state.get("status") == "up"
             for end in _adjacency_ends(current_id)
         } if role == "isis" else set()
+        # Once its far end is read, a one-sided adjacency is recorded under its full id.
+        listed = {end for current_id in now for end in _adjacency_ends(current_id)}
         for edge_id, state in sorted(before.items()):
-            if state.get("status") != "up":
+            side = None if state.get("status") == "up" else _seen_up_at(state)
+            ends = _session_devices(edge_id)
+            if state.get("status") != "up" and (side is None or ends is None):
                 continue
             current = now.get(edge_id)
             if current is None:
                 if still_adjacent & set(_adjacency_ends(edge_id)):
                     continue
-                devices = {part for part in edge_id.split(":") if part in known}
-                if len(devices) == 2 and devices <= answering:
-                    rows.append({"protocol": role, "edge_id": edge_id,
-                                 "now": "not reported", "states": ""})
+                if side is None:
+                    devices = {part for part in edge_id.split(":") if part in known}
+                    if len(devices) == 2 and devices <= answering:
+                        rows.append({"protocol": role, "edge_id": edge_id,
+                                     "now": "not reported", "states": ""})
+                    continue
+                at = 0 if side == "local" else 1
+                if ends[at] not in answering or listed.intersection(_adjacency_ends(edge_id)[at:at + 1]):
+                    continue
+                row = {"protocol": role, "edge_id": edge_id, "now": "not reported", "states": ""}
+                rows.append(row if set(ends) <= answering else row | {"answered": ends[at]})
             elif current.get("status") in {"down", "degraded", "unidirectional"}:
                 # Read from neither end (an expected adjacency both routers omit): its detail says why.
                 unread = {current.get("local"), current.get("remote")} <= {None, "", "unknown"}
                 states = (str(current["detail"]) if unread and current.get("detail")
                           else f"{current.get('local')} / {current.get('remote')}")
                 # Two routers that see an adjacency differently: it is down, whatever each lists.
-                now = "down" if current["status"] == "unidirectional" else str(current["status"])
-                rows.append({"protocol": role, "edge_id": edge_id, "now": now, "states": states})
+                status = "down" if current["status"] == "unidirectional" else str(current["status"])
+                rows.append({"protocol": role, "edge_id": edge_id, "now": status, "states": states})
+            elif side is not None and current.get(side) not in {"up", "established", None, "", "unknown"}:
+                # A one-sided adjacency is recorded unknown whatever the end that was read lists.
+                rows.append({"protocol": role, "edge_id": edge_id, "now": "down",
+                             "states": f"{current.get('local')} / {current.get('remote')}"})
     return rows
 
 
@@ -430,7 +463,13 @@ def _routing_session_line(row: dict[str, str]) -> str:
         label = f"BGP `{dev_a}` {addr_a} ↔ `{dev_b}` {addr_b}"
     elif len(parts) == 5 and row["protocol"] == "isis":
         _, dev_a, if_a, dev_b, if_b = parts
-        label = f"IS-IS `{dev_a}` {if_a} ↔ `{dev_b}` {if_b}"
+        # A far end that was not read has no interface ("?").
+        end = lambda device, interface: f"`{device}`" + ("" if interface == "?" else f" {interface}")
+        label = f"IS-IS {end(dev_a, if_a)} ↔ {end(dev_b, if_b)}"
+    if row["now"] == "not reported" and row.get("answered"):
+        other = next(device for device in _session_devices(row["edge_id"]) or () if device != row["answered"])
+        return (f"{label} — not reported this run by `{row['answered']}`, which listed it up last run; "
+                f"`{other}` was not read")
     if row["now"] == "not reported":
         return f"{label} — not reported this run; both devices answered"
     return f"{label} — {row['now']} ({row['states']})"

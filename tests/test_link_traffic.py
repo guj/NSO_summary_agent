@@ -12,7 +12,7 @@ from diagnostic_mas.link_lldp import record_link_lldp
 from diagnostic_mas.link_traffic import record_link_traffic, traffic_line
 from diagnostic_mas.operator_report import format_devices_operator
 from diagnostic_mas.port_counters import counter_targets, parse_port_counters, record_port_counters
-from test_link_lldp import EDGE, OUTPUTS, SALT, SEAT, _call, _case
+from test_link_lldp import EDGE, OUTPUTS, SALT, SEAT, _call, _case, _table
 from test_port_counters import SHOWN
 
 SALT_PORT, SEAT_PORT = "HundredGigE0/0/0/21", "HundredGigE0/0/0/23"
@@ -28,13 +28,14 @@ def _shown(port: str, packets_in: int, packets_out: int, bytes_in: int = 1315276
                      f"{packets_out} packets output, {bytes_out} bytes"))
 
 
-async def _scanned(salt: tuple[int, ...] | None, seat: tuple[int, ...] | None, previous: dict | None):
+async def _scanned(salt: tuple[int, ...] | None, seat: tuple[int, ...] | None, previous: dict | None,
+                   lldp: dict | None = None):
     """A scan of the salt–seat adjacency: LLDP, then each end's counters, then the comparison."""
     case = _case()
     add_evidence(case, {"kind": "spine", "role": "isis", "layer": "underlay",
                         "payload": {"operational_edges": [{"id": EDGE, "state": {"status": "down"}}]}})
     case.previous_port_counters = previous or {}
-    outputs = dict(OUTPUTS)
+    outputs = {**OUTPUTS, **(lldp or {})}
     if salt:
         outputs[SALT, f"interfaces {SALT_PORT}"] = _shown(SALT_PORT, *salt)
     if seat:
@@ -75,6 +76,24 @@ async def test_each_direction_sets_what_one_end_sent_against_what_the_other_rece
     assert traffic_line(case, EDGE) == (
         f"Packets since the previous scan (11 h 20 min): {SALT} → {SEAT}: 980 sent, 975 received; "
         f"{SEAT} → {SALT}: 1,234,567,890 sent, 1,050 received.")
+
+
+@pytest.mark.asyncio
+async def test_with_another_device_on_the_link_each_port_s_counts_stand_alone():
+    # salt's port hears utah, not seat: what it took in did not all come from seat.
+    salt = _table("Mon Oct 26 20:08:10.524 UTC", [
+        "utah-data-sw.fabric. HundredGigE0/0/0/21             120        R               HundredGigE0/0/0/23"])
+    case = await _scanned((1250, 1280), (1975, 1234572890), _before(salt=(200, 300), seat=(1000, 5000)),
+                          lldp={(SALT, "lldp neighbors"): salt})
+
+    assert traffic_line(case, EDGE) == (
+        f"Packets since the previous scan (11 h 20 min), each port on its own (LLDP shows another device on the "
+        f"link, so one end is not set against the other): {SALT}: 1,050 in, 980 out; {SEAT}: 975 in, "
+        "1,234,567,890 out.")
+
+    first = await _scanned((1250, 1280), (1975, 1234572890), _before(seat=(1000, 5000)),
+                           lldp={(SALT, "lldp neighbors"): salt})
+    assert traffic_line(first, EDGE).endswith(f"{SALT}: no earlier reading; {SEAT}: 975 in, 1,234,567,890 out.")
 
 
 @pytest.mark.asyncio

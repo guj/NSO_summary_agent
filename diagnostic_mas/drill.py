@@ -353,7 +353,7 @@ def prior_exploration_for_issue(
                     if line]
         if readings:
             out["link_facts"] = {
-                "note": "This scan's fixed readings of the link, each direction stated: current evidence.",
+                "note": "This scan's fixed readings of the link: current evidence.",
                 "readings": readings,
             }
     earlier = (getattr(case, "previous_findings", None) or {}).get(edge)

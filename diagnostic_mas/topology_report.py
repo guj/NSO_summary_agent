@@ -5,6 +5,44 @@ import json
 import math
 from pathlib import Path
 
+CENTRE = (450, 330)
+RADIUS, RING = 5, 12  # a device's circle, and the dashed ring of one whose discovery is incomplete, as drawn
+TOUCH = 4  # a straight link this near a device's circle reads as running through it; crossing a ring does too
+GAP = 8  # the space a bent link leaves outside every device's circle or ring
+
+
+def _bend(a: tuple[float, float], b: tuple[float, float], others: list[tuple[float, float, float, float]]) -> float:
+    """The pull away from the ring's centre that takes the a-b curve out around the other devices.
+
+    ``others`` holds each device as (x, y, edge, reach): the radius it is drawn to, and how near a
+    straight link may pass before it reads as running through it. The template draws a link as a
+    quadratic curve whose control point sits this far from the straight line's midpoint, at right
+    angles to it (a and b in sorted id order). Zero when the straight line passes every device;
+    otherwise the smallest pull that leaves GAP outside each device's edge.
+    """
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    length = math.hypot(dx, dy) or 1
+    nx, ny = -dy / length, dx / length
+    mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
+    outward = -1 if nx * (CENTRE[0] - mx) + ny * (CENTRE[1] - my) > 0 else 1
+
+    def curve(offset: float) -> list[tuple[float, float]]:
+        cx, cy = mx + nx * offset, my + ny * offset
+        return [((1 - t) ** 2 * a[0] + 2 * t * (1 - t) * cx + t * t * b[0],
+                 (1 - t) ** 2 * a[1] + 2 * t * (1 - t) * cy + t * t * b[1]) for t in (i / 100 for i in range(101))]
+
+    straight = curve(0)
+    if all(math.hypot(x - ox, y - oy) >= reach for ox, oy, _, reach in others for x, y in straight):
+        return 0.0
+
+    def room(offset: float) -> float:
+        points = curve(offset)
+        return min((math.hypot(x - ox, y - oy) - edge for ox, oy, edge, _ in others for x, y in points),
+                   default=math.inf)
+
+    offsets = [outward * 2 * step for step in range(1, 101)]
+    return float(next((o for o in offsets if room(o) >= GAP), max(offsets, key=room)))
+
 
 def topology_data(case: dict) -> dict:
     layers = {}
@@ -38,11 +76,20 @@ def topology_data(case: dict) -> dict:
         if not edges and not failures:
             continue
         names = sorted(managed | {e[k] for e in edges for k in ("a", "b")})
-        pos = {n: [450+385*math.cos(i*2*math.pi/len(names)),
-                   330+290*math.sin(i*2*math.pi/len(names))] for i,n in enumerate(names)}
-        # A convex ring keeps unrelated device markers off straight link paths.
-        # Leave labels outside the ring; parallel links are curved in the renderer.
-        layers[role] = dict(nodes=[dict(id=n,x=round(pos[n][0],1),y=round(pos[n][1],1),managed=n in managed, collection_errors=failures.get(n, [])) for n in names],
+        pos = {n: (round(CENTRE[0]+385*math.cos(i*2*math.pi/len(names)), 1),
+                   round(CENTRE[1]+290*math.sin(i*2*math.pi/len(names)), 1)) for i,n in enumerate(names)}
+        # On a convex ring a straight link misses unrelated devices, except between devices close together:
+        # it can run through one between them, or cross its dashed ring, so it bends out around it.
+        # The arc then passes behind that device's label, which keeps its white outline.
+        # Labels stay outside the ring; parallel links are spread further apart in the renderer.
+        marks = {n: (RING, RING) if failures.get(n) else (RADIUS, RADIUS + TOUCH) for n in names}
+        bends = {}
+        for e in edges:
+            pair = tuple(sorted((e["a"], e["b"])))
+            if pair not in bends:
+                bends[pair] = _bend(pos[pair[0]], pos[pair[1]], [(*pos[n], *marks[n]) for n in names if n not in pair])
+            e["bend"] = bends[pair]
+        layers[role] = dict(nodes=[dict(id=n,x=pos[n][0],y=pos[n][1],managed=n in managed, collection_errors=failures.get(n, [])) for n in names],
                             edges=edges,coverage=payload.get("extra", {}).get("coverage", {}))
     return layers
 

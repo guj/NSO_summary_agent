@@ -2,8 +2,9 @@
 
 Read once per scan, after the spines: each end's transmit and receive power per lane and
 its DOM alarms, from IOS-XR ``show controllers <port>``. The report sets one direction
-against the other in numbers only; it never names a cause. A read that fails, or a
-platform without that output, is "not read".
+against the other in numbers only; it never names a cause. When LLDP shows another device
+on the link, one end's transmit is not the other's receive, so each end is given on its
+own. A read that fails, or a platform without that output, is "not read".
 """
 from __future__ import annotations
 
@@ -120,9 +121,19 @@ def _direction(source: str, target: str, sent: dict[str, Any] | None, got: dict[
     return f"{source} → {target}: " + ", ".join(bits)
 
 
+def _alone(device: str, reading: dict[str, Any] | None) -> str:
+    if not reading:
+        return f"{device} not read"
+    return (f"{device} transmitted {_span([lane['tx_dbm'] for lane in reading['lanes']], '+.1f')} dBm, "
+            f"received {_span([lane['rx_dbm'] for lane in reading['lanes']], '+.1f')} dBm")
+
+
 def optics_line(case: CaseFile, edge_id: str) -> str | None:
-    """Both directions of an adjacency's link in numbers, or None when this scan read no optics."""
-    from diagnostic_mas.link_lldp import edge_ports
+    """Both directions of an adjacency's link in numbers, or None when this scan read no optics.
+
+    With another device on the link, each end's own readings, not set against the other's.
+    """
+    from diagnostic_mas.link_lldp import ANOTHER_DEVICE, edge_ports, hears_another_device
 
     saved, ends = _saved(case), edge_ports(case, edge_id)
     if saved is None or not ends:
@@ -135,6 +146,8 @@ def optics_line(case: CaseFile, edge_id: str) -> str | None:
     alarms = [f"{device}: {reading['alarms']}" for device, reading in read.items()
               if reading and reading.get("alarms") and reading["alarms"].lower() != "no alarms"]
     said = ("DOM alarms on " + "; on ".join(alarms) + ".") if alarms else "No DOM alarms."
+    if hears_another_device(case, edge_id):
+        return f"Optics, each end on its own ({ANOTHER_DEVICE}): {_alone(a, read[a])}; {_alone(b, read[b])}. {said}"
     return (f"Optics: {_direction(a, b, read[a], read[b])}; {_direction(b, a, read[b], read[a])}. {said}")
 
 

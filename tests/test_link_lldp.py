@@ -6,7 +6,7 @@ import pytest
 
 from diagnostic_mas.case import Budget, CaseFile, open_issue
 from diagnostic_mas.drill import prior_exploration_for_issue
-from diagnostic_mas.link_lldp import KIND, far_port, lldp_line, parse_lldp, record_link_lldp
+from diagnostic_mas.link_lldp import KIND, far_port, hears_another_device, lldp_line, parse_lldp, record_link_lldp
 from diagnostic_mas.link_optics import optics_line, record_link_optics
 from diagnostic_mas.operator_report import format_devices_operator, format_run_details
 from nso_facts.topology.graph import isis_edge_id
@@ -93,6 +93,70 @@ async def test_a_port_that_hears_another_router_says_which():
 
     assert lldp_line(case, EDGE).endswith(
         f"{SEAT} → {SALT} not heard ({SALT} HundredGigE0/0/0/21 lists utah-data-sw HundredGigE0/0/0/23 instead).")
+    # seat hears salt, so the line goes direction by direction; salt's port is still cabled to another device.
+    assert hears_another_device(case, EDGE)
+
+
+HAWI = "hawi-data-sw"
+# Both routers name their interface, and each port's LLDP names a switch, not the other router (29 Oct 2026).
+BETWEEN = isis_edge_id(HAWI, "HundredGigE0/0/0/23.3380", SEAT, "HundredGigE0/0/0/19.3380")
+HAWI_TEXT = _table("Thu Oct 29 02:12:25.328 UTC", [
+    "[DISABLED]      TwentyFiveGigE0/0/0/16/0        30         N/A             0000.0000.0003",
+    "switch-2.example     HundredGigE0/0/0/23             120        B,R             Ethernet34/1",
+])
+BETWEEN_OUTPUTS = {(HAWI, "lldp neighbors"): HAWI_TEXT, (SEAT, "lldp neighbors"): SEAT_TEXT}
+
+
+@pytest.mark.asyncio
+async def test_a_port_that_hears_another_device_puts_a_device_between_the_routers():
+    case = _case(BETWEEN)
+    await record_link_lldp(None, case, call=_call(BETWEEN_OUTPUTS, []))
+
+    assert hears_another_device(case, BETWEEN)
+    assert lldp_line(case, BETWEEN) == (
+        f"LLDP: a device sits between the two routers, and LLDP is not heard across it "
+        f"({HAWI} HundredGigE0/0/0/23 lists switch-2.example Ethernet34/1; "
+        f"{SEAT} HundredGigE0/0/0/19 lists peer-1.example.net 644).")
+
+    # One end naming another device is enough.
+    alone = _case(BETWEEN)
+    await record_link_lldp(None, alone, call=_call({(HAWI, "lldp neighbors"): HAWI_TEXT}, []))
+    assert hears_another_device(alone, BETWEEN)
+    assert lldp_line(alone, BETWEEN) == (
+        f"LLDP: a device sits between the two routers, and LLDP is not heard across it "
+        f"({HAWI} HundredGigE0/0/0/23 lists switch-2.example Ethernet34/1; {SEAT} not read).")
+
+
+@pytest.mark.asyncio
+async def test_a_port_that_hears_the_other_router_or_no_one_puts_nothing_between():
+    # seat hears salt, and salt's port lists no neighbor: a direct cable, one direction not heard.
+    case = _case()
+    await record_link_lldp(None, case, call=_call(OUTPUTS, []))
+    assert not hears_another_device(case, EDGE)
+
+    unread = _case()
+    await record_link_lldp(None, unread, call=_call({}, []))
+    assert not hears_another_device(unread, EDGE)
+
+
+@pytest.mark.asyncio
+async def test_with_another_device_on_the_link_each_end_s_optics_stand_alone():
+    from test_link_optics import _controllers
+
+    case = _case(BETWEEN)
+    outputs = {**BETWEEN_OUTPUTS,
+               (HAWI, "controllers HundredGigE0/0/0/23"):
+               _controllers("Thu Oct 29 02:49:49.578 UTC", [(1.8, -3.9), (0.4, -4.3)]),
+               (SEAT, "controllers HundredGigE0/0/0/19"):
+               _controllers("Thu Oct 29 02:49:49.908 UTC", [(1.7, -0.2), (1.1, 0.6)])}
+    await record_link_lldp(None, case, call=_call(outputs, []))
+    await record_link_optics(None, case, call=_call(outputs, []))
+
+    # seat transmits to one switch and hawi receives from another: no loss between the two to work out.
+    assert optics_line(case, BETWEEN) == (
+        f"Optics, each end on its own (LLDP shows another device on the link, so one end is not set against "
+        f"the other): {HAWI} transmitted +0.4 to +1.8 dBm, received -4.3 to -3.9 dBm; {SEAT} transmitted "
+        f"+1.1 to +1.7 dBm, received -0.2 to +0.6 dBm. No DOM alarms.")
 
 
 @pytest.mark.asyncio

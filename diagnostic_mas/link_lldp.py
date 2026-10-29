@@ -5,7 +5,9 @@ Read once per scan, after the spines and before the optics: each end router's IO
 neighbor, so each direction is told by the receiving end's table, never the sending end's.
 When the adjacency names only one end's interface, the other end's table names the missing
 port, so the optics read can reach it. A table that was not read is "not read", never
-"not heard"; "not heard" is a reading, not a cause.
+"not heard"; "not heard" is a reading, not a cause. LLDP reaches only the device at the
+other end of the cable, so a port that hears a device other than the far router is cabled
+to that device: with neither router heard, a device sits between them.
 """
 from __future__ import annotations
 
@@ -115,8 +117,43 @@ def edge_ports(case: CaseFile, edge_id: str) -> list[tuple[str, str | None]]:
             for device, interface in _ends(edge_id)]
 
 
+def _port_rows(case: CaseFile, edge_id: str) -> list[tuple[str, str | None, list[dict[str, str]] | None]]:
+    """Each end's (device, port, its table's rows on that port); rows are None when not read or the port is not known."""
+    from diagnostic_mas.port_counters import _parent_port
+
+    tables = (_saved(case) or {}).get("tables") or {}
+    return [(device, port, [row for row in tables[device] if _parent_port(row["local"]) == port]
+             if device in tables and port else None) for device, port in edge_ports(case, edge_id)]
+
+
+def hears_another_device(case: CaseFile, edge_id: str) -> bool:
+    """Whether an end's port lists LLDP neighbors, none of them the other router.
+
+    LLDP reaches only the device at the other end of the cable, so that port is cabled to another
+    device: what one end transmits or sends is not what the other receives.
+    """
+    ends = _port_rows(case, edge_id)
+    return any(rows and not any(_names(row["neighbor"], far) for row in rows)
+               for (_, _, rows), (far, _, _) in zip(ends, reversed(ends)))
+
+
+# Said instead of setting one end's optics or packet counts against the other's.
+ANOTHER_DEVICE = "LLDP shows another device on the link, so one end is not set against the other"
+
+
 def _shown(neighbor: str, devices: list[str]) -> str:
     return next((device for device in devices if _names(neighbor, device)), neighbor)
+
+
+def _end(device: str, port: str | None, rows: list[dict[str, str]] | None, read: bool, devices: list[str]) -> str:
+    """What ``device``'s port lists, for a link with a device between the routers."""
+    if not read:
+        return f"{device} not read"
+    if not port:
+        return f"{device}'s port not known"
+    if not rows:
+        return f"{device} {port} lists no LLDP neighbor"
+    return f"{device} {port} lists {_shown(rows[0]['neighbor'], devices)} {rows[0]['port']}"
 
 
 def _direction(source: str, target: str, port: str | None, rows: list[dict[str, str]] | None,
@@ -149,6 +186,14 @@ def lldp_line(case: CaseFile, edge_id: str) -> str | None:
     if a not in tables and b not in tables:
         return "LLDP not read."
     devices = sorted(getattr(case, "device_names", None) or [])
+    ends = _port_rows(case, edge_id)
+    # Neither router hears the other, and a port hears something else: LLDP does not cross what is between.
+    if hears_another_device(case, edge_id) and not any(
+            _names(row["neighbor"], far) for (_, _, rows), (far, _, _) in zip(ends, reversed(ends))
+            for row in rows or []):
+        return ("LLDP: a device sits between the two routers, and LLDP is not heard across it ("
+                + "; ".join(_end(device, port, rows, device in tables, devices) for device, port, rows in ends)
+                + ").")
     return (f"LLDP: {_direction(a, b, port_b, tables.get(b), devices)}; "
             f"{_direction(b, a, port_a, tables.get(a), devices)}.")
 
@@ -162,3 +207,4 @@ def lldp_reads_line(case: CaseFile) -> str | None:
     return (f"**LLDP reads:** {len(saved.get('tables') or {})} of {saved.get('wanted', 0)} routers at the ends "
             "of IS-IS adjacencies down"
             + (f"; {left} left out by the {saved.get('ceiling', CEILING)}-read limit" if left else ""))
+

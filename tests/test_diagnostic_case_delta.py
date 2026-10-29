@@ -570,6 +570,16 @@ def test_session_the_devices_now_report_down_is_listed_as_lost():
     assert lost == [{"protocol": "bgp", "edge_id": BGP_EDGE, "now": "down", "states": "idle / idle"}]
 
 
+def test_every_session_of_a_protocol_now_reported_down_is_listed():
+    other = "bgp:10.0.0.1:10.0.2.1:hub-data-sw:pe1-data-sw"
+    down = {"local": "idle", "remote": "idle", "status": "down"}
+
+    lost = compute_case_delta(_routing_scan(bgp={BGP_EDGE: BOTH[BGP_EDGE], other: BOTH[BGP_EDGE]}),
+                              _routing_scan(bgp={BGP_EDGE: down, other: down}))["routing_sessions_lost"]
+
+    assert [row["edge_id"] for row in lost] == [BGP_EDGE, other]
+
+
 def test_adjacency_neither_answering_device_lists_any_more_is_lost():
     lost = compute_case_delta(_routing_scan(isis={ISIS_EDGE: UP}), _routing_scan(isis={}))["routing_sessions_lost"]
 
@@ -609,6 +619,67 @@ def test_session_still_up_or_of_unknown_state_is_not_lost():
                   {"local": "established", "remote": "unknown", "status": "unknown"}):
         delta = compute_case_delta(_routing_scan(bgp=BOTH), _routing_scan(bgp={BGP_EDGE: state}))
         assert delta["routing_sessions_lost"] == []
+
+
+# pe1-data-sw could not be read in the previous run, so only hub-data-sw's end was recorded, as up.
+HUB_ONLY = {"local": "established", "remote": "unknown", "status": "unknown"}
+ONE_SIDED = "isis:hub-data-sw:HundredGigE0/0/0/1.3000:pe1-data-sw:?"
+HUB_UP = {"local": "up", "remote": "unknown", "status": "unknown"}
+
+
+def test_session_up_at_the_end_that_was_read_is_lost_when_that_end_now_reports_it_down():
+    newer = _routing_scan(bgp={BGP_EDGE: {"local": "idle", "remote": "unknown", "status": "down"}},
+                          isis={ONE_SIDED: {"local": "init", "remote": "unknown", "status": "unknown"}},
+                          verified=("hub-data-sw",))
+
+    lost = compute_case_delta(_routing_scan(bgp={BGP_EDGE: HUB_ONLY}, isis={ONE_SIDED: HUB_UP}), newer)
+
+    assert lost["routing_sessions_lost"] == [
+        {"protocol": "bgp", "edge_id": BGP_EDGE, "now": "down", "states": "idle / unknown"},
+        {"protocol": "isis", "edge_id": ONE_SIDED, "now": "down", "states": "init / unknown"}]
+
+
+def test_adjacency_up_at_the_end_that_was_read_is_lost_when_that_end_answers_without_it():
+    older = _routing_scan(isis={ONE_SIDED: HUB_UP})
+
+    lost = compute_case_delta(older, _routing_scan(isis={}, verified=("hub-data-sw",)))["routing_sessions_lost"]
+
+    assert lost == [{"protocol": "isis", "edge_id": ONE_SIDED, "now": "not reported", "states": "",
+                     "answered": "hub-data-sw"}]
+    # Both ends answered this time: the plain both-answered loss.
+    [row] = compute_case_delta(older, _routing_scan(isis={}))["routing_sessions_lost"]
+    assert "answered" not in row
+
+
+def test_adjacency_up_at_one_end_is_not_lost_while_that_end_still_lists_it_or_did_not_answer():
+    older = _routing_scan(isis={ONE_SIDED: HUB_UP})
+    failed = {"layer": "underlay", "code": "collection_error", "status": "open",
+              "message": "hub-data-sw: check_isis_adjacencies failed: timeout"}
+    not_lost = {
+        "still one-sided and up": _routing_scan(isis={ONE_SIDED: HUB_UP}, verified=("hub-data-sw",)),
+        # pe1-data-sw answered this time, so hub's end is listed under the full id; pe1's view is
+        # newly seen, not a loss of anything seen up before.
+        "still listed under its full id": _routing_scan(
+            isis={ISIS_EDGE: {"local": "up", "remote": "not listed", "status": "unidirectional"}}),
+        "the end that saw it failed this query": _routing_scan(isis={}, issues=(failed,)),
+        "the end that saw it was not queried": _routing_scan(isis={}, verified=("pe1-data-sw",)),
+        "filtered scan": _routing_scan(isis={}, scope={**FULL_SCOPE, "Device filter": "hub-data-sw"}),
+    }
+
+    for why, newer in not_lost.items():
+        assert compute_case_delta(older, newer)["routing_sessions_lost"] == [], why
+
+
+def test_changes_section_names_the_end_that_no_longer_lists_an_adjacency():
+    from diagnostic_mas.case_delta import format_changes_since_previous
+
+    delta = compute_case_delta(_routing_scan(isis={ONE_SIDED: HUB_UP}),
+                               _routing_scan(isis={}, verified=("hub-data-sw",)))
+
+    text = "\n".join(format_changes_since_previous(delta, previous_run_id="run-1"))
+
+    assert ("- IS-IS `hub-data-sw` HundredGigE0/0/0/1.3000 ↔ `pe1-data-sw` — not reported this run by"
+            " `hub-data-sw`, which listed it up last run; `pe1-data-sw` was not read") in text
 
 
 def test_changes_section_and_summary_input_list_lost_routing_sessions():
