@@ -11,12 +11,15 @@ state may have changed since it was collected.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from diagnostic_mas.case import CaseFile, DrillSession, add_evidence, open_issue, set_issue_status
 from nso_facts.mcp_client import successful_live_devices
 from nso_facts.topology.interfaces import has_own_port, interfaces_match
+from nso_facts.topology.underlay import router_clock
 
 SOURCE = "port_investigation"
 COVERAGE = "port_investigated"
@@ -246,23 +249,44 @@ def other_attachments(record: dict[str, Any], device: str, link: str) -> list[st
             if not (ep["device"] == device and interfaces_match(_link_of(ep["ac"]), link))]
 
 
-def _link_ages(links: Any, readings: list[tuple[str, str]]) -> dict[str, str]:
-    """How long each down link has been down, as the device states it; ``never`` if it never came up.
-
-    Only an answer about one interface is used, so a value cannot be taken from its neighbour.
-    """
-    ages: dict[str, str] = {}
+def _down_link_answers(links: Any, readings: list[tuple[str, str]]) -> Iterator[tuple[str, str]]:
+    """(link, answer) for each answer about one down link, so a value cannot be taken from its neighbour."""
     for _command, text in readings:
         heads = re.findall(_INTERFACE_HEAD, text, re.M | re.I)
         if len(heads) != 1 or heads[0][1].lower() != "down":
             continue
         link = next((str(name) for name in links if interfaces_match(str(name), heads[0][0])), None)
+        if link:
+            yield link, text
+
+
+def _link_ages(links: Any, readings: list[tuple[str, str]]) -> dict[str, str]:
+    """How long each down link has been down, as the device states it; ``never`` if it never came up."""
+    ages: dict[str, str] = {}
+    for link, text in _down_link_answers(links, readings):
         flapped = re.search(r"^\s+Last link flapped (\S+)", text, re.M)
-        if link and flapped:
+        if flapped:
             ages[link] = flapped[1]
-        elif link and re.search(r"^\s+Interface state transitions: 0\s*$", text, re.M):
+        elif re.search(r"^\s+Interface state transitions: 0\s*$", text, re.M):
             ages[link] = "never"
     return ages
+
+
+def _link_flapped_at(links: Any, readings: list[tuple[str, str]], near: datetime) -> dict[str, str]:
+    """When each down link last flapped, counted back from the router's clock line.
+
+    Only a flap under a day old is given to the second (``07:32:18``); the device
+    rounds older ones (``8w0d``) to the hour or day, and an answer without a clock
+    line does not say when it was given.
+    """
+    out: dict[str, str] = {}
+    for link, text in _down_link_answers(links, readings):
+        flapped = re.search(r"^\s+Last link flapped (\d+):(\d{2}):(\d{2})\s*$", text, re.M)
+        clock = router_clock(text, near) if flapped else None
+        if clock:
+            age = timedelta(hours=int(flapped[1]), minutes=int(flapped[2]), seconds=int(flapped[3]))
+            out[link] = (clock - age).isoformat(timespec="seconds")
+    return out
 
 
 def _sessions_state(device: str, readings: list[tuple[str, str]]) -> str:
@@ -340,6 +364,7 @@ async def run_port_investigations(
             prompt=_system_prompt(), device_names=device_names, openai_client=openai_client, tool_loop=tool_loop,
             confirm=lambda readings, links=target["links"]: {
                 "link_states": _link_states(links, readings), "link_ages": _link_ages(links, readings),
+                "link_flapped_at": _link_flapped_at(links, readings, datetime.now(timezone.utc)),
                 "link_descriptions": _link_descriptions(links, readings),
                 "commands": _reading_commands(links, readings)})
         if payload["concluded"]:

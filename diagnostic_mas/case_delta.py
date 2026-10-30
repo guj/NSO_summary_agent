@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -335,29 +336,124 @@ def _routing_sessions_lost(older: dict[str, Any], newer: dict[str, Any]) -> list
     return rows
 
 
-def _lanes(case: dict[str, Any]) -> tuple[dict[str, tuple[str, str, Any]], set[tuple[str, str]]]:
+def _routing_sessions_regained(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[str, str]]:
+    """Sessions and adjacencies not up in the older run that the newer one reads up.
+
+    The mirror of ``_routing_sessions_lost``. Not up means the older run
+    recorded it down, or it was absent although its devices answered that
+    run's query in a full scan. Up at the one end that was read is held to
+    that end: absent then although it answered, and the row names it.
+    """
+    known = set(older.get("device_names") or []) | set(newer.get("device_names") or [])
+    rows: list[dict[str, str]] = []
+    for role, layer in _ROUTING_LAYERS.items():
+        before, now = _routing_edges(older, role), _routing_edges(newer, role)
+        if before is None or not now:
+            continue
+        answered = _devices_answering(older, layer)
+        # Parallel links are also recorded under ids that pair one link's end with another's.
+        was_adjacent = {
+            end for old_id, old_state in before.items() if old_state.get("status") == "up"
+            for end in _adjacency_ends(old_id)
+        } if role == "isis" else set()
+        listed = {end for old_id in before for end in _adjacency_ends(old_id)}
+        for edge_id, current in sorted(now.items()):
+            side = None if current.get("status") == "up" else _seen_up_at(current)
+            ends = _session_devices(edge_id)
+            if current.get("status") != "up" and (side is None or ends is None):
+                continue
+            state = before.get(edge_id)
+            if state is not None:
+                sides = {state.get("local"), state.get("remote")}
+                # A one-sided adjacency is recorded unknown whatever the end that was read lists.
+                if not (state.get("status") in {"down", "degraded", "unidirectional"}
+                        or (state.get("status") == "unknown" and not sides <= {None, "", "unknown"}
+                            and not sides & {"up", "established"})):
+                    continue
+            elif was_adjacent & set(_adjacency_ends(edge_id)):
+                continue
+            elif side is None:
+                devices = {part for part in edge_id.split(":") if part in known}
+                if len(devices) != 2 or not devices <= answered:
+                    continue
+            else:
+                at = 0 if side == "local" else 1
+                if ends[at] not in answered or listed.intersection(_adjacency_ends(edge_id)[at:at + 1]):
+                    continue
+            if side is None:
+                rows.append({"protocol": role, "edge_id": edge_id, "now": "up",
+                             "states": f"{current.get('local')} / {current.get('remote')}"})
+            else:
+                rows.append({"protocol": role, "edge_id": edge_id, "now": str(current[side]), "states": "",
+                             "up_at": ends[0 if side == "local" else 1]})
+    return rows
+
+
+def _run_start(case: dict[str, Any]) -> datetime | None:
+    """When a scan began, from its id (``20261029T043006Z``)."""
+    try:
+        return datetime.strptime(str(case.get("run_id") or ""), "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _adjacency_change_times(case: dict[str, Any]) -> dict[str, str]:
+    """IS-IS adjacency id -> when it last changed state, as the scan read it."""
+    found: dict[str, str] = {}
+    for ev in case.get("evidence") or []:
+        if not isinstance(ev, dict) or ev.get("kind") != "spine" or ev.get("role") != "isis":
+            continue
+        for edge in (ev.get("payload") or {}).get("operational_edges") or []:
+            if isinstance(edge, dict) and edge.get("id") and edge.get("changed_at"):
+                found[str(edge["id"])] = str(edge["changed_at"])
+    return found
+
+
+def _adjacencies_changed_between(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[str, str]]:
+    """IS-IS adjacencies both runs read up that last changed state after the older run began.
+
+    Up when the older run read it, so a later change means it went down and
+    came back since, unless the change fell in the minutes before that read.
+    """
+    began = _run_start(older)
+    before, now = _routing_edges(older, "isis"), _routing_edges(newer, "isis")
+    if began is None or not before or not now:
+        return []
+    up = lambda state: state.get("status") == "up" or _seen_up_at(state) is not None
+    return [{"protocol": "isis", "edge_id": edge_id, "changed_at": changed}
+            for edge_id, changed in sorted(_adjacency_change_times(newer).items())
+            if up(now.get(edge_id) or {}) and up(before.get(edge_id) or {})
+            and datetime.fromisoformat(changed) > began]
+
+
+def _lanes(case: dict[str, Any]) -> tuple[dict[str, tuple[str, str, Any, Any]], set[tuple[str, str]]]:
     """From the run's concluded port investigations: service -> (device, lane, time since the
-    lane's last flap), and the (device, lane) pairs found down (those with that time)."""
-    on_lane: dict[str, tuple[str, str, Any]] = {}
+    lane's last flap, when that flap was if read to the second), and the (device, lane) pairs
+    found down (those with that time)."""
+    on_lane: dict[str, tuple[str, str, Any, Any]] = {}
     down: set[tuple[str, str]] = set()
     for ev in case.get("evidence") or []:
         payload = ev.get("payload") if isinstance(ev, dict) and ev.get("kind") == "port_investigation" else None
         if not isinstance(payload, dict) or not payload.get("concluded"):
             continue
         device, ages = str(payload.get("device") or ""), payload.get("link_ages") or {}
+        flapped = payload.get("link_flapped_at") or {}
         down.update((device, str(link)) for link in ages)
         for link, names in (payload.get("links") or {}).items():
             for name in names or []:
-                on_lane[str(name)] = (device, str(link), ages.get(link))
+                on_lane[str(name)] = (device, str(link), ages.get(link), flapped.get(link))
     return on_lane, down
 
 
-def _lane_note(name: str, now: dict[str, tuple[str, str, Any]], down_before: set[tuple[str, str]]) -> str | None:
+def _lane_note(name: str, now: dict[str, tuple[str, str, Any, Any]], down_before: set[tuple[str, str]]) -> str | None:
     """Where a newly detected fault sits: a new service on a lane already down is not a new outage."""
     if name not in now:
         return None
-    device, lane, age = now[name]
-    return (f"on {device} {lane}" + (f", last flapped {age} ago" if age else "")
+    device, lane, age, flapped_at = now[name]
+    # An age counts from the investigation's read, not from when the report is read.
+    when = (f", last flapped {_utc_minute(flapped_at)}" if flapped_at
+            else f", last flapped {age} ago" if age else "")
+    return (f"on {device} {lane}" + when
             + ("; that lane was down in the previous run too" if (device, lane) in down_before else ""))
 
 
@@ -453,7 +549,17 @@ def _cleared_line(row: dict[str, str]) -> str:
             f"(was {row['was']} in run `{row['last_observed_run_id']}`)")
 
 
-def _routing_session_line(row: dict[str, str]) -> str:
+def _adjacency_change_line(row: dict[str, str]) -> str:
+    return f"{_session_label(row)} — last changed {_utc_minute(row['changed_at'])}"
+
+
+def _utc_minute(stamp: str) -> str:
+    """An ISO time as the report gives it: ``29 Oct 22:47 UTC``."""
+    when = datetime.fromisoformat(stamp).astimezone(timezone.utc)
+    return f"{when.day} {when:%b %H:%M} UTC"
+
+
+def _session_label(row: dict[str, str]) -> str:
     parts = row["edge_id"].split(":")
     label = f"`{row['edge_id']}`"
     if len(parts) == 3 and row["protocol"] == "bgp-outside":
@@ -466,6 +572,14 @@ def _routing_session_line(row: dict[str, str]) -> str:
         # A far end that was not read has no interface ("?").
         end = lambda device, interface: f"`{device}`" + ("" if interface == "?" else f" {interface}")
         label = f"IS-IS {end(dev_a, if_a)} ↔ {end(dev_b, if_b)}"
+    return label
+
+
+def _routing_session_line(row: dict[str, str]) -> str:
+    label = _session_label(row)
+    if row.get("up_at"):
+        other = next(device for device in _session_devices(row["edge_id"]) or () if device != row["up_at"])
+        return f"{label} — {row['now']} at `{row['up_at']}`; `{other}` was not read"
     if row["now"] == "not reported" and row.get("answered"):
         other = next(device for device in _session_devices(row["edge_id"]) or () if device != row["answered"])
         return (f"{label} — not reported this run by `{row['answered']}`, which listed it up last run; "
@@ -1093,6 +1207,8 @@ def compute_case_delta(
         "status_changed_on_unchanged_checks": _status_changed_on_unchanged_checks(older, newer),
         "links_gaining_errors": _links_gaining_errors(older, newer),
         "routing_sessions_lost": _routing_sessions_lost(older, newer) + _outside_sessions_lost(older, newer),
+        "routing_sessions_regained": _routing_sessions_regained(older, newer),
+        "adjacencies_changed_between_scans": _adjacencies_changed_between(older, newer),
         "interfaces_lost": _interfaces_lost(older, newer),
         "services_no_longer_present": [
             {"service": name, "service_type": kind,
@@ -1114,6 +1230,8 @@ def delta_has_operational_changes(delta: dict[str, Any]) -> bool:
     if delta.get("newly_missing_evidence"):
         return True
     if delta.get("routing_sessions_lost") or delta.get("interfaces_lost"):
+        return True
+    if delta.get("routing_sessions_regained") or delta.get("adjacencies_changed_between_scans"):
         return True
     if delta.get("status_changed_on_unchanged_checks") or delta.get("links_gaining_errors"):
         return True
@@ -1195,6 +1313,18 @@ def format_case_delta(
         _section(
             "Routing sessions up before, not up now",
             [_routing_session_line(row) for row in delta["routing_sessions_lost"]],
+            "None",
+        )
+    if delta.get("routing_sessions_regained"):
+        _section(
+            "Routing sessions not up before, up now",
+            [_routing_session_line(row) for row in delta["routing_sessions_regained"]],
+            "None",
+        )
+    if delta.get("adjacencies_changed_between_scans"):
+        _section(
+            "IS-IS adjacencies up in both scans, last changed after the previous scan began",
+            [_adjacency_change_line(row) for row in delta["adjacencies_changed_between_scans"]],
             "None",
         )
     if delta.get("service_faults_cleared"):
@@ -1346,6 +1476,23 @@ def format_changes_since_previous(
         if extra > 0:
             lines.append(f"- …and {extra} more")
         lines.append("")
+    regained = list(delta.get("routing_sessions_regained") or [])
+    if regained:
+        lines.append("**Routing sessions not up in the previous run, up now:**")
+        for row in regained[:persistent_limit]:
+            lines.append(f"- {_routing_session_line(row)}")
+        extra = len(regained) - persistent_limit
+        if extra > 0:
+            lines.append(f"- …and {extra} more")
+        lines.append("")
+    changed = list(delta.get("adjacencies_changed_between_scans") or [])
+    if changed:
+        lines.append("**IS-IS adjacencies up in both scans, last changed after the previous scan began:**")
+        lines.extend(f"- {_adjacency_change_line(row)}" for row in changed[:persistent_limit])
+        extra = len(changed) - persistent_limit
+        if extra > 0:
+            lines.append(f"- …and {extra} more")
+        lines.append("")
     gaining = list(delta.get("links_gaining_errors") or [])
     if gaining:
         from diagnostic_mas.port_counters import gain_lines
@@ -1459,6 +1606,10 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
     gone = [row["service"] for row in delta.get("services_no_longer_present") or []]
     lost = [_routing_session_line(row).replace("`", "")
             for row in delta.get("routing_sessions_lost") or []]
+    regained = [_routing_session_line(row).replace("`", "")
+                for row in delta.get("routing_sessions_regained") or []]
+    changed = [_adjacency_change_line(row).replace("`", "")
+               for row in delta.get("adjacencies_changed_between_scans") or []]
     interfaces = list(delta.get("interfaces_lost") or [])
     cleared = [row["service"] for row in delta.get("service_faults_cleared") or []]
     new = list(delta.get("new_problems") or [])
@@ -1491,6 +1642,19 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
             "note": ("Up in the previous run. Either the devices now report the "
                      "session down, or it is absent although both devices answered."),
         }} if lost else {}),
+        **({"routing_sessions_regained": {
+            "count": len(regained),
+            "sessions": regained[:20],
+            "note": ("Not up in the previous run; this run reads them up. A line naming one end "
+                     "is that end's view only: the other end was not read."),
+        }} if regained else {}),
+        **({"adjacencies_changed_between_scans": {
+            "count": len(changed),
+            "adjacencies": changed[:20],
+            "note": ("Up in both scans; the router's last state change came after the previous scan "
+                     "began, so it went down and came back since, unless the change fell in the "
+                     "minutes before that scan read it. Up now; no service status rests on it."),
+        }} if changed else {}),
         **({"links_gaining_errors": {
             "count": len(links),
             "links": links[:10],

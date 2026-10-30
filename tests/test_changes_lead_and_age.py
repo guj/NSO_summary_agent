@@ -1,5 +1,6 @@
 """The notification leads with what changed since the previous scan and how old the open faults are."""
 import json
+from datetime import datetime, timezone
 
 from diagnostic_mas import port_investigation as pi
 from diagnostic_mas.case import Budget, CaseFile, add_evidence
@@ -144,6 +145,24 @@ def test_link_age_is_read_from_the_investigations_own_interface_output():
     assert pi._link_ages(links, [("interface x", up)]) == {}
     both = _interface(f"{PORT}/0", FLAPPED) + _interface(f"{PORT}/2", FLAPPED)
     assert pi._link_ages(links, [("interfaces", both)]) == {}
+
+
+def test_flap_time_counts_back_from_the_router_s_clock_line():
+    links = [f"{PORT}/0", f"{PORT}/1", f"{PORT}/2", f"{PORT}/3"]
+    recent = "  Last link flapped 07:32:18"
+    readings = [
+        (f"interface {PORT}/0", _interface(f"{PORT}/0", recent)),
+        # Rounded to days by the device: no time to the second.
+        (f"interface {PORT}/1", _interface(f"{PORT}/1", FLAPPED)),
+        # No clock line: when the device answered is not known.
+        (f"interface {PORT}/2", _interface(f"{PORT}/2", recent).replace("Sat Oct 10 19:59:06.712 UTC", "")),
+        (f"interface {PORT}/3", _interface(f"{PORT}/3", NEVER)),
+    ]
+    near = datetime(2026, 10, 11, tzinfo=timezone.utc)
+
+    assert pi._link_flapped_at(links, readings, near) == {f"{PORT}/0": "2026-10-10T12:26:48+00:00"}
+    both = _interface(f"{PORT}/0", recent) + _interface(f"{PORT}/2", recent)
+    assert pi._link_flapped_at(links, [("interfaces", both)], near) == {}
 
 
 def test_device_uptime_text_converts_to_days():

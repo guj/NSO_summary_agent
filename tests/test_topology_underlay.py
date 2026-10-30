@@ -74,6 +74,12 @@ def test_resolve_system_id_matches_device_name():
     assert resolve_system_id("renc-data-sw", devices) == "renc-data-sw"
 
 
+def test_a_system_id_names_a_device_it_extends_not_one_it_is_part_of():
+    devices = ["eduky-data-sw", "cien-data-sw"]
+    assert resolve_system_id("cien-data-sw-8190", devices) == "cien-data-sw"
+    assert resolve_system_id("uky-data-sw", devices) is None
+
+
 def test_parse_configured_isis_interfaces_ios_xr():
     names = parse_configured_isis_interfaces(IOS_XR_ISIS_CONFIG)
     assert names == ["HundredGigE0/0/0/0.2400", "HundredGigE0/0/0/0.2402"]
@@ -376,6 +382,37 @@ def test_adjacency_states_follow_their_endpoints():
         "wash-data-sw HundredGigE0/0/0/1.1 lists it as Up"]
 
 
+def test_parallel_adjacencies_between_two_routers_pair_each_reading_once():
+    devices = ["cern-data-sw", "wash-data-sw"]
+    vlans = ("2040", "2050", "3731")
+    observations = [AdjacencyObservation("cern-data-sw", f"FourHundredGigE0/0/0/26.{vlan}", "wash-data-sw", "Up")
+                    for vlan in vlans]
+    observations += [AdjacencyObservation("wash-data-sw", f"HundredGigE0/0/0/19.{vlan}", "cern-data-sw", "Up")
+                     for vlan in vlans]
+
+    edges, issues = pair_adjacency_observations(observations, devices)
+
+    assert [edge["id"] for edge in edges] == [
+        isis_edge_id("cern-data-sw", f"FourHundredGigE0/0/0/26.{vlan}", "wash-data-sw", f"HundredGigE0/0/0/19.{vlan}")
+        for vlan in vlans]
+    assert issues == []
+
+
+def test_a_neighbor_outside_nso_does_not_pair_with_a_device_whose_name_contains_its_own():
+    devices = ["eduky-data-sw", "star-data-sw"]
+    observations = [
+        AdjacencyObservation("eduky-data-sw", "HundredGigE0/0/0/0.857", "star-data-sw", "Up"),
+        AdjacencyObservation("star-data-sw", "HundredGigE0/0/0/21.856", "uky-data-sw", "Up"),
+        AdjacencyObservation("star-data-sw", "HundredGigE0/0/0/21.1857", "eduky-data-sw", "Up"),
+    ]
+
+    edges, issues = pair_adjacency_observations(observations, devices)
+
+    assert [(edge["id"], edge["state"]["status"]) for edge in edges] == [
+        (isis_edge_id("eduky-data-sw", "HundredGigE0/0/0/0.857", "star-data-sw", "HundredGigE0/0/0/21.1857"), "up")]
+    assert [issue["code"] for issue in issues] == ["unknown_neighbor_system_id"]
+
+
 ISIS_RENC_UNREACHABLE = {
     "status": "error",
     "error_message": "RESTCONF 500: Failed to connect to device renc-data-sw: connection refused: "
@@ -469,3 +506,95 @@ async def test_a_platform_without_adjacency_state_is_an_unread_end_not_a_failed_
     failed = {"code": "collection_error", "layer": "underlay",
               "message": "renc-data-sw: check_isis_adjacencies failed: RESTCONF 500: Connect timed out"}
     assert not isis_state_not_exposed(failed)
+
+
+# ``show isis adjacency`` as the MCP server returns it under "raw".
+ADJACENCY_TEXT = """
+Thu Oct 29 17:04:47.441 UTC
+
+IS-IS 1 Level-2 adjacencies:
+System Id      Interface                SNPA           State Hold Changed  NSF IPv4 IPv6
+                                                                               BFD  BFD
+losa-data-sw   Hu0/0/0/22.3000          *PtoP*         Up    28   03:30:43 Yes None None
+hawi-data-sw   Hu0/0/0/19.3380          *PtoP*         Up    22   1d10h    Yes None None
+utah-data-sw   Hu0/0/0/19.3000          *PtoP*         Up    28   5w0d     Yes None None
+salt-data-sw   Hu0/0/0/23.3000          *PtoP*         Init  21   not up   Yes None None
+
+Total adjacency count: 4
+"""
+
+
+def test_change_times_come_from_the_changed_column_when_it_gives_the_time_of_day():
+    from datetime import datetime, timezone
+
+    from nso_facts.topology.underlay import adjacency_change_times
+
+    read_at = datetime(2026, 10, 29, 17, 4, 47, tzinfo=timezone.utc)
+
+    # A day or more old (1d10h, 5w0d) is rounded to the hour or day; "not up" has no change to time.
+    assert adjacency_change_times(ADJACENCY_TEXT, read_at) == {
+        ("losa-data-sw", "Hu0/0/0/22.3000"): "2026-10-29T13:34:04+00:00"}
+    assert adjacency_change_times("", read_at) == {}
+
+
+def test_change_times_count_from_the_router_s_own_clock_line():
+    from datetime import datetime, timezone
+
+    from nso_facts.topology.underlay import adjacency_change_times
+
+    # A cached reply is used after the router answered; its clock line says when it answered.
+    used_later = datetime(2026, 10, 29, 17, 6, 9, tzinfo=timezone.utc)
+    assert adjacency_change_times(ADJACENCY_TEXT, used_later) == {
+        ("losa-data-sw", "Hu0/0/0/22.3000"): "2026-10-29T13:34:04+00:00"}
+    # A clock line from the last day of the year, used just after midnight.
+    new_year = datetime(2027, 1, 1, 0, 1, 0, tzinfo=timezone.utc)
+    december = ADJACENCY_TEXT.replace("Thu Oct 29 17:04:47.441 UTC", "Thu Dec 31 23:59:58.004 UTC")
+    assert adjacency_change_times(december, new_year) == {
+        ("losa-data-sw", "Hu0/0/0/22.3000"): "2026-12-31T20:29:15+00:00"}
+    # A router clock in another zone is not used.
+    pacific = ADJACENCY_TEXT.replace("17:04:47.441 UTC", "10:04:47.441 PDT")
+    assert adjacency_change_times(pacific, used_later) == {
+        ("losa-data-sw", "Hu0/0/0/22.3000"): "2026-10-29T13:35:26+00:00"}
+
+
+def test_an_adjacency_keeps_the_latest_change_either_end_read():
+    devices = ["lbnl-data-sw", "renc-data-sw"]
+    timed = [AdjacencyObservation("lbnl-data-sw", "HundredGigE0/0/0/0.2402", "renc-data-sw", "Up",
+                                  "2026-10-29T13:34:04+00:00"),
+             AdjacencyObservation("renc-data-sw", "HundredGigE0/0/0/0.2400", "lbnl-data-sw", "Up",
+                                  "2026-10-29T13:34:06+00:00")]
+
+    [edge] = pair_adjacency_observations(timed, devices)[0]
+    assert edge["changed_at"] == "2026-10-29T13:34:06+00:00"
+    # One end read: its own change time.
+    [edge] = pair_adjacency_observations(timed[:1], devices, unread_devices={"renc-data-sw"})[0]
+    assert edge["changed_at"] == "2026-10-29T13:34:04+00:00"
+    # No change time read: none recorded.
+    untimed = [AdjacencyObservation(obs.local_device, obs.local_interface, obs.neighbor_system_id, obs.state)
+               for obs in timed]
+    [edge] = pair_adjacency_observations(untimed, devices)[0]
+    assert "changed_at" not in edge
+
+
+@pytest.mark.asyncio
+async def test_the_scan_keeps_each_adjacency_s_change_time_with_its_state():
+    from datetime import datetime, timedelta, timezone
+
+    def reply(base: dict, row: str) -> dict:
+        return {**base, "data": {**base["data"], "raw": "System Id  Interface  SNPA  State Hold Changed\n" + row}}
+
+    before = datetime.now(timezone.utc)
+    _, op_edges, _ = await _collect({
+        ("get_device_config", "lbnl-data-sw"): IOS_XR_ISIS_CONFIG,
+        ("get_device_config", "renc-data-sw"): IOS_XR_ISIS_CONFIG,
+        ("check_isis_adjacencies", "lbnl-data-sw"): reply(
+            ISIS_ADJ_LBNL, "renc-data-sw  HundredGigE0/0/0/0.2402  *PtoP*  Up  27  01:00:00 Yes None None"),
+        ("check_isis_adjacencies", "renc-data-sw"): reply(
+            ISIS_ADJ_RENC, "lbnl-data-sw  HundredGigE0/0/0/0.2400  *PtoP*  Up  27  01:00:05 Yes None None"),
+    })
+    after = datetime.now(timezone.utc)
+
+    [edge] = op_edges
+    # The later of the two ends' changes: lbnl's, an hour before it was read.
+    changed = datetime.fromisoformat(edge["changed_at"])
+    assert before - timedelta(hours=1, seconds=1) <= changed <= after - timedelta(hours=1)

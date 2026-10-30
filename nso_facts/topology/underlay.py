@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from nso_facts.mcp_client import call_mcp, unwrap_mcp_data
@@ -33,6 +35,61 @@ class AdjacencyObservation:
     local_interface: str
     neighbor_system_id: str
     state: str
+    # When this end's adjacency last changed state, if read to the second.
+    changed_at: str | None = None
+
+
+# One adjacency row of ``show isis adjacency`` whose Changed column is a time of day:
+# System Id, Interface, SNPA, State, Hold, Changed.
+_CHANGED_ROW = re.compile(r"^\s*(\S+)\s+(\S+)\s+\S+\s+\S+\s+\d+\s+(\d+):(\d{2}):(\d{2})(?:\s|$)")
+# The router's clock line that heads IOS-XR show output: ``Thu Oct 29 17:04:47.441 UTC``.
+_CLOCK_LINE = re.compile(r"^\s*[A-Z][a-z]{2}\s+([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?\s+UTC\s*$")
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def adjacency_change_times(raw: str, read_at: datetime) -> dict[tuple[str, str], str]:
+    """(system id, interface) -> when the adjacency last changed state, from ``show isis adjacency``.
+
+    Only a change under a day old is given to the second (``03:30:43``); older
+    ones (``1d10h``, ``5w0d``) are rounded to the hour or day and left out, as
+    is ``not up``. Ages count back from the router's UTC clock line when the
+    output has one, since a cached reply is used after the router answered;
+    otherwise from ``read_at``.
+    """
+    read_at = router_clock(raw, read_at) or read_at
+    out: dict[tuple[str, str], str] = {}
+    for line in (raw or "").replace("\r", "").splitlines():
+        match = _CHANGED_ROW.match(line)
+        if match:
+            age = timedelta(hours=int(match[3]), minutes=int(match[4]), seconds=int(match[5]))
+            out[match[1], match[2]] = (read_at - age).isoformat(timespec="seconds")
+    return out
+
+
+def router_clock(raw: str, near: datetime) -> datetime | None:
+    """When the router answered, from the UTC clock line heading its show output; None without one."""
+    return next(filter(None, (_clock_time(line, near) for line in (raw or "").replace("\r", "").splitlines())), None)
+
+
+def _clock_time(line: str, near: datetime) -> datetime | None:
+    """The time a router clock line gives, in the year that puts it nearest ``near``."""
+    match = _CLOCK_LINE.match(line)
+    if not match or match[1] not in _MONTHS:
+        return None
+    month, day, hour, minute, second = _MONTHS.index(match[1]) + 1, *map(int, match.groups()[1:])
+    candidates: list[datetime] = []
+    for year in (near.year - 1, near.year, near.year + 1):
+        try:
+            candidates.append(datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc))
+        except ValueError:  # 29 Feb outside a leap year, or no such time at all
+            continue
+    return min(candidates, key=lambda clock: abs(clock - near)) if candidates else None
+
+
+def _with_change(edge: dict[str, Any], *observations: AdjacencyObservation) -> dict[str, Any]:
+    """The edge with the latest state change its ends' readings show, when one shows any."""
+    times = [obs.changed_at for obs in observations if obs.changed_at]
+    return edge | {"changed_at": max(times)} if times else edge
 
 
 async def collect_static_underlay(
@@ -153,6 +210,7 @@ async def collect_operational_underlay(
             {
                 "id": edge["id"],
                 "state": edge["state"],
+                **({"changed_at": edge["changed_at"]} if "changed_at" in edge else {}),
             }
         )
 
@@ -240,10 +298,14 @@ def pair_adjacency_observations(
     for obs in observations:
         by_device.setdefault(obs.local_device, []).append(obs)
 
-    used_remote: set[tuple[str, str]] = set()
+    # Each reading joins one two-sided edge, so parallel adjacencies between
+    # the same two routers do not also pair across with each other.
+    paired: set[AdjacencyObservation] = set()
     edges: list[dict[str, Any]] = []
 
     for obs_a in observations:
+        if obs_a in paired:
+            continue
         remote_device = resolve_system_id(obs_a.neighbor_system_id, device_names)
         if remote_device is None:
             issues.append(
@@ -264,19 +326,19 @@ def pair_adjacency_observations(
 
         obs_b = _find_reverse_observation(
             by_device.get(remote_device, []),
-            local_device=remote_device,
             remote_device=obs_a.local_device,
-            used_remote=used_remote,
+            paired=paired,
             device_names=device_names,
         )
         if obs_b is None:
             if remote_device in unread_devices:
-                edge = _one_sided_edge(obs_a, remote_device, physical_by_device)
+                edge = _with_change(_one_sided_edge(obs_a, remote_device, physical_by_device), obs_a)
                 if not any(existing["id"] == edge["id"] for existing in edges):
                     edges.append(edge)
             else:
                 # The far device answered without it: its silence is a reading too.
-                edge = _half_listed_edge(obs_a, remote_device, physical_by_device, known_edges or [])
+                edge = _with_change(_half_listed_edge(obs_a, remote_device, physical_by_device, known_edges or []),
+                                    obs_a)
                 if not any(existing["id"] == edge["id"] for existing in edges):
                     edges.append(edge)
                     if edge["state"]["status"] != "up":
@@ -306,7 +368,7 @@ def pair_adjacency_observations(
         }
         state_a, state_b = states[dev_a], states[dev_b]
         status = _bidirectional_status(state_a, state_b)
-        edges.append(
+        edges.append(_with_change(
             {
                 "id": edge_id,
                 "type": "isis_adjacency",
@@ -317,9 +379,11 @@ def pair_adjacency_observations(
                     "remote": state_b,
                     "status": status,
                 },
-            }
-        )
-        used_remote.add((remote_device, obs_b.local_interface))
+            },
+            obs_a,
+            obs_b,
+        ))
+        paired.update((obs_a, obs_b))
 
         if status == "unidirectional":
             issues.append(_views_issue(edges[-1]))
@@ -335,9 +399,12 @@ def resolve_system_id(system_id: str, device_names: list[str]) -> str | None:
     if sid in lowered:
         return lowered[sid]
     for name_lower, name in lowered.items():
-        if sid == name_lower.replace("-", "") or name_lower in sid or sid in name_lower:
+        if sid == name_lower.replace("-", ""):
             return name
-    return None
+    # A hostname extending a device name (cien-data-sw-8190) is that device;
+    # one inside a longer device name (uky-data-sw in eduky-data-sw) is not.
+    extended = [name for name_lower, name in lowered.items() if name_lower in sid]
+    return max(extended, key=len) if extended else None
 
 
 async def probe_static_isis_discovery(
@@ -489,6 +556,8 @@ async def _observations_for_device(
 
     data = unwrap_mcp_data(result)
     rows = data.get("adjacencies") or []
+    # The rows leave out the Changed column; the command's own output keeps it.
+    changes = adjacency_change_times(str(data.get("raw") or ""), datetime.now(timezone.utc))
     observations: list[AdjacencyObservation] = []
     for row in rows:
         if not isinstance(row, dict):
@@ -498,7 +567,7 @@ async def _observations_for_device(
         state = str(row.get("state") or "unknown").strip()
         if system_id and interface:
             observations.append(
-                AdjacencyObservation(device, interface, system_id, state)
+                AdjacencyObservation(device, interface, system_id, state, changes.get((system_id, interface)))
             )
     return observations
 
@@ -731,13 +800,12 @@ def _is_one_sided(edge: dict[str, Any]) -> bool:
 def _find_reverse_observation(
     rows: list[AdjacencyObservation],
     *,
-    local_device: str,
     remote_device: str,
-    used_remote: set[tuple[str, str]],
+    paired: set[AdjacencyObservation],
     device_names: list[str] | None = None,
 ) -> AdjacencyObservation | None:
     for obs in rows:
-        if (local_device, obs.local_interface) in used_remote:
+        if obs in paired:
             continue
         neighbor = obs.neighbor_system_id
         # The same mapping as the forward direction, so a system id in another form still pairs.

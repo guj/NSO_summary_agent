@@ -543,11 +543,18 @@ ISIS_EDGE = "isis:hub-data-sw:HundredGigE0/0/0/1.3000:pe1-data-sw:HundredGigE0/0
 
 def _routing_scan(bgp: dict | None = None, isis: dict | None = None, *,
                   verified: tuple[str, ...] = ("hub-data-sw", "pe1-data-sw"),
-                  scope: dict | None = FULL_SCOPE, issues: tuple[dict, ...] = ()) -> dict:
-    """A saved case holding routing sessions (edge id -> state). None: protocol not collected."""
+                  scope: dict | None = FULL_SCOPE, issues: tuple[dict, ...] = (),
+                  changed: dict[str, str] | None = None, run_id: str | None = None) -> dict:
+    """A saved case holding routing sessions (edge id -> state). None: protocol not collected.
+
+    ``changed``: edge id -> when it last changed state, as read.
+    """
+    changed = changed or {}
     evidence = [
         {"kind": "spine", "role": role,
-         "payload": {"operational_edges": [{"id": edge, "state": dict(state)} for edge, state in edges.items()]}}
+         "payload": {"operational_edges": [
+             {"id": edge, "state": dict(state), **({"changed_at": changed[edge]} if edge in changed else {})}
+             for edge, state in edges.items()]}}
         for role, edges in (("bgp", bgp), ("isis", isis)) if edges is not None
     ]
     case = {"evidence": evidence, "issues": list(issues), "diagnoses": [], "service_coverage": {},
@@ -555,6 +562,8 @@ def _routing_scan(bgp: dict | None = None, isis: dict | None = None, *,
             "live_verified_devices": list(verified)}
     if scope is not None:
         case["run_configuration"] = dict(scope)
+    if run_id is not None:
+        case["run_id"] = run_id
     return case
 
 
@@ -698,6 +707,164 @@ def test_changes_section_and_summary_input_list_lost_routing_sessions():
     assert ("- IS-IS `hub-data-sw` HundredGigE0/0/0/1.3000 ↔ `pe1-data-sw` HundredGigE0/0/0/2.3000"
             " — not reported this run; both devices answered") in text
     assert compact_delta_for_llm(delta)["routing_sessions_lost"]["count"] == 2
+
+
+def test_session_down_in_the_previous_run_and_up_now_is_listed_as_regained():
+    # Read from neither end last run: an expected adjacency both routers omitted.
+    omitted = {"local": "unknown", "remote": "unknown", "status": "down", "detail": "neither end lists it"}
+    older = _routing_scan(bgp={BGP_EDGE: {"local": "idle", "remote": "idle", "status": "down"}},
+                          isis={ISIS_EDGE: omitted})
+
+    regained = compute_case_delta(older, _routing_scan(bgp=BOTH, isis={ISIS_EDGE: UP}))["routing_sessions_regained"]
+
+    assert regained == [
+        {"protocol": "bgp", "edge_id": BGP_EDGE, "now": "up", "states": "established / established"},
+        {"protocol": "isis", "edge_id": ISIS_EDGE, "now": "up", "states": "up / up"}]
+
+
+def test_session_up_now_at_the_one_end_that_was_read_is_regained_at_that_end():
+    older = _routing_scan(bgp={BGP_EDGE: {"local": "idle", "remote": "unknown", "status": "down"}},
+                          isis={ONE_SIDED: {"local": "init", "remote": "unknown", "status": "unknown"}},
+                          verified=("hub-data-sw",))
+    newer = _routing_scan(bgp={BGP_EDGE: HUB_ONLY}, isis={ONE_SIDED: HUB_UP}, verified=("hub-data-sw",))
+
+    regained = compute_case_delta(older, newer)["routing_sessions_regained"]
+
+    assert regained == [
+        {"protocol": "bgp", "edge_id": BGP_EDGE, "now": "established", "states": "", "up_at": "hub-data-sw"},
+        {"protocol": "isis", "edge_id": ONE_SIDED, "now": "up", "states": "", "up_at": "hub-data-sw"}]
+
+
+def test_session_absent_in_the_previous_run_although_its_devices_answered_and_up_now_is_regained():
+    regained = compute_case_delta(_routing_scan(isis={}), _routing_scan(isis={ISIS_EDGE: UP}))
+
+    assert regained["routing_sessions_regained"] == [
+        {"protocol": "isis", "edge_id": ISIS_EDGE, "now": "up", "states": "up / up"}]
+    # Only hub-data-sw is read now: up at that end, which answered last run without it.
+    [row] = compute_case_delta(_routing_scan(isis={}), _routing_scan(isis={ONE_SIDED: HUB_UP}, verified=(
+        "hub-data-sw",)))["routing_sessions_regained"]
+    assert row == {"protocol": "isis", "edge_id": ONE_SIDED, "now": "up", "states": "", "up_at": "hub-data-sw"}
+
+
+def test_session_absent_in_the_previous_run_is_not_regained_without_an_answer_then():
+    failed = {"layer": "underlay", "code": "collection_error", "status": "open",
+              "message": "pe1-data-sw: check_isis_adjacencies failed: timeout"}
+    edge = lambda a, b: f"isis:hub-data-sw:HundredGigE0/0/0/1.{a}:pe1-data-sw:HundredGigE0/0/0/2.{b}"
+    newer, hub_only = _routing_scan(isis={ISIS_EDGE: UP}), _routing_scan(isis={ONE_SIDED: HUB_UP}, verified=(
+        "hub-data-sw",))
+    not_evidence = {
+        "one end not queried then": (_routing_scan(isis={}, verified=("hub-data-sw",)), newer),
+        "one end failed that query": (_routing_scan(isis={}, issues=(failed,)), newer),
+        "filtered scan then": (_routing_scan(isis={}, scope={**FULL_SCOPE, "Device filter": "hub-data-sw"}), newer),
+        "scope unknown then": (_routing_scan(isis={}, scope=None), newer),
+        # Parallel links are also recorded under ids pairing one link's end with another's.
+        "a cross-paired id of links up then": (_routing_scan(isis={edge(10, 10): UP, edge(20, 20): UP}),
+                                               _routing_scan(isis={edge(10, 10): UP, edge(10, 20): UP,
+                                                                   edge(20, 20): UP})),
+        "the end that lists it now did not answer then": (_routing_scan(isis={}, verified=("pe1-data-sw",)),
+                                                          hub_only),
+        "listed then under its full id": (_routing_scan(isis={ISIS_EDGE: UP}), hub_only),
+    }
+
+    for why, (older, newer) in not_evidence.items():
+        assert compute_case_delta(older, newer)["routing_sessions_regained"] == [], why
+
+
+# The previous scan began at 04:30:06 UTC.
+STARTED = "20261029T043006Z"
+
+
+def test_adjacency_up_in_both_scans_that_changed_after_the_previous_scan_started_is_listed():
+    newer = _routing_scan(isis={ISIS_EDGE: UP}, changed={ISIS_EDGE: "2026-10-29T13:34:04+00:00"})
+
+    rows = compute_case_delta(_routing_scan(isis={ISIS_EDGE: UP}, run_id=STARTED), newer)
+
+    assert rows["adjacencies_changed_between_scans"] == [
+        {"protocol": "isis", "edge_id": ISIS_EDGE, "changed_at": "2026-10-29T13:34:04+00:00"}]
+    # Read up at the one end that was read, both times.
+    [row] = compute_case_delta(
+        _routing_scan(isis={ONE_SIDED: HUB_UP}, verified=("hub-data-sw",), run_id=STARTED),
+        _routing_scan(isis={ONE_SIDED: HUB_UP}, verified=("hub-data-sw",),
+                      changed={ONE_SIDED: "2026-10-29T04:31:00+00:00"}))["adjacencies_changed_between_scans"]
+    assert row["edge_id"] == ONE_SIDED
+
+
+def test_adjacency_is_not_listed_unless_both_scans_read_it_up_and_it_changed_after_the_first_began():
+    changed = {ISIS_EDGE: "2026-10-29T13:34:04+00:00"}
+    down = {"local": "init", "remote": "not listed", "status": "unidirectional"}
+    older = _routing_scan(isis={ISIS_EDGE: UP}, run_id=STARTED)
+    not_listed = {
+        "changed before the previous scan began": (older, _routing_scan(
+            isis={ISIS_EDGE: UP}, changed={ISIS_EDGE: "2026-10-29T04:30:05+00:00"})),
+        # Listed among the sessions back up instead.
+        "not up in the previous scan": (_routing_scan(isis={ISIS_EDGE: down}, run_id=STARTED),
+                                        _routing_scan(isis={ISIS_EDGE: UP}, changed=changed)),
+        "not up now": (older, _routing_scan(isis={ISIS_EDGE: down}, changed=changed)),
+        "no change time read": (older, _routing_scan(isis={ISIS_EDGE: UP})),
+        "the previous scan's start not known": (_routing_scan(isis={ISIS_EDGE: UP}),
+                                                _routing_scan(isis={ISIS_EDGE: UP}, changed=changed)),
+    }
+
+    for why, (before, now) in not_listed.items():
+        assert compute_case_delta(before, now)["adjacencies_changed_between_scans"] == [], why
+
+
+def test_changes_section_delta_report_and_summary_input_list_adjacencies_changed_between_scans():
+    from diagnostic_mas.case_delta import (
+        compact_delta_for_llm, delta_has_operational_changes, format_changes_since_previous)
+
+    delta = compute_case_delta(_routing_scan(isis={ISIS_EDGE: UP}, run_id=STARTED),
+                               _routing_scan(isis={ISIS_EDGE: UP}, changed={ISIS_EDGE: "2026-10-29T13:34:04+00:00"}))
+    line = ("- IS-IS `hub-data-sw` HundredGigE0/0/0/1.3000 ↔ `pe1-data-sw` HundredGigE0/0/0/2.3000"
+            " — last changed 29 Oct 13:34 UTC")
+    title = "IS-IS adjacencies up in both scans, last changed after the previous scan began"
+
+    text = "\n".join(format_changes_since_previous(delta, previous_run_id=STARTED))
+
+    assert delta_has_operational_changes(delta)
+    assert f"**{title}:**\n{line}" in text
+    assert f"## {title}\n{line}" in format_case_delta(delta)
+    assert compact_delta_for_llm(delta)["adjacencies_changed_between_scans"]["adjacencies"] == [
+        line[2:].replace("`", "")]
+
+
+def test_session_still_down_now_absent_or_up_both_times_is_not_regained():
+    down = {"local": "idle", "remote": "idle", "status": "down"}
+    not_regained = {
+        "still down": (_routing_scan(bgp={BGP_EDGE: down}), _routing_scan(bgp={BGP_EDGE: down})),
+        "absent now": (_routing_scan(bgp={BGP_EDGE: down}), _routing_scan(bgp={})),
+        "protocol not collected now": (_routing_scan(bgp={BGP_EDGE: down}), _routing_scan(isis={})),
+        "up both times": (_routing_scan(bgp=BOTH), _routing_scan(bgp=BOTH)),
+        "up at the end that was read both times": (_routing_scan(bgp={BGP_EDGE: HUB_ONLY}),
+                                                   _routing_scan(bgp={BGP_EDGE: HUB_ONLY})),
+        "one-sided and still not up": (
+            _routing_scan(isis={ONE_SIDED: {"local": "init", "remote": "unknown", "status": "unknown"}}),
+            _routing_scan(isis={ONE_SIDED: {"local": "init", "remote": "unknown", "status": "unknown"}})),
+    }
+
+    for why, (older, newer) in not_regained.items():
+        assert compute_case_delta(older, newer)["routing_sessions_regained"] == [], why
+
+
+def test_changes_section_delta_report_and_summary_input_list_regained_routing_sessions():
+    from diagnostic_mas.case_delta import (
+        compact_delta_for_llm, delta_has_operational_changes, format_changes_since_previous)
+
+    delta = compute_case_delta(
+        _routing_scan(bgp={BGP_EDGE: {"local": "idle", "remote": "unknown", "status": "down"}},
+                      isis={ISIS_EDGE: {"local": "init", "remote": "not listed", "status": "unidirectional"}}),
+        _routing_scan(bgp={BGP_EDGE: HUB_ONLY}, isis={ISIS_EDGE: UP}),
+    )
+    bgp = "- BGP `hub-data-sw` 10.0.0.1 ↔ `pe1-data-sw` 10.0.1.1 — established at `hub-data-sw`; `pe1-data-sw` was not read"
+    isis = "- IS-IS `hub-data-sw` HundredGigE0/0/0/1.3000 ↔ `pe1-data-sw` HundredGigE0/0/0/2.3000 — up (up / up)"
+
+    text = "\n".join(format_changes_since_previous(delta, previous_run_id="run-1"))
+
+    assert delta_has_operational_changes(delta)
+    assert f"**Routing sessions not up in the previous run, up now:**\n{bgp}\n{isis}" in text
+    assert f"## Routing sessions not up before, up now\n{bgp}\n{isis}" in format_case_delta(delta)
+    assert compact_delta_for_llm(delta)["routing_sessions_regained"]["sessions"] == [
+        line[2:].replace("`", "") for line in (bgp, isis)]
 
 
 def _interface_scan(states: dict[str, tuple[str | None, str | None]]) -> dict:
@@ -966,11 +1133,12 @@ def test_summary_input_says_what_each_new_problem_is():
     assert "new_problems" not in compact_delta_for_llm(compute_case_delta(_bgp_scan([]), _bgp_scan([])))
 
 
-def _with_lane(case, links: dict, ages: dict):
+def _with_lane(case, links: dict, ages: dict, flapped_at: dict | None = None):
     from diagnostic_mas.case import add_evidence
 
     add_evidence(case, {"kind": "port_investigation", "role": "port", "layer": "physical", "payload": {
-        "device": "fiu-data-sw", "port": "HundredGigE0/0/0/24", "concluded": True, "links": links, "link_ages": ages}})
+        "device": "fiu-data-sw", "port": "HundredGigE0/0/0/24", "concluded": True, "links": links, "link_ages": ages,
+        **({"link_flapped_at": flapped_at} if flapped_at else {})}})
     return case
 
 
@@ -988,7 +1156,7 @@ def test_a_newly_detected_fault_names_its_lane_and_whether_that_lane_was_down_be
     assert note in "\n".join(format_changes_since_previous(delta))
     assert compact_delta_for_llm(delta)["newly_failed_services"][0]["detail"].endswith(note)
 
-    # A lane newly down: its age only.
+    # A lane newly down, saved without a flap time: its age only.
     delta = compute_case_delta(case_to_dict(before),
                                case_to_dict(_with_lane(_dp_case("down"), {lane1: ["circuit"]}, {lane1: "02:15:40"})))
     assert delta["newly_failed_services"][0]["detail"].endswith(f"; on fiu-data-sw {lane1}, last flapped 02:15:40 ago")
@@ -996,6 +1164,17 @@ def test_a_newly_detected_fault_names_its_lane_and_whether_that_lane_was_down_be
     # Not explained by a port investigation: unchanged.
     delta = compute_case_delta(case_to_dict(_dp_case()), case_to_dict(_dp_case("down")))
     assert "last flapped" not in delta["newly_failed_services"][0]["detail"]
+
+
+def test_a_newly_down_lane_gives_the_time_it_flapped_not_an_age_from_an_earlier_read():
+    lane = "HundredGigE0/0/0/24/1"
+    newer = _with_lane(_dp_case("down"), {lane: ["circuit"]}, {lane: "07:32:18"},
+                       {lane: "2026-10-29T18:30:13+00:00"})
+
+    delta = compute_case_delta(case_to_dict(_dp_case()), case_to_dict(newer))
+
+    assert delta["newly_failed_services"][0]["detail"].endswith(
+        f"; on fiu-data-sw {lane}, last flapped 29 Oct 18:30 UTC")
 
 
 def test_the_summary_gets_links_gaining_errors_one_line_per_link():

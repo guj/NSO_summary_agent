@@ -79,25 +79,27 @@ def _mich_case() -> CaseFile:
     )
 
 
-def _read_links(case, focus_issue, session, *, up=(), unread=()):
+def _read_links(case, focus_issue, session, *, up=(), unread=(), clock="", flapped=""):
     """Record a `show interface` answer for each link the Issue lists."""
     for link in re.findall(r"link (\S+) recorded down", focus_issue["message"]):
         if link in unread:
             continue
         state = "up, line protocol is up" if link in up else "down, line protocol is down"
+        heading = f"\n{clock}\n" if clock else ""
+        tail = f"\n  Last link flapped {flapped}" if flapped else ""
         add_evidence(case, {"kind": "drill", "role": "drill", "layer": "services", "payload": {
             "check": "exec_show", "issue_edge_id": session.issue_edge_id,
             "args": {"device_name": focus_issue["devices"][0], "input_command": f"interface {link}"},
-            "result": {"result": f"{link} is {state}\n  Hardware is HundredGigE"}}})
+            "result": {"result": f"{heading}{link} is {state}\n  Hardware is HundredGigE{tail}"}}})
 
 
-def _loop(calls: list[str], *, conclude: bool = True, up=(), unread=()):
+def _loop(calls: list[str], *, conclude: bool = True, up=(), unread=(), clock="", flapped=""):
     async def fake(client, settings, case, *, device_names, focus_issue, session,
                    openai_client=None, system_prompt=None, account="drill"):
         calls.append(focus_issue["edge_id"])
         assert system_prompt and account == "port"
         debit_drill(case, 3, session=session, account="port")
-        _read_links(case, focus_issue, session, up=up, unread=unread)
+        _read_links(case, focus_issue, session, up=up, unread=unread, clock=clock, flapped=flapped)
         if conclude:
             record_drill_finding(case, {
                 "observed": "each listed lane: down, no receive light", "cause": "no light arriving",
@@ -290,6 +292,18 @@ async def test_each_port_is_investigated_once_and_its_services_are_explained():
     assert final_service_counts(case)["l2bridge"]["sources"]["down"]["Down — port investigated once"] == 3
     assert (case.budget.port_investigations_used, case.budget.port_tools_used) == (2, 6)
     assert case.budget.drills_used == 0
+
+
+@pytest.mark.asyncio
+async def test_the_investigation_records_when_each_dark_lane_last_flapped():
+    case = _mich_case()
+
+    await _run(case, _loop([], clock="Fri Oct 30 02:02:31.262 UTC", flapped="07:32:18"))
+
+    flapped = {f["port"]: f["link_flapped_at"] for f in pi.port_findings(case)}
+    # The year is the one nearest the day the test runs, so only the date and time are compared.
+    assert {link: when[4:] for link, when in flapped["HundredGigE0/0/0/24"].items()} == {
+        "HundredGigE0/0/0/24/0": "-10-29T18:30:13+00:00", "HundredGigE0/0/0/24/1": "-10-29T18:30:13+00:00"}
 
 
 @pytest.mark.asyncio
