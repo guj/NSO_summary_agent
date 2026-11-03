@@ -17,23 +17,6 @@ load_dotenv()
 
 DEFAULT_IGNORE_SERVICE_TYPES: tuple[str, ...] = ("idipa",)
 DEFAULT_MAX_SERVICE_TYPES: int = 10
-DEFAULT_REPORT_SECTIONS: tuple[str, ...] = (
-    "executive",
-    "devices",
-    "ignored_types",
-)
-_VALID_REPORT_SECTIONS = frozenset(
-    {
-        "executive",
-        "problems",
-        "counts",
-        "delta",
-        "fleet_sync",
-        "system_health",
-        "devices",
-        "ignored_types",
-    }
-)
 _EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
 
 
@@ -49,7 +32,6 @@ class Settings:
     dry_run: bool
     ignore_service_types: frozenset[str]
     max_service_types: int
-    report_sections: tuple[str, ...]
     slack_webhook_url: str | None
     smtp_host: str | None 
     smtp_port: int
@@ -75,6 +57,8 @@ class Settings:
     fabric_chat_timeout_sec: float = 60.0
     fabric_chat_connect_timeout_sec: float = 20.0
     mcp_results_keep_days: int = 7
+    # Saved scans under runs/ older than this many days are removed after a scan saves; 0 keeps all.
+    runs_keep_days: int = 0
     # Slack and email carry the HTML report with one line naming the run; True restores the digest.
     notification_digest: bool = False
 
@@ -179,16 +163,17 @@ def _parse_max_retries(raw: str | None) -> int:
     return value
 
 
-def _parse_keep_days(raw: str | None) -> int:
-    """Days a --save-mcp-results archive is kept (default 7; 0 keeps them all)."""
+def _parse_keep_days(raw: str | None, *, name: str = "MCP_RESULTS_KEEP_DAYS", default: int = 7) -> int:
+    """Days something saved is kept: a --save-mcp-results archive (default 7) or, with
+    ``name="RUNS_KEEP_DAYS"``, a saved scan (default 0). 0 keeps them all."""
     if raw is None:
-        return 7
+        return default
     try:
         value = int(raw)
     except (ValueError, TypeError):
-        raise ValueError("MCP_RESULTS_KEEP_DAYS must be a nonnegative integer") from None
+        raise ValueError(f"{name} must be a nonnegative integer") from None
     if value < 0:
-        raise ValueError("MCP_RESULTS_KEEP_DAYS must be a nonnegative integer")
+        raise ValueError(f"{name} must be a nonnegative integer")
     return value
 
 
@@ -266,6 +251,7 @@ def load_settings(*, require_llm_key: bool = True) -> Settings:
         fabric_chat_connect_timeout_sec=_parse_connect_timeout(os.environ.get("FABRIC_CHAT_CONNECT_TIMEOUT_SEC")),
         state_dir=Path(os.environ.get("STATE_DIR", root / "state")),
         mcp_results_keep_days=_parse_keep_days(os.environ.get("MCP_RESULTS_KEEP_DAYS")),
+        runs_keep_days=_parse_keep_days(os.environ.get("RUNS_KEEP_DAYS"), name="RUNS_KEEP_DAYS", default=0),
         notification_digest=os.environ.get("NOTIFICATION_DIGEST", "0") in ("1", "true", "yes"),
         # Default dry-run (safe): no state write / Slack / email unless DRY_RUN=0 or --publish
         dry_run=os.environ.get("DRY_RUN", "1") in ("1", "true", "yes"),
@@ -280,7 +266,6 @@ def load_settings(*, require_llm_key: bool = True) -> Settings:
                 )
             ),
         ),
-        report_sections=_parse_report_sections(os.environ.get("REPORT_SECTIONS")),
         slack_webhook_url=os.environ.get("SLACK_WEBHOOK_URL"),
         slack_bot_token=os.environ.get("SLACK_BOT_TOKEN") or None,
         slack_channel_id=os.environ.get("SLACK_CHANNEL_ID") or None,
@@ -340,42 +325,6 @@ def _parse_ignore_service_types(value: str | None) -> frozenset[str]:
     else:
         items = [part.strip() for part in value.split(",") if part.strip()]
     return frozenset(item.lower() for item in items)
-
-
-def _parse_report_sections(value: str | None) -> tuple[str, ...]:
-    """Return ordered report section names from REPORT_SECTIONS."""
-    import sys
-
-    if value is None:
-        return DEFAULT_REPORT_SECTIONS
-    raw = [part.strip().lower() for part in value.split(",")]
-    raw = [part for part in raw if part]
-    if not raw:
-        print(
-            "warning: REPORT_SECTIONS is empty; using default",
-            file=sys.stderr,
-        )
-        return DEFAULT_REPORT_SECTIONS
-
-    out: list[str] = []
-    unknown: list[str] = []
-    for name in raw:
-        if name in _VALID_REPORT_SECTIONS:
-            out.append(name)
-        else:
-            unknown.append(name)
-    for name in unknown:
-        print(
-            f"warning: unknown REPORT_SECTIONS entry ignored: {name}",
-            file=sys.stderr,
-        )
-    if not out:
-        print(
-            "warning: REPORT_SECTIONS had no valid entries; using default",
-            file=sys.stderr,
-        )
-        return DEFAULT_REPORT_SECTIONS
-    return tuple(out)
 
 
 def email_configured(settings: Settings) -> bool:

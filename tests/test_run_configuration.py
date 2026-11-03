@@ -18,6 +18,10 @@ def test_snapshot_redacts_secrets_and_preserves_effective_values(tmp_path):
     assert snapshot['LLM enabled'] is False
     assert snapshot['Dataplane services per category'] == 20
     assert snapshot['NSO request timeout passed to MCP (seconds)'] == 30
+    assert snapshot['Saved scans kept (days)'] == 'All'
+    kept = replace(settings, runs_keep_days=30)
+    assert capture_run_configuration(args, kept, case.budget, skip_llm=True, dry_run=True)[
+        'Saved scans kept (days)'] == 30
     assert 'secret' not in str(snapshot)
     args.max_dataplane_per_category = 5
     assert snapshot['Dataplane services per category'] == 20

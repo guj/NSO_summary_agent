@@ -58,6 +58,7 @@ def capture_run_configuration(args, settings, budget, *, skip_llm, dry_run):
         "Dry run": dry_run,
         "Publish enabled": not dry_run,
         "Save raw MCP results": bool(getattr(args, "save_mcp_results", False)),
+        "Saved scans kept (days)": getattr(settings, "runs_keep_days", 0) or "All",
     }
 
 

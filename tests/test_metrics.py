@@ -26,7 +26,6 @@ def _settings(**overrides) -> Settings:
         "dry_run": False,
         "ignore_service_types": frozenset(),
         "max_service_types": 10,
-        "report_sections": ("executive", "devices"),
         "slack_webhook_url": None,
         "smtp_host": None,
         "smtp_port": 587,
@@ -117,13 +116,6 @@ def test_build_phase1_metrics_from_snapshot():
             }
         },
     }
-    delta = {
-        "first_run": False,
-        "new_failures": ["l2ptp/a"],
-        "recoveries": ["l2ptp/b", "l2ptp/c"],
-        "status_changes": [{"name": "x"}],
-        "removed": [],
-    }
     text = format_exposition(
         build_phase1_metrics(
             snapshot,
@@ -131,7 +123,6 @@ def test_build_phase1_metrics_from_snapshot():
             duration_seconds=12.5,
             timestamp_seconds=1_700_000_000,
             pipeline="agent",
-            delta=delta,
         )
     )
     assert 'nso_summary_run_success{pipeline="agent"} 1.0' in text
@@ -158,11 +149,8 @@ def test_build_phase1_metrics_from_snapshot():
     assert 'nso_hardware_power_alerts{pipeline="agent"} 0.0' in text
     assert 'nso_hardware_control_plane_drop_alerts{pipeline="agent"} 1.0' in text
     assert 'nso_inventory_review_devices{pipeline="agent"}' in text
-    assert 'nso_delta_first_run{pipeline="agent"} 0.0' in text
-    assert 'nso_delta_new_failures{pipeline="agent"} 1.0' in text
-    assert 'nso_delta_recoveries{pipeline="agent"} 2.0' in text
-    assert 'nso_delta_status_changes{pipeline="agent"} 1.0' in text
-    assert 'nso_delta_removed{pipeline="agent"} 0.0' in text
+    # Changes since the previous scan are in the report and the digest, not in metrics.
+    assert "nso_delta_" not in text
 
 
 def test_pipeline_multi_agent_label():

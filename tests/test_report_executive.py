@@ -1,20 +1,7 @@
-from agent.report_executive import (
-    build_action_context,
+from nso_report.executive import (
     build_device_health_rows,
     device_interfaces_label,
-    format_executive_section,
-    format_service_summary_lines,
-    mismatch_phrasing_examples,
-    replace_markers_for_plain,
 )
-
-
-def test_service_summary_lines():
-    lines = format_service_summary_lines(
-        {"l2bridge": {"total": 2, "up": 2}, "l3rt": {"total": 1, "up": 1}}
-    )
-    assert any("l2bridge" in line and "2/2 Up" in line for line in lines)
-    assert any("l3rt" in line and "1/1 Up" in line for line in lines)
 
 
 def test_interfaces_review_on_up_down():
@@ -42,7 +29,7 @@ def test_interfaces_healthy_when_only_admin_down():
     assert device_interfaces_label("sw1", phys, {}) == "Healthy"
 
 
-def test_build_health_rows_and_executive_assemble():
+def test_build_health_rows():
     topology = {
         "static": {
             "layers": {
@@ -89,50 +76,9 @@ def test_build_health_rows_and_executive_assemble():
     assert rows[0]["bgp"] == "1/1"
     assert rows[0]["sync"] == "—"
 
-    body = format_executive_section(
-        run_id="2026-07-15T16:57:00Z",
-        counts={"l3rt": {"total": 1, "up": 1}},
-        topology=topology,
-        delta={"first_run": True, "counts": {}},
-        llm_narrative="Overall Status\n--------------\n🟢 Services: ok\n\nAction Items\n------------\nNone reported.",
-        rich_markers=True,
-        fleet_sync={
-            "status": "success",
-            "data": {
-                "summary": {"in_sync": 1, "out_of_sync": 0, "error": 0},
-                "devices": [{"device": "sw1", "result": "in-sync"}],
-            },
-        },
-        fabric_api_url="https://ai.fabric-testbed.net",
-        fabric_model="gpt-oss-20b",
-        mcp_server_cmd="/opt/cisco-nso-mcp-server",
-    )
-    assert "NSO Operations Snapshot" in body
-    assert "2026-07-15 16:57 UTC" in body
-    assert "LLM: FABRIC AI (ai.fabric-testbed.net)  model=gpt-oss-20b" in body
-    assert "MCP: /opt/cisco-nso-mcp-server" in body
-    assert "🟢 Services" in body
-    assert "Service Summary" in body
-    assert "l3rt          1/1 Up" in body
-    assert "Device Health" in body
-    assert "sw1" in body
-    assert "Sync" in body
-    assert "in-sync" in body
-
-    plain = format_executive_section(
-        run_id="2026-07-15T16:57:00Z",
-        counts={},
-        topology=topology,
-        delta={"first_run": False, "counts": {}},
-        llm_narrative="Overall Status\n--------------\n🟢 Services: ok\n",
-        rich_markers=False,
-    )
-    assert "OK Services" in plain
-    assert "🟢" not in plain
-
 
 def test_device_health_notes_skip_admin_down_and_down_down():
-    from agent.report_executive import device_notes_label
+    from nso_report.executive import device_notes_label
 
     phys = [
         {
@@ -156,7 +102,7 @@ def test_device_health_notes_skip_admin_down_and_down_down():
 
 
 def test_device_health_sync_column():
-    from agent.report_executive import build_device_health_rows, format_device_health_table
+    from nso_report.executive import build_device_health_rows
 
     topology = {
         "static": {
@@ -199,14 +145,10 @@ def test_device_health_sync_column():
     rows = build_device_health_rows(topology, fleet)
     assert rows[0]["sync"] == "out-of-sync"
     assert rows[0]["hardware"] == "Unavailable"
-    table = format_device_health_table(rows)
-    assert "Sync" in table
-    assert "Hardware" in table
-    assert "out-of-sync" in table
 
 
 def test_device_health_hardware_column():
-    from agent.report_executive import build_device_health_rows, format_device_health_table
+    from nso_report.executive import build_device_health_rows
 
     topology = {
         "static": {
@@ -247,100 +189,11 @@ def test_device_health_hardware_column():
     }
     rows = build_device_health_rows(topology, hardware_health=hw)
     assert rows[0]["hardware"] == "Review"
-    table = format_device_health_table(rows)
-    assert "Hardware" in table
-    assert "Review" in table
-
-
-def test_replace_markers():
-    assert replace_markers_for_plain("🟢 x 🟡 y 🔴 z") == "OK x ATTN y WARN z"
-
-
-def test_mismatch_phrasing_examples():
-    items = mismatch_phrasing_examples(
-        [
-            {
-                "device": "renc-data-sw",
-                "kind": "type_change",
-                "confirmed": False,
-            },
-            {
-                "device": "renc-data-sw",
-                "kind": "breakout",
-                "confirmed": False,
-            },
-            {
-                "device": "renc-data-sw",
-                "kind": "missing",
-                "confirmed": False,
-            },
-            {
-                "device": "uky-data-sw",
-                "kind": "missing",
-                "confirmed": False,
-            },
-        ]
-    )
-    assert items == [
-        "Review and confirm the 4 NSO↔device interface mappings on "
-        "renc-data-sw and uky-data-sw",
-        "Resolve interface type/breakout mismatches on renc-data-sw",
-        "Confirm missing-on-box interface(s) on renc-data-sw and uky-data-sw",
-    ]
-
-
-def test_action_context_covers_services_sync_and_inventory():
-    ctx = build_action_context(
-        counts={"l2ptp": {"total": 2, "up": 1, "down": 1, "degraded": 0, "unknown": 0}},
-        fleet_sync={
-            "status": "success",
-            "data": {
-                "devices": [
-                    {"device": "renc-data-sw", "result": "out-of-sync"},
-                    {"device": "uky-data-sw", "result": "in-sync"},
-                ]
-            },
-        },
-        mismatches=[
-            {
-                "device": "renc-data-sw",
-                "kind": "type_change",
-                "confirmed": False,
-            }
-        ],
-        delta={"new_failures": ["svc-a"]},
-    )
-    assert ctx["services_needing_attention"][0]["type"] == "l2ptp"
-    assert ctx["devices_not_in_sync"] == [
-        {"device": "renc-data-sw", "result": "out-of-sync"}
-    ]
-    assert ctx["inventory"]["unconfirmed_mapping_count"] == 1
-    assert ctx["new_service_failures"] == ["svc-a"]
-    assert ctx["inventory"]["phrasing_examples"]
-
-
-def test_format_executive_keeps_llm_action_items():
-    body = format_executive_section(
-        run_id="2026-07-15T16:57:00Z",
-        counts={},
-        topology=None,
-        delta={"first_run": True, "counts": {}},
-        llm_narrative=(
-            "Overall Status\n--------------\n🟢 Services: ok\n\n"
-            "Action Items\n------------\n"
-            "1. Restore NSO sync on renc-data-sw (out-of-sync)\n"
-            "2. Investigate down l2ptp services"
-        ),
-        rich_markers=True,
-    )
-    assert "Restore NSO sync on renc-data-sw" in body
-    assert "Investigate down l2ptp services" in body
-    assert body.index("Overall Status") < body.index("Action Items")
 
 
 def test_port_the_device_gives_no_state_for_is_not_a_mapping_problem():
     """As cien-data-sw's management ports m1-m4: on the device by name, but no state reported."""
-    from agent.report_executive import device_notes_label
+    from nso_report.executive import device_notes_label
     from nso_report.devices import device_detail_lines
 
     phys = [
@@ -368,7 +221,7 @@ def test_port_the_device_gives_no_state_for_is_not_a_mapping_problem():
 
 def test_device_whose_interfaces_were_not_read_is_not_a_mapping_problem():
     """As cape-data-sw (NSO could not connect) and brist-data-sw (southbound locked)."""
-    from agent.report_executive import device_notes_label
+    from nso_report.executive import device_notes_label
     from diagnostic_mas.operator_report import _health_prose
     from nso_facts.fleet_rollups import device_needs_inventory_review
     from nso_report.devices import device_detail_lines

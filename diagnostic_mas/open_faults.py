@@ -211,7 +211,7 @@ def digest_changes(delta: dict[str, Any] | None, previous_run_id: str | None,
         from diagnostic_mas.port_counters import gain_lines
 
         # Its own block, one link per line; the rows arrive largest first.
-        links = gain_lines(gaining)
+        links = gain_lines(gaining, (delta or {}).get("item_history"))
         lines.append(f"**Links gaining errors while up:** {len(links)}" + (", largest first" if len(links) > 1 else ""))
         lines.extend(f"- {line}" for line in links[:3])
         if len(links) > 3:

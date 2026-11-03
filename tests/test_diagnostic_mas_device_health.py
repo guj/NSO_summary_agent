@@ -1,8 +1,5 @@
 from diagnostic_mas.case import Budget, CaseFile, add_evidence
-from diagnostic_mas.device_health import (
-    format_device_health_section,
-    topology_from_case,
-)
+from diagnostic_mas.device_health import topology_from_case
 from diagnostic_mas.report import render_report
 
 
@@ -114,19 +111,12 @@ def _case_with_spines() -> CaseFile:
     return case
 
 
-def test_device_health_section_in_report():
+def test_devices_section_in_report():
     case = _case_with_spines()
 
     topo = topology_from_case(case)
     assert topo["operational"]["layers"]["underlay"]["edges"]
     assert topo["operational"]["layers"]["routing"]["edges"]
-
-    section = "\n".join(format_device_health_section(case))
-    assert "Device" in section
-    assert "Sync" in section
-    assert "renc-data-sw" in section
-    assert "lbnl-data-sw" in section
-    assert "in-sync" in section
 
     text = render_report(case)
     assert "## Devices" in text

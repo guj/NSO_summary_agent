@@ -617,21 +617,35 @@ def _routing_findings(case: CaseFile) -> list[tuple[str, tuple[str, str], dict[s
     return list(out.values())
 
 
+def _routing_age(case: CaseFile, issue: dict[str, Any], *, dated: bool = True) -> str | None:
+    """How long this routing fault has been seen, from the record carried across scans."""
+    from diagnostic_mas.item_history import ROUTING_FAULT_CODES, clause_for, routing_key, routing_lead
+
+    code, edge = str(issue.get("code") or ""), str(issue.get("edge_id") or "")
+    if code not in ROUTING_FAULT_CODES or not edge:
+        return None
+    return clause_for(case.item_history, routing_key(edge), routing_lead(code), dated=dated)
+
+
 def _routing_finding_lines(case: CaseFile, device: str) -> list[str]:
+    from diagnostic_mas.case_delta import is_problem
     from diagnostic_mas.open_faults import run_day
     from diagnostic_mas.port_investigation import brief, short_cause
 
+    open_faults = {str(i.get("edge_id")): i for i in case.issues if isinstance(i, dict) and is_problem(i)}
     lines = []
     for edge, (a, b), finding in _routing_findings(case):
         if device not in (a, b):
             continue
         what = "IS-IS adjacency" if edge.startswith("isis:") else "BGP session"
+        age = _routing_age(case, open_faults[edge]) if edge in open_faults else None
         when, rechecked = "", ""
         if finding.get("earlier"):
             when = f" on {run_day(finding['run_id'])}" if finding.get("run_id") else " in an earlier scan"
             rechecked = "not rechecked this scan; "
         line = (f"**Investigated by LLM{when}** ({rechecked}confidence {finding.get('confidence') or 'not given'}; "
-                f"not verified): {what} {a} ↔ {b} — {scrub_internal_ids(short_cause(finding, 500))}")
+                f"not verified): {what} {a} ↔ {b}{f' ({age})' if age else ''} — "
+                f"{scrub_internal_ids(short_cause(finding, 500))}")
         # Room for the evidence sentence and the first step: these findings write long sentences.
         then = scrub_internal_ids(brief(finding.get("fix_suggestion"), 360))
         lines.append(line + (f" Next: {then}" if then else ""))
@@ -1167,6 +1181,8 @@ def format_devices_operator(case: CaseFile) -> list[str]:
                                 optics_line(case, str(issue.get("edge_id") or "")),
                                 traffic_line(case, str(issue.get("edge_id") or ""))):
                     mapped = f"{mapped} {reading}" if reading else mapped
+                age = _routing_age(case, issue, dated="missing since" not in mapped)
+                mapped = f"{mapped} {age[0].upper()}{age[1:]}." if age else mapped
             if mapped:
                 attention.append(mapped)
             elif str(issue.get("code") or "") not in _MAPPING_CODES:
@@ -1976,12 +1992,37 @@ def format_followup_operator(case: CaseFile) -> list[str]:
     "retry everything", inconclusive service-sync loops, or config changes
     unsupported by evidence.
     """
-    items: list[str] = []
-    fault_names: set[str] = set()
+    records = dict(_iter_service_records(case))
     dp_findings = _dataplane_by_name(case)
+    # Services a fault action already names; the later actions leave them out.
+    fault_names: set[str] = set()
+    items = _service_fault_followups(records, dp_findings, fault_names)
+    items += _decided_fault_followups(case, records, dp_findings, fault_names)
+    items += _last_known_fault_followups(case, fault_names)
+    items += _routing_followups(case)
+    items += _device_access_followups(case)
+    # Do not add generic "retry service sync" / "reassess all unknowns" —
+    # per-device actions above already state what they resolve.
+    items += _affected_service_followups(case, fault_names)
+    items += _outside_network_followups(case)
+    items += _inventory_followups(case)
+    # Intentionally not-selected / not-dug services are covered by the
+    # Services table coverage statement — do not list them as follow-up tasks.
+    out = list(dict.fromkeys(items))
+    if not out:
+        return ["(none)"]
+    return [f"{i}. {item}" for i, item in enumerate(out, start=1)]
+
+
+def _service_fault_followups(
+    records: dict[str, dict[str, Any]],
+    dp_findings: dict[str, dict[str, Any]],
+    fault_names: set[str],
+) -> list[str]:
+    """Down or degraded services an investigation concluded on; adds them to ``fault_names``."""
+    items: list[str] = []
     # Faults of one service type at the same place usually share one cause,
     # so they are one action; the grouping itself asserts no diagnosis.
-    records = dict(_iter_service_records(case))
     fault_groups: dict[tuple[Any, ...], list[str]] = {}
     for name, dx in dp_findings.items():
         status = str(dx.get("dataplane_status") or "").lower()
@@ -2009,6 +2050,17 @@ def format_followup_operator(case: CaseFile) -> list[str]:
             "(human must approve any configuration/state change). Services: "
             + ", ".join(f"`{n}`" for n in names) + "."
         )
+    return items
+
+
+def _decided_fault_followups(
+    case: CaseFile,
+    records: dict[str, dict[str, Any]],
+    dp_findings: dict[str, dict[str, Any]],
+    fault_names: set[str],
+) -> list[str]:
+    """Services the fixed check found Down or Degraded; adds them to ``fault_names``."""
+    items: list[str] = []
     from diagnostic_mas.open_faults import decided_reason, shared_reason
 
     # Faults the fixed check decided need no investigation; those with one reason are one action.
@@ -2042,6 +2094,12 @@ def format_followup_operator(case: CaseFile) -> list[str]:
             shown += f", +{len(names) - 6} more (see Services)"
         items[slot] = (f"{len(names)} {kind} services are Down on the fixed check's own reading, \"{reason}\", "
                        f"on {place}: {closing} Services: {shown}.")
+    return items
+
+
+def _last_known_fault_followups(case: CaseFile, fault_names: set[str]) -> list[str]:
+    """Earlier faults this scan did not recheck; adds them to ``fault_names``."""
+    items: list[str] = []
     from diagnostic_mas.service_presence import disappeared
     absent_names = {r.get("name") for r in services_from_case(case).values() if disappeared(r)}
     for row in case.last_known_service_faults:
@@ -2056,7 +2114,12 @@ def format_followup_operator(case: CaseFile) -> list[str]:
                 f"{row.get('verification', 'not rechecked')}. "
                 "Do not treat a baseline pass or sampling omission as recovery."
             )
+    return items
 
+
+def _routing_followups(case: CaseFile) -> list[str]:
+    """BGP sessions and IS-IS adjacencies down, then BGP sessions not established."""
+    items: list[str] = []
     sessions_down = _bgp_sessions_down_text(case, limit=6)
     if sessions_down:
         down_sessions = {str(i.get("edge_id") or "") for i in case.issues if str(i.get("code") or "") == "session_down"}
@@ -2084,8 +2147,12 @@ def format_followup_operator(case: CaseFile) -> list[str]:
                else " (LLM investigations' findings are in the devices' blocks)" if found else "")
             + "."
         )
+    return items
 
-    # 1) One action per device for live-MCP quarantine and/or sync unknowns.
+
+def _device_access_followups(case: CaseFile) -> list[str]:
+    """One action per device for live-MCP quarantine and/or sync unknowns."""
+    items: list[str] = []
     from nso_facts.mcp_client import (
         live_mcp_failure_kind,
         nso_could_not_connect,
@@ -2106,7 +2173,6 @@ def format_followup_operator(case: CaseFile) -> list[str]:
         )
 
     involvement = _verification_unknown_involvement_by_device(case)
-    grouped_names = _verification_unknown_service_names(case)
     service_totals = _endpoint_service_counts(case)[0]
 
     attributed_devices = sorted(
@@ -2208,12 +2274,15 @@ def format_followup_operator(case: CaseFile) -> list[str]:
                 f"Investigate failed live MCP for `{device}` to restore "
                 f"automated collection ({_service_impact(service_totals[device], 0)})."
             )
+    return items
 
-    # Do not add generic "retry service sync" / "reassess all unknowns" —
-    # per-device actions above already state what they resolve.
 
-    # Other affected services (collection unhealthy, dig incomplete/faults)
-    # not already covered by the endpoint-unknown groups above.
+def _affected_service_followups(case: CaseFile, fault_names: set[str]) -> list[str]:
+    """Other affected services (collection unhealthy, dig incomplete/faults)
+    not already covered by the endpoint-unknown groups or a fault action.
+    """
+    items: list[str] = []
+    grouped_names = _verification_unknown_service_names(case)
     affected: list[str] = []
     seen_svc: set[str] = set(grouped_names) | fault_names
 
@@ -2334,8 +2403,12 @@ def format_followup_operator(case: CaseFile) -> list[str]:
                 f"Finish verification for {len(affected)} additional services "
                 "with collection or dig findings (see Services for targets)."
             )
+    return items
 
-    # 3) Sessions to other networks, then neighbors to identify (after reachability/services)
+
+def _outside_network_followups(case: CaseFile) -> list[str]:
+    """Sessions to other networks, then neighbors to identify (after reachability/services)."""
+    items: list[str] = []
     def coded(code: str) -> list[dict[str, Any]]:
         return [i for i in case.issues if str(i.get("code") or "") == code]
 
@@ -2376,8 +2449,12 @@ def format_followup_operator(case: CaseFile) -> list[str]:
             f"Identify the device behind {n} IS-IS neighbor{'s' if n != 1 else ''} that "
             f"match{'es' if n == 1 else ''} no NSO device."
         )
+    return items
 
-    # 4) Real interface inventory/mapping only — never drop-counter Review alone
+
+def _inventory_followups(case: CaseFile) -> list[str]:
+    """Real interface inventory/mapping only — never drop-counter Review alone."""
+    items: list[str] = []
     inv_devices = [
         str(row.get("device"))
         for row in _device_rows(case)
@@ -2394,20 +2471,7 @@ def format_followup_operator(case: CaseFile) -> list[str]:
             "devices to separate onboarding gaps from faults (triage only; "
             "historical drop counters alone are not urgent)."
         )
-
-    # Intentionally not-selected / not-dug services are covered by the
-    # Services table coverage statement — do not list them as follow-up tasks.
-
-    seen: set[str] = set()
-    out: list[str] = []
-    for item in items:
-        if item in seen:
-            continue
-        seen.add(item)
-        out.append(item)
-    if not out:
-        return ["(none)"]
-    return [f"{i}. {item}" for i, item in enumerate(out, start=1)]
+    return items
 
 
 def format_result_line(case: CaseFile) -> str:

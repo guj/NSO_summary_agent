@@ -95,24 +95,6 @@ def _layer_up_down(topology: Any, layer: str) -> tuple[int, int]:
     return 0, 0
 
 
-def _delta_counts(delta: Any) -> dict[str, int]:
-    if not isinstance(delta, dict):
-        return {
-            "first_run": 0,
-            "new_failures": 0,
-            "recoveries": 0,
-            "status_changes": 0,
-            "removed": 0,
-        }
-    return {
-        "first_run": 1 if delta.get("first_run") else 0,
-        "new_failures": len(delta.get("new_failures") or []),
-        "recoveries": len(delta.get("recoveries") or []),
-        "status_changes": len(delta.get("status_changes") or []),
-        "removed": len(delta.get("removed") or []),
-    }
-
-
 def build_phase1_metrics(
     snapshot: dict[str, Any],
     *,
@@ -120,7 +102,6 @@ def build_phase1_metrics(
     duration_seconds: float,
     timestamp_seconds: float | None = None,
     pipeline: str = "agent",
-    delta: dict[str, Any] | None = None,
 ) -> list[str]:
     """Return Prometheus exposition lines (gauges).
 
@@ -133,7 +114,6 @@ def build_phase1_metrics(
     counts = snapshot.get("counts") or {}
     system_health = snapshot.get("system_health") or {}
     hardware_health = snapshot.get("hardware_health") or {}
-    delta_obj = delta if delta is not None else snapshot.get("delta")
 
     total, in_sync, out_of_sync, sync_error = fleet_device_sync_breakdown(
         fleet_sync, topology
@@ -150,7 +130,6 @@ def build_phase1_metrics(
     cpu_alerts, mem_alerts = fleet_infra_alert_counts(system_health)
     temp_a, fan_a, pwr_a, cp_a = fleet_hardware_alert_counts(hardware_health)
     inventory_review = fleet_inventory_review_count(topology, fleet_sync)
-    dcounts = _delta_counts(delta_obj)
 
     def g(name: str, value: float, labels: dict[str, str] | None = None) -> str:
         return _gauge(name, value, labels, pipeline=pipeline)
@@ -196,16 +175,6 @@ def build_phase1_metrics(
         g("nso_hardware_control_plane_drop_alerts", float(cp_a)),
         "# TYPE nso_inventory_review_devices gauge",
         g("nso_inventory_review_devices", float(inventory_review)),
-        "# TYPE nso_delta_first_run gauge",
-        g("nso_delta_first_run", float(dcounts["first_run"])),
-        "# TYPE nso_delta_new_failures gauge",
-        g("nso_delta_new_failures", float(dcounts["new_failures"])),
-        "# TYPE nso_delta_recoveries gauge",
-        g("nso_delta_recoveries", float(dcounts["recoveries"])),
-        "# TYPE nso_delta_status_changes gauge",
-        g("nso_delta_status_changes", float(dcounts["status_changes"])),
-        "# TYPE nso_delta_removed gauge",
-        g("nso_delta_removed", float(dcounts["removed"])),
     ]
 
     lines += _attempt_lines(ts, success=success, nso_unreachable=False, pipeline=pipeline)
@@ -370,7 +339,6 @@ def push_phase1_metrics(
     duration_seconds: float,
     timestamp_seconds: float | None = None,
     pipeline: str = "agent",
-    delta: dict[str, Any] | None = None,
 ) -> bool:
     """Push Phase 1+ metrics. Returns True if a push was attempted and succeeded.
 
@@ -387,7 +355,6 @@ def push_phase1_metrics(
             duration_seconds=duration_seconds,
             timestamp_seconds=timestamp_seconds,
             pipeline=pipeline,
-            delta=delta,
         )
     ).encode("utf-8")
 

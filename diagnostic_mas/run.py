@@ -631,10 +631,17 @@ async def _run_after_accounting(
         previous_run_id=previous_run_id, run_id=run_id,
     )
     first_seen_from_saved_scans(case.last_known_service_faults, Path(state_dir) / "runs", before=run_id)
+    current = case_to_dict(case)
     case_delta = None
     if previous_case is not None:
-        case_delta = compute_case_delta(previous_case, case_to_dict(case))
+        case_delta = compute_case_delta(previous_case, current)
         case_delta["last_known_service_faults"] = case.last_known_service_faults
+    # How long routing faults, error links and IS-IS changes have been seen: saved scans only.
+    from diagnostic_mas.item_history import history_for_scan
+
+    case.item_history = history_for_scan(previous_case, current, runs_dir=Path(state_dir) / "runs", run_id=run_id)
+    if case_delta is not None:
+        case_delta["item_history"] = case.item_history
 
     # Keep the full fault ledger for persistence; scope only its report view.
     report_case = case
@@ -715,6 +722,10 @@ async def _run_after_accounting(
             report=report,
             nso_address=nso_address,
         )
+        if settings.runs_keep_days > 0:
+            from diagnostic_mas.state_paths import prune_saved_runs
+
+            prune_saved_runs(state_dir, run_id=run_id, keep_days=settings.runs_keep_days)
         from diagnostic_mas.html_report import notification_digest, report_notice
         from urllib.parse import quote
 

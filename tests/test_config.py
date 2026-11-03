@@ -2,40 +2,12 @@
 
 from agent.config import (
     DEFAULT_IGNORE_SERVICE_TYPES,
-    DEFAULT_REPORT_SECTIONS,
     _parse_ignore_service_types,
-    _parse_report_sections,
 )
 from nso_facts.service_collect import (
     is_ignored_service_type as _is_ignored_service_type,
     select_service_types as _select_service_types,
 )
-
-
-def test_report_sections_default_when_unset():
-    assert _parse_report_sections(None) == DEFAULT_REPORT_SECTIONS
-    assert DEFAULT_REPORT_SECTIONS == (
-        "executive",
-        "devices",
-        "ignored_types",
-    )
-
-
-def test_report_sections_custom_order_and_case():
-    assert _parse_report_sections("Devices, COUNTS") == ("devices", "counts")
-
-
-def test_report_sections_skips_unknown(capsys):
-    assert _parse_report_sections("problems,bogus,delta") == ("problems", "delta")
-    err = capsys.readouterr().err
-    assert "bogus" in err.lower() or "unknown" in err.lower()
-
-
-def test_report_sections_empty_falls_back_to_default(capsys):
-    assert _parse_report_sections("") == DEFAULT_REPORT_SECTIONS
-    assert _parse_report_sections(" , , ") == DEFAULT_REPORT_SECTIONS
-    err = capsys.readouterr().err
-    assert err  # warned
 
 
 def test_ignore_service_types_default():
@@ -118,3 +90,17 @@ def test_notification_digest_is_off_unless_set(monkeypatch):
     assert load_settings().notification_digest is False
     monkeypatch.setenv("NOTIFICATION_DIGEST", "1")
     assert load_settings().notification_digest is True
+
+
+def test_saved_scans_are_kept_unless_runs_keep_days_is_set(monkeypatch):
+    import pytest
+    from agent.config import _parse_keep_days, load_settings
+
+    for name, value in {"NSO_ADDRESS": "localhost", "NSO_PASSWORD": "test", "FABRIC_AI_API_KEY": "test"}.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("RUNS_KEEP_DAYS", raising=False)
+    assert load_settings().runs_keep_days == 0
+    monkeypatch.setenv("RUNS_KEEP_DAYS", "30")
+    assert load_settings().runs_keep_days == 30
+    with pytest.raises(ValueError, match="RUNS_KEEP_DAYS"):
+        _parse_keep_days("-1", name="RUNS_KEEP_DAYS", default=0)

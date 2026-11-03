@@ -57,7 +57,8 @@ compares with the last one saved there.
 docker compose run --rm agent --configure
 ```
 
-Answer the questions: NSO first, then the optional LLM, Slack, email and Pushgateway. They are
+Answer the questions: NSO first, then the optional LLM, Slack, email and Pushgateway, and
+whether to remove saved scans after a number of days (each is about 24 MB). They are
 saved in `nso-diagnostic.env`. Answer no to the connection check at the end; step 4 does it.
 
 ## 4. Check the connection

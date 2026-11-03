@@ -213,6 +213,19 @@ def test_port_not_read_in_the_previous_scan_has_nothing_to_compare_with():
     assert links_gaining_errors(_counters(EARLIER), _counters(LATER, **{UPLINK: _reading(crc=843)})) == []
 
 
+def test_port_comparisons_say_which_ports_gained_and_which_were_read_clean():
+    from diagnostic_mas.port_counters import port_comparisons
+
+    quiet, reset, new, blank = "HundredGigE0/0/0/13", "HundredGigE0/0/0/9", "HundredGigE0/0/0/20", "HundredGigE0/0/0/3"
+    unreadable = {"crc": None, "input_errors": None, "output_errors": None}
+    before = _counters(EARLIER, **{UPLINK: _reading(), quiet: _reading(), reset: _reading(), blank: _reading(**unreadable)})
+    now = _counters(LATER, **{UPLINK: _reading(crc=5), quiet: _reading(), reset: _reading(cleared="00:10:00"),
+                              new: _reading(), blank: _reading(**unreadable)})
+
+    # The reset port and the one with no error counts to subtract were not compared; the new one has nothing before.
+    assert port_comparisons(before, now) == {f"{RUTG}:{UPLINK}": True, f"{RUTG}:{quiet}": False}
+
+
 def test_report_and_notification_list_the_lead_without_touching_any_status():
     older, newer = _counters(EARLIER, **{UPLINK: _reading()}), _counters(LATER, **{UPLINK: _reading(crc=843, input_errors=843)})
     for scan in (older, newer):

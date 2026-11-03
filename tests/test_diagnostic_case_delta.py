@@ -1254,3 +1254,19 @@ def test_an_outside_peer_sending_far_fewer_prefixes_is_a_lead():
 
     assert ("- `star-data-sw` from outside peer 198.125.141.24 (AS 293): 18,350 → 1,204 prefixes (−93.4%); "
             "session up 1y08w") in format_changes_since_previous(delta, previous_run_id="run-1")
+
+
+def test_adjacency_change_outcomes_cover_adjacencies_up_in_both_scans_only():
+    from diagnostic_mas.case_delta import adjacency_change_outcomes
+
+    quiet = "isis:hub-data-sw:HundredGigE0/0/0/7.3000:pe1-data-sw:HundredGigE0/0/0/8.3000"
+    gone = "isis:hub-data-sw:HundredGigE0/0/0/9.3000:pe1-data-sw:HundredGigE0/0/0/10.3000"
+    untimed = "isis:hub-data-sw:HundredGigE0/0/0/11.3000:pe1-data-sw:HundredGigE0/0/0/12.3000"
+    older = _routing_scan(isis={ISIS_EDGE: UP, quiet: UP, gone: UP, untimed: UP}, run_id=STARTED)
+    newer = _routing_scan(isis={ISIS_EDGE: UP, quiet: UP, untimed: UP,
+                                gone: {"local": "down", "remote": "down", "status": "down"}},
+                          changed={ISIS_EDGE: "2026-10-29T13:34:04+00:00", quiet: "2026-10-28T01:00:00+00:00"})
+
+    # No change time read: whether it changed is not known.
+    assert adjacency_change_outcomes(older, newer) == {ISIS_EDGE: True, quiet: False}
+    assert adjacency_change_outcomes(_routing_scan(isis={ISIS_EDGE: UP}), newer) == {}

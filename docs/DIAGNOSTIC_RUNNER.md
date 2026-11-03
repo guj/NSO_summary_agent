@@ -346,6 +346,8 @@ persistence and configured delivery.
 `--save-mcp-results` opts into raw MCP evidence retention; outputs can contain
 sensitive device configuration, so do not commit them. Such a run first removes
 archives older than `MCP_RESULTS_KEEP_DAYS` (default 7 days; `0` keeps all).
+`RUNS_KEEP_DAYS` (default `0`, keep all) does the same for saved scans under `runs/`: a scan
+that saves removes those more than that many days older, never the one `latest.json` names.
 
 `--check-connection` starts the MCP server, asks NSO for its device list and, unless
 `--skip-llm` is given, checks the LLM key and model with a one-token request. When the

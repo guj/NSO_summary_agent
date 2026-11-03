@@ -197,13 +197,27 @@ def links_gaining_errors(older: dict[str, Any], newer: dict[str, Any]) -> list[d
 
     One row per port, the far end of its IS-IS adjacency attached; ``gain_lines`` puts a link's ends together.
     """
+    rows = [row for _key, row in _compared(older, newer) if row is not None]
+    # Most errors gained first, then links that only changed state: a short list must not cut off the worst one.
+    return sorted(rows, key=lambda row: (-max(row["gained"].values(), default=0), -row["state_changes"],
+                                         row["device"], row["port"]))
+
+
+def port_comparisons(older: dict[str, Any], newer: dict[str, Any]) -> dict[str, bool]:
+    """``device:port`` -> True when the port is one of ``links_gaining_errors``, False when both scans read it
+    up with error counts to subtract and nothing changed. Ports either scan did not read up, or whose
+    counters were cleared or went back, are left out: they were not compared."""
+    return {key: row is not None for key, row in _compared(older, newer)}
+
+
+def _compared(older: dict[str, Any], newer: dict[str, Any]):
+    """(``device:port``, its row or None when nothing changed) for each port the two scans can be compared on."""
     before, now = _saved(older), _saved(newer)
     far_ends = _far_ends(newer)
     try:
         elapsed = (datetime.fromisoformat(now["read_at"]) - datetime.fromisoformat(before["read_at"])).total_seconds()
     except (KeyError, TypeError, ValueError):
         elapsed = None
-    rows = []
     for key, reading in (now.get("ports") or {}).items():
         earlier = (before.get("ports") or {}).get(key)
         if not earlier or reading.get("state") != "up":
@@ -234,18 +248,18 @@ def links_gaining_errors(older: dict[str, Any], newer: dict[str, Any]) -> list[d
             except (KeyError, TypeError, ValueError):
                 bounced = False
         if not gained and not state_changes and not bounced:
+            # Read clean only when there were error counts to subtract.
+            if any(both(name) for name in _ERRORS):
+                yield key, None
             continue
         device, _, port = key.partition(":")
         far = far_ends.get((device, port)) if reading.get("adjacency") else None
-        rows.append({"device": device, "port": port, "description": reading.get("description") or "",
-                     "gained": gained, "state_changes": state_changes, **({"bounced": True} if bounced else {}),
-                     **({"far_end": far} if far else {}),
-                     "minutes": round(elapsed / 60) if elapsed is not None else None,
-                     "services": int(reading.get("services") or 0), "adjacency": bool(reading.get("adjacency")),
-                     "device_services": int(reading.get("device_services") or 0)})
-    # Most errors gained first, then links that only changed state: a short list must not cut off the worst one.
-    return sorted(rows, key=lambda row: (-max(row["gained"].values(), default=0), -row["state_changes"],
-                                         row["device"], row["port"]))
+        yield key, {"device": device, "port": port, "description": reading.get("description") or "",
+                    "gained": gained, "state_changes": state_changes, **({"bounced": True} if bounced else {}),
+                    **({"far_end": far} if far else {}),
+                    "minutes": round(elapsed / 60) if elapsed is not None else None,
+                    "services": int(reading.get("services") or 0), "adjacency": bool(reading.get("adjacency")),
+                    "device_services": int(reading.get("device_services") or 0)}
 
 
 def _changes(row: dict[str, Any], *, bounced: str) -> list[str]:
@@ -279,8 +293,14 @@ def gain_line(row: dict[str, Any]) -> str:
             + (f"; {held} service{'' if held == 1 else 's'} on this device" if row["adjacency"] and held else ""))
 
 
-def gain_lines(rows: list[dict[str, Any]]) -> list[str]:
-    """One line per link, worst first: the two ends of an IS-IS link together when both are listed."""
+def gain_lines(rows: list[dict[str, Any]], history: dict[str, dict[str, Any]] | None = None) -> list[str]:
+    """One line per link, worst first: the two ends of an IS-IS link together when both are listed.
+
+    With ``history``, a link seen before says how long and how often it has gained errors.
+    """
+    from diagnostic_mas.item_history import clause_for, link_key
+
+    age = lambda row: clause_for(history, link_key(row["device"], row["port"]), "gaining errors")
     listed = {(row["device"], row["port"]): row for row in rows}
     done: set[tuple[str, str]] = set()
     lines = []
@@ -293,14 +313,17 @@ def gain_lines(rows: list[dict[str, Any]]) -> list[str]:
         other_key = (far.get("device"), _parent_port(far["interface"])) if far.get("interface") not in (None, "?") else None
         other = listed.get(other_key) if other_key not in done else None
         if other is None:
-            lines.append(gain_line(row))
+            clause = age(row)
+            lines.append(gain_line(row) + (f"; {clause}" if clause else ""))
             continue
         done.add(other_key)
         short = lambda r: str(r["device"]).split("-", 1)[0]
         ends = "; ".join(f"{short(r)} {', '.join(_changes(r, bounced='went down and came back'))}" for r in (row, other))
         held = [r.get("device_services") or 0 for r in (row, other)]
         took = _took(row)
+        clause = age(row) or age(other)
         lines.append(f"`{row['device']}` {row['port']} ↔ `{other['device']}` {other['port']}, one IS-IS link"
                      f"{',' + took if took else ''}: {ends}."
-                     + (f" {held[0]} and {held[1]} services on these devices." if any(held) else ""))
+                     + (f" {held[0]} and {held[1]} services on these devices." if any(held) else "")
+                     + (f" {clause[0].upper()}{clause[1:]}." if clause else ""))
     return lines

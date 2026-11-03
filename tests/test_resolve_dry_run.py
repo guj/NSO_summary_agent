@@ -21,7 +21,6 @@ def _settings(*, dry_run: bool) -> Settings:
         dry_run=dry_run,
         ignore_service_types=frozenset(),
         max_service_types=10,
-        report_sections=("executive", "devices"),
         slack_webhook_url=None,
         smtp_host=None,
         smtp_port=587,

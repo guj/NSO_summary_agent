@@ -68,6 +68,9 @@ class CaseFile:
     # Set when provider LLM spend budget is exceeded; stop further LLM calls.
     # Historical faults are not current evidence or fresh diagnoses.
     last_known_service_faults: list[dict[str, Any]] = field(default_factory=list)
+    # Routing faults, links gaining errors and IS-IS changes: when first seen and how often since,
+    # by ``kind|subject``. Copied forward scan to scan; a fact about saved scans, not evidence.
+    item_history: dict[str, dict[str, Any]] = field(default_factory=dict)
     # Earlier scans' latest routing drill findings, by issue edge id, dated by ``run_id``: leads for
     # this scan's drills, not current evidence. Those on Issues this scan leaves alone are saved with it.
     previous_findings: dict[str, dict[str, Any]] = field(default_factory=dict)

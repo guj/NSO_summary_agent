@@ -21,7 +21,6 @@ from multi_agent.base import (
 )
 
 _PROMPTS = Path(__file__).resolve().parent / "prompts"
-_MULTI_PROMPTS = Path(__file__).resolve().parent.parent / "multi_agent" / "prompts"
 
 _JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
 
@@ -68,12 +67,6 @@ def _system_prompt(role: str) -> str:
         path = _PROMPTS / name
         if path.is_file():
             return path.read_text(encoding="utf-8")
-        # Fall back to multi_agent prompts for isis/bgp if needed
-        alt = _MULTI_PROMPTS / (
-            "isis_plan.txt" if role == "isis" else "bgp_plan.txt"
-        )
-        if alt.is_file():
-            return alt.read_text(encoding="utf-8")
     return (
         "Propose JSON with keys plans, handoffs, hypotheses for the issue. "
         "Do not invent device names. Empty arrays are fine."

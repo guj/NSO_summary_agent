@@ -15,9 +15,6 @@ logger = logging.getLogger(__name__)
 # device -> nso name -> box name(s)
 EquivalenceMap = dict[str, dict[str, list[str]]]
 
-# Repo-relative draft of heuristic suggestions (review before confirming).
-SUGGESTED_EQUIVALENCES_DRAFT_REL = "config/to_confirm.interface-equivalence.json"
-
 
 def interface_port_address(name: str) -> str | None:
     """Return port address after IOS-XR type prefix (e.g. ``0/0/0/32``)."""
@@ -157,16 +154,3 @@ def resolve_equivalence(
     by_nso = equivalences.get(device) or {}
     box = by_nso.get(nso)
     return list(box) if box else None
-
-
-def suggested_equivalences_report_note(
-    count: int,
-    draft_rel: str | None = None,
-) -> str:
-    """Bold action line for the top of the Devices section."""
-    rel = draft_rel or SUGGESTED_EQUIVALENCES_DRAFT_REL
-    noun = "match" if count == 1 else "matches"
-    return (
-        f"**Action required:** {count} unconfirmed NSO↔box interface {noun} "
-        f"— review {rel}"
-    )

@@ -240,6 +240,7 @@ See [deploy/monitoring/README.md](deploy/monitoring/README.md) for:
 | `MCP_SERVER_CMD`              | no       | Path to `cisco-nso-mcp-server`. Default: the one installed in the agent's own environment (`install.py` puts it there), else `PATH` |
 | `STATE_DIR`                   | no       | Default `./state`                                                         |
 | `MCP_RESULTS_KEEP_DAYS`       | no       | Days a `--save-mcp-results` archive is kept (default `7`; `0` keeps all). See [Preserve MCP responses](#preserve-mcp-responses) |
+| `RUNS_KEEP_DAYS`              | no       | Days a saved scan under `runs/` is kept (default `0`: all). A scan that saves removes older ones, never the latest. See [Preserve MCP responses](#preserve-mcp-responses) |
 | `NOTIFICATION_DIGEST`         | no       | `1` sends a short digest with the HTML report to Slack and email; default sends one line naming the run. See [Compact diagnostic notifications and HTML reports](#compact-diagnostic-notifications-and-html-reports) |
 | `IGNORE_SERVICE_TYPES`        | no       | Comma-separated types to skip (default `idipa`; set empty to include all) |
 | `NSO_SERVICE_SYNC_MODE`       | no       | `check` (default) calls `check_service_sync` per instance; `skip` uses endpoint fleet sync only (this lab). Overall status combines sync and dataplane; the diagnostic table counts endpoint sync and dataplane independently |
@@ -579,7 +580,7 @@ The section of an l3rt service that is OpUp ends with a **Delivery check for an 
 
 | Flag | Role |
 |------|------|
-| `--configure` | Ask for the NSO, LLM, Slack, email and Pushgateway settings and write them into `.env` in the current directory; Enter keeps a current value |
+| `--configure` | Ask for the NSO, LLM, Slack, email and Pushgateway settings, and how long to keep saved scans, and write them into `.env` in the current directory; Enter keeps a current value |
 | `--skip-llm` | Spines only; no dataplane/drill/summary LLM |
 | `--deterministic-summary` | Skip final Summary chat; restate dataplane diagnoses/findings (default is LLM Summary) |
 | `--service-type` / `--service-id` | **Service-first** (implies lean service-only): match instances, basic checks for all; with LLM enabled, an explicit `--service-id` also investigates instances whose basic checks pass (within budget); type-only focus investigates suspicious instances; no whole-NSO topology unless evidence expands. Combined = intersection; exit if nothing matches |
@@ -685,6 +686,14 @@ were cleared in between, or when a counter went back. A read that fails leaves t
 without a reading and is not a fault. The first scan after enabling this has nothing to
 subtract.
 
+A link seen before says how long and how often, for example "gaining errors in every scan since
+27 Oct or earlier (28)". The same clause follows an IS-IS adjacency that changed state between
+scans and a BGP session or IS-IS adjacency that is down. It is counted from what earlier scans
+saved: a scan that did not read the item counts neither way, "or earlier" means the oldest scan
+looked at already had it, and the record keeps the last 20 scans. The first scan after this
+was added builds it once from up to 30 saved scans. It is a fact about the saved scans, not a
+diagnosis, and changes no status.
+
 A device without a CLI, such as a Ciena managed over NETCONF, answers `show` commands with
 `exec_unavailable`. Its interface states and port counters are then read with
 `get_interface_health` instead. A port the service model names `Generic14` is port `14` on
@@ -755,8 +764,17 @@ Before it creates its archive, a `--save-mcp-results` run removes archives in
 `MCP_RESULTS_KEEP_DAYS` days (default `7`) before its own; `0` keeps them all.
 To keep an archive longer, move it into a subfolder such as `mcp-results/keep/`:
 only `<run id>-<random>.jsonl` files directly in `mcp-results/` are removed.
-Runs without the flag remove nothing, and run folders under `runs/` are never
-touched. A full scan's archive is roughly 110–120 MB.
+Runs without the flag remove nothing here. A full scan's archive is roughly 110–120 MB.
+
+Saved scans under `runs/` (about 24 MB each, mostly `case.json`) are kept unless
+`RUNS_KEEP_DAYS` is set. Then a scan that saves its own results removes saved scans whose run
+ID is more than that many days before its own. It never removes the scan `latest.json` names,
+which the next scan compares with. Only folders named exactly like a run ID are candidates,
+and only the three files a scan writes in them (`case.json`, `report.md`, `report.html`): a
+folder you rename, or anything you add to one, stays. Dry runs remove nothing. History the
+report shows (first-seen dates, how often an item was seen) is carried from scan to scan, so
+removing old scans loses none of it. Report links into `runs/` (see
+`DIAGNOSTIC_REPORT_BASE_URL`) stop working for removed scans.
 
 ```bash
 nso-diagnostic-run --service-only --service-id <service-id> --dry-run --save-mcp-results
@@ -788,7 +806,8 @@ getUploadURLExternal → upload → completeUploadExternal flow. If the upload f
 setups receive the one line (or the digest), but cannot attach the HTML. Optionally set
 `DIAGNOSTIC_REPORT_BASE_URL` to an existing internal HTTPS location serving the
 contents of the diagnostic `runs/` directory; webhook posts will link to
-`<base>/<run-id>/report.html`. The runner does not deploy or host those files.
+`<base>/<run-id>/report.html`. The runner does not deploy or host those files. With
+`RUNS_KEEP_DAYS` set, a link works for that many days.
 Without bot upload or hosting, full details remain in run artifacts and the email
 attachment. HTML attachments may require downloading or may be blocked by mail policy.
 

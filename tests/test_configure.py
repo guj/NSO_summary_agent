@@ -77,6 +77,7 @@ def test_questions_fill_nso_and_the_sections_asked_for(tmp_path):
          "y", "", "gpt-x", "",                # LLM: URL and temperature kept
          "y", "b", "C0123ABCD",               # Slack through a bot
          "n", "n",                            # no email, no Pushgateway
+         "",                                  # saved scans: keep them all
          ""],                                 # run the connection check: yes
         list(HIDDEN))
     checks = []
@@ -103,7 +104,7 @@ def test_enter_everywhere_keeps_every_value(tmp_path):
     configured = EXAMPLE.replace("NSO_ADDRESS=0.0.0.0", "NSO_ADDRESS=nso.example.org").replace(
         "NSO_PASSWORD=", "NSO_PASSWORD=" + HIDDEN[0]).replace("FABRIC_AI_API_KEY=", "FABRIC_AI_API_KEY=" + HIDDEN[1])
     env = _env(tmp_path, configured)
-    ask, ask_secret, shown = _scripted(["", "", "", "", "", "", "", "", "n", "n", "n", "n"], ["", ""])
+    ask, ask_secret, shown = _scripted(["", "", "", "", "", "", "", "", "n", "n", "n", "n", ""], ["", ""])
 
     assert configure(env, ask=ask, ask_secret=ask_secret, say=lambda *a: None, interactive=True,
                      run_check=None) == 0
@@ -115,7 +116,7 @@ def test_skipping_certificate_verification_sets_nso_verify_0(tmp_path):
     from agent.configure import configure
 
     env = _env(tmp_path)
-    ask, ask_secret, shown = _scripted(["nso.example.org", "", "y", "n", "n", "n", "n"], [HIDDEN[0]])
+    ask, ask_secret, shown = _scripted(["nso.example.org", "", "y", "n", "n", "n", "n", ""], [HIDDEN[0]])
 
     assert configure(env, ask=ask, ask_secret=ask_secret, say=lambda *a: None, interactive=True,
                      run_check=None) == 0
@@ -129,12 +130,12 @@ def test_verification_left_off_by_enter_and_turned_back_on_by_n(tmp_path):
     env = _env(tmp_path, EXAMPLE.replace("NSO_PASSWORD=", "NSO_PASSWORD=" + HIDDEN[0] + "\nNSO_VERIFY=0"))
     run = dict(say=lambda *a: None, interactive=True, run_check=None)
 
-    ask, ask_secret, shown = _scripted(["nso.example.org", "", "", "n", "n", "n", "n"], [""])
+    ask, ask_secret, shown = _scripted(["nso.example.org", "", "", "n", "n", "n", "n", ""], [""])
     configure(env, ask=ask, ask_secret=ask_secret, **run)
     assert dotenv_values(env)["NSO_VERIFY"] == "0"
     assert any("verification" in prompt and "[Y/n]" in prompt for prompt in shown)
 
-    ask, ask_secret, shown = _scripted(["", "", "n", "/etc/ca.pem", "n", "n", "n", "n"], [""])
+    ask, ask_secret, shown = _scripted(["", "", "n", "/etc/ca.pem", "n", "n", "n", "n", ""], [""])
     configure(env, ask=ask, ask_secret=ask_secret, **run)
     values = dotenv_values(env)
     assert (values["NSO_VERIFY"], values["NSO_CA_BUNDLE"]) == ("1", "/etc/ca.pem")
@@ -148,11 +149,52 @@ def test_a_pushgateway_answer_says_how_to_start_the_stack(tmp_path):
     (tmp_path / "deploy" / "monitoring").mkdir(parents=True)
     (tmp_path / "deploy" / "monitoring" / "README.md").write_text("")
     said = []
-    ask, ask_secret, _ = _scripted(["", "", "", "", "n", "n", "n", "y", ""], [""])
+    ask, ask_secret, _ = _scripted(["", "", "", "", "n", "n", "n", "y", "", ""], [""])
 
     configure(_env(tmp_path, configured), ask=ask, ask_secret=ask_secret, say=said.append,
               interactive=True, run_check=None)
     assert any("deploy/monitoring/README.md" in line and "docker compose up -d" in line for line in said)
+
+
+def _nso_set(tmp_path):
+    return _env(tmp_path, EXAMPLE.replace("NSO_ADDRESS=0.0.0.0", "NSO_ADDRESS=nso.example.org").replace(
+        "NSO_PASSWORD=", "NSO_PASSWORD=" + HIDDEN[0]))
+
+
+# NSO kept as it is; no LLM, Slack, email or Pushgateway. The saved-scans question comes next.
+SECTIONS = ["", "", "", "", "n", "n", "n", "n"]
+
+
+def test_saved_scans_can_be_kept_for_a_number_of_days(tmp_path):
+    from agent.configure import configure
+
+    env = _nso_set(tmp_path)
+    run = dict(say=lambda *a: None, interactive=True, run_check=None)
+
+    ask, ask_secret, shown = _scripted(SECTIONS + ["y", "a week", "45"], [""])
+    configure(env, ask=ask, ask_secret=ask_secret, **run)
+    assert dotenv_values(env)["RUNS_KEEP_DAYS"] == "45"
+    assert any("24 MB" in prompt for prompt in shown)
+    assert sum("Days to keep" in prompt for prompt in shown) == 2      # asked again after a non-number
+
+    ask, ask_secret, shown = _scripted(SECTIONS + ["", ""], [""])      # Enter keeps it on, at 45
+    configure(env, ask=ask, ask_secret=ask_secret, **run)
+    assert dotenv_values(env)["RUNS_KEEP_DAYS"] == "45"
+    assert any("Days to keep" in prompt and "[45]" in prompt for prompt in shown)
+
+    ask, ask_secret, _ = _scripted(SECTIONS + ["n"], [""])             # turned off: all are kept again
+    configure(env, ask=ask, ask_secret=ask_secret, **run)
+    assert dotenv_values(env)["RUNS_KEEP_DAYS"] == "0"
+
+
+def test_turning_saved_scan_removal_on_offers_30_days(tmp_path):
+    from agent.configure import configure
+
+    env = _nso_set(tmp_path)
+    ask, ask_secret, _ = _scripted(SECTIONS + ["y", ""], [""])
+
+    configure(env, ask=ask, ask_secret=ask_secret, say=lambda *a: None, interactive=True, run_check=None)
+    assert dotenv_values(env)["RUNS_KEEP_DAYS"] == "30"
 
 
 def test_without_a_terminal_it_only_reports_what_is_missing(tmp_path):

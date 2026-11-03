@@ -423,21 +423,32 @@ def _adjacency_change_times(case: dict[str, Any]) -> dict[str, str]:
     return found
 
 
+def adjacency_change_outcomes(older: dict[str, Any], newer: dict[str, Any]) -> dict[str, bool]:
+    """IS-IS adjacency id -> True when both runs read it up and it last changed state after the older
+    run began, False when both read it up and it changed before.
+
+    Adjacencies not up in both runs, or with no change time read, are left out; so is everything
+    when the older run's start is unknown.
+    """
+    began = _run_start(older)
+    before, now = _routing_edges(older, "isis"), _routing_edges(newer, "isis")
+    if began is None or not before or not now:
+        return {}
+    up = lambda state: state.get("status") == "up" or _seen_up_at(state) is not None
+    changed = _adjacency_change_times(newer)
+    return {edge_id: datetime.fromisoformat(changed[edge_id]) > began
+            for edge_id, state in now.items() if edge_id in changed and up(state) and up(before.get(edge_id) or {})}
+
+
 def _adjacencies_changed_between(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[str, str]]:
     """IS-IS adjacencies both runs read up that last changed state after the older run began.
 
     Up when the older run read it, so a later change means it went down and
     came back since, unless the change fell in the minutes before that read.
     """
-    began = _run_start(older)
-    before, now = _routing_edges(older, "isis"), _routing_edges(newer, "isis")
-    if began is None or not before or not now:
-        return []
-    up = lambda state: state.get("status") == "up" or _seen_up_at(state) is not None
-    return [{"protocol": "isis", "edge_id": edge_id, "changed_at": changed}
-            for edge_id, changed in sorted(_adjacency_change_times(newer).items())
-            if up(now.get(edge_id) or {}) and up(before.get(edge_id) or {})
-            and datetime.fromisoformat(changed) > began]
+    changed = _adjacency_change_times(newer)
+    return [{"protocol": "isis", "edge_id": edge_id, "changed_at": changed[edge_id]}
+            for edge_id, moved in sorted(adjacency_change_outcomes(older, newer).items()) if moved]
 
 
 def _lanes(case: dict[str, Any]) -> tuple[dict[str, tuple[str, str, Any, Any]], set[tuple[str, str]]]:
@@ -567,8 +578,21 @@ def _cleared_line(row: dict[str, str]) -> str:
             f"(was {row['was']} in run `{row['last_observed_run_id']}`)")
 
 
-def _adjacency_change_line(row: dict[str, str]) -> str:
-    return f"{_session_label(row)} — last changed {_utc_minute(row['changed_at'])}"
+def _adjacency_change_line(row: dict[str, str], history: dict[str, dict[str, Any]] | None = None) -> str:
+    from diagnostic_mas.item_history import change_key, clause_for
+
+    clause = clause_for(history, change_key(row["edge_id"]), "changed state")
+    return f"{_session_label(row)} — last changed {_utc_minute(row['changed_at'])}" + (f"; {clause}" if clause else "")
+
+
+def _routing_age(issue: dict[str, Any], history: dict[str, dict[str, Any]] | None) -> str | None:
+    """How long a routing fault has been seen, from the carried record; None for anything else."""
+    from diagnostic_mas.item_history import ROUTING_FAULT_CODES, clause_for, routing_key, routing_lead
+
+    code, edge = str(issue.get("code") or ""), issue.get("edge_id")
+    if code not in ROUTING_FAULT_CODES or not isinstance(edge, str) or not edge:
+        return None
+    return clause_for(history, routing_key(edge), routing_lead(code))
 
 
 def _utc_minute(stamp: str) -> str:
@@ -1361,6 +1385,7 @@ def format_changes_since_previous(
         lines.append("")
 
     failed = list(delta.get("newly_failed_services") or [])
+    history = delta.get("item_history")
     recovered_devs = list(delta.get("recovered_devices") or [])
     missing = list(delta.get("newly_missing_evidence") or [])
     persistent = list(delta.get("persistent") or [])
@@ -1445,7 +1470,7 @@ def format_changes_since_previous(
     changed = list(delta.get("adjacencies_changed_between_scans") or [])
     if changed:
         lines.append("**IS-IS adjacencies up in both scans, last changed after the previous scan began:**")
-        lines.extend(f"- {_adjacency_change_line(row)}" for row in changed[:persistent_limit])
+        lines.extend(f"- {_adjacency_change_line(row, history)}" for row in changed[:persistent_limit])
         extra = len(changed) - persistent_limit
         if extra > 0:
             lines.append(f"- …and {extra} more")
@@ -1455,7 +1480,7 @@ def format_changes_since_previous(
         from diagnostic_mas.port_counters import gain_lines
 
         # A lead on a link that still works; no service status rests on it. One line per link.
-        links = gain_lines(gaining)
+        links = gain_lines(gaining, history)
         lines.append("**Links gaining errors while up:**")
         lines.extend(f"- {line}" for line in links[:persistent_limit])
         extra = len(links) - persistent_limit
@@ -1521,7 +1546,8 @@ def format_changes_since_previous(
         lines.append("- None")
     else:
         for issue in persistent[:persistent_limit]:
-            lines.append(f"- {_issue_line(issue)}")
+            age = _routing_age(issue, history)
+            lines.append(f"- {_issue_line(issue)}" + (f"; {age}" if age else ""))
         extra = len(persistent) - persistent_limit
         if extra > 0:
             lines.append(
@@ -1540,6 +1566,7 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
     """Small delta payload for the summary LLM (no full issue dumps)."""
     if delta is None:
         return None
+    history = delta.get("item_history")
 
     def _trim_issues(items: list[Any], limit: int = 12) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -1554,6 +1581,7 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
                     "devices": issue.get("devices"),
                     "message": str(issue.get("message") or "")[:160],
                     "status": issue.get("status"),
+                    **({"recurrence": age} if (age := _routing_age(issue, history)) else {}),
                 }
             )
         return out
@@ -1563,7 +1591,7 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
             for row in delta.get("routing_sessions_lost") or []]
     regained = [_routing_session_line(row).replace("`", "")
                 for row in delta.get("routing_sessions_regained") or []]
-    changed = [_adjacency_change_line(row).replace("`", "")
+    changed = [_adjacency_change_line(row, history).replace("`", "")
                for row in delta.get("adjacencies_changed_between_scans") or []]
     interfaces = list(delta.get("interfaces_lost") or [])
     cleared = [f"{row['service']} (was {row['was']})" if row.get("was") else row["service"]
@@ -1577,7 +1605,7 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
     if delta.get("links_gaining_errors"):
         from diagnostic_mas.port_counters import gain_lines
 
-        links = [line.replace("`", "") for line in gain_lines(list(delta["links_gaining_errors"]))]
+        links = [line.replace("`", "") for line in gain_lines(list(delta["links_gaining_errors"]), history)]
     return {
         **({"service_faults_cleared": {
             "count": len(cleared),

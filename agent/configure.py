@@ -97,6 +97,12 @@ def _ask_fields(fields, values, updates, ask, ask_secret) -> None:
             updates[field.key] = field.default
 
 
+def _keep_days(values: Mapping[str, str]) -> int:
+    """RUNS_KEEP_DAYS as set; 0 (keep all) when unset or not a number."""
+    raw = (values.get("RUNS_KEEP_DAYS") or "").strip()
+    return int(raw) if raw.isdigit() else 0
+
+
 def _yes(ask, question: str, default: bool) -> bool:
     answer = ask(f"{question} [{'Y/n' if default else 'y/N'}] ").strip().lower()
     return default if not answer else answer.startswith("y")
@@ -151,6 +157,19 @@ def configure(env_path: Path, *, ask: Callable[[str], str] | None, ask_secret: C
         if (env_path.parent / "deploy" / "monitoring" / "README.md").exists():
             say("  This only sends the counts. Start Pushgateway, Prometheus and Grafana yourself: "
                 "docker compose up -d in deploy/monitoring, as in deploy/monitoring/README.md.")
+    kept = _keep_days(values)
+    if _yes(ask, "Remove saved scans after a number of days? (each is about 24 MB; otherwise all are kept)",
+            kept > 0):
+        offered = str(kept) if kept > 0 else "30"
+        while True:
+            days = ask(f"  Days to keep a saved scan (report links into runs/ stop working after that) "
+                       f"[{offered}]: ").strip() or offered
+            if days.isdigit() and int(days) > 0:
+                break
+            say("  Enter a whole number of days, 1 or more.")
+        updates["RUNS_KEEP_DAYS"] = days
+    elif kept > 0:
+        updates["RUNS_KEEP_DAYS"] = "0"
 
     changed = {key: value for key, value in updates.items() if values.get(key) != value}
     if changed:

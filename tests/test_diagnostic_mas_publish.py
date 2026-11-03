@@ -25,7 +25,6 @@ def _settings(*, state_dir: Path, dry_run: bool = True) -> Settings:
         dry_run=dry_run,
         ignore_service_types=frozenset(),
         max_service_types=10,
-        report_sections=("executive", "devices"),
         slack_webhook_url="https://hooks.example/x",
         smtp_host=None,
         smtp_port=587,
@@ -192,3 +191,131 @@ def test_an_already_masked_report_renders_intact_in_html(tmp_path: Path):
 
     html = (out.parent / "report.html").read_text(encoding="utf-8")
     assert "https://xxx.x.x.x46:443/restconf" in html and NSO not in html
+
+
+@pytest.mark.asyncio
+async def test_run_saves_how_long_a_routing_fault_has_been_seen(tmp_path: Path):
+    import json
+    from contextlib import ExitStack
+
+    from diagnostic_mas import run as run_mod
+
+    edge = "bgp:10.0.0.1:10.0.1.1:renc-data-sw:lbnl-data-sw"
+
+    async def spines(_client, _settings, case, *_args, **_kwargs):
+        case.issues.append({"code": "configured_no_session", "edge_id": edge, "layer": "routing", "status": "open"})
+
+    args = argparse.Namespace(
+        skip_llm=True, dry_run=False, publish=True, isis_only=False, bgp_only=False, device_only=False,
+        service_only=False, skip_service=True, devices="", service_type="", service_id="",
+        max_deep_checks=0, max_handoffs=0)
+
+    class _CM:
+        async def __aenter__(self):
+            return MagicMock()
+
+        async def __aexit__(self, *a):
+            return False
+
+    with ExitStack() as stack:
+        for name, value in (("load_settings", MagicMock(return_value=_settings(state_dir=tmp_path))),
+                            ("prepare_fabric_llm", MagicMock(return_value=(None, True))),
+                            ("mcp_session", MagicMock(return_value=_CM())),
+                            ("call_mcp", AsyncMock(return_value={"status": "success", "data": {"device": []}})),
+                            ("parse_device_names", MagicMock(return_value=["renc-data-sw"])),
+                            ("run_mandatory_spines", AsyncMock(side_effect=spines)),
+                            ("render_report", MagicMock(return_value="# report\n")),
+                            ("publish_all", MagicMock(return_value=[]))):
+            stack.enter_context(patch.object(run_mod, name, new=value))
+        assert await run_mod._run(args) == 0
+
+    saved = json.loads(next((tmp_path / "diagnostic_mas").rglob("case.json")).read_text(encoding="utf-8"))
+    assert saved["item_history"][f"routing|{edge}"]["seen"] == 1
+
+
+def _saved_run(runs: Path, name: str, *extra: str) -> Path:
+    folder = runs / name
+    folder.mkdir(parents=True)
+    for file in ("case.json", "report.md", "report.html", *extra):
+        (folder / file).write_text("x", encoding="utf-8")
+    return folder
+
+
+def test_old_saved_scans_are_removed_and_the_rest_kept(tmp_path: Path, capsys):
+    import json
+
+    from diagnostic_mas.state_paths import prune_saved_runs
+
+    runs = tmp_path / "runs"
+    old = _saved_run(runs, "20261001T000000Z")
+    noted = _saved_run(runs, "20261002T000000Z", "notes.txt")        # something the user added
+    latest = _saved_run(runs, "20261003T000000Z")                    # the next scan's comparison
+    renamed = _saved_run(runs, "20261004T000000Z-keep")              # renamed to keep
+    recent = _saved_run(runs, "20261025T000000Z")
+    now = _saved_run(runs, "20261103T041450Z")
+    (runs / "20261005T000000Z").symlink_to(old)
+    (tmp_path / "latest.json").write_text(json.dumps({"case_path": str(latest / "case.json")}), encoding="utf-8")
+
+    removed = prune_saved_runs(tmp_path, run_id="20261103T041450Z", keep_days=30)
+
+    assert removed == 2
+    assert not old.exists()
+    assert sorted(p.name for p in noted.iterdir()) == ["notes.txt"]
+    for kept in (latest, renamed, recent, now):
+        assert (kept / "case.json").is_file()
+    assert (runs / "20261005T000000Z").is_symlink()
+    assert "Removed 2 saved scans older than 30 days" in capsys.readouterr().err
+
+
+def test_keep_days_zero_removes_nothing_and_a_failure_does_not_stop_the_scan(tmp_path: Path, monkeypatch, capsys):
+    from diagnostic_mas.state_paths import prune_saved_runs
+
+    runs = tmp_path / "runs"
+    old = _saved_run(runs, "20261001T000000Z")
+    assert prune_saved_runs(tmp_path, run_id="20261103T041450Z", keep_days=0) == 0
+    assert (old / "case.json").is_file()
+
+    def refuse(self, *args, **kwargs):
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(Path, "unlink", refuse)
+    assert prune_saved_runs(tmp_path, run_id="20261103T041450Z", keep_days=30) == 0
+    assert "could not remove" in capsys.readouterr().err
+    assert prune_saved_runs(tmp_path / "missing", run_id="20261103T041450Z", keep_days=30) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_saved_scan_prunes_old_scans_when_runs_keep_days_is_set(tmp_path: Path):
+    from contextlib import ExitStack
+    from dataclasses import replace
+
+    from diagnostic_mas import run as run_mod
+
+    old = _saved_run(tmp_path / "diagnostic_mas" / "runs", "20200101T000000Z")
+    args = argparse.Namespace(
+        skip_llm=True, dry_run=False, publish=True, isis_only=False, bgp_only=False, device_only=False,
+        service_only=False, skip_service=True, devices="", service_type="", service_id="",
+        max_deep_checks=0, max_handoffs=0)
+
+    class _CM:
+        async def __aenter__(self):
+            return MagicMock()
+
+        async def __aexit__(self, *a):
+            return False
+
+    settings = replace(_settings(state_dir=tmp_path), runs_keep_days=30)
+    with ExitStack() as stack:
+        for name, value in (("load_settings", MagicMock(return_value=settings)),
+                            ("prepare_fabric_llm", MagicMock(return_value=(None, True))),
+                            ("mcp_session", MagicMock(return_value=_CM())),
+                            ("call_mcp", AsyncMock(return_value={"status": "success", "data": {"device": []}})),
+                            ("parse_device_names", MagicMock(return_value=["renc-data-sw"])),
+                            ("run_mandatory_spines", AsyncMock()),
+                            ("render_report", MagicMock(return_value="# report\n")),
+                            ("publish_all", MagicMock(return_value=[]))):
+            stack.enter_context(patch.object(run_mod, name, new=value))
+        assert await run_mod._run(args) == 0
+
+    assert not old.exists()
+    assert len(list((tmp_path / "diagnostic_mas" / "runs").iterdir())) == 1

@@ -1,4 +1,4 @@
-"""Device Health table and per-device detail for diagnostic_mas reports."""
+"""Topology, service and per-device detail views of a diagnostic_mas case, for its reports."""
 
 from __future__ import annotations
 
@@ -7,10 +7,6 @@ from typing import Any
 from diagnostic_mas.case import CaseFile
 from nso_facts.topology.physical import build_operational_physical_layer
 from nso_report.devices import device_detail_lines as _device_detail_lines
-from nso_report.executive import (
-    build_device_health_rows,
-    format_device_health_table,
-)
 
 
 def _spine_payload(case: CaseFile, role: str) -> dict[str, Any]:
@@ -146,42 +142,6 @@ def services_from_case(case: CaseFile) -> dict[str, Any]:
     extra = svc.get("extra") if isinstance(svc.get("extra"), dict) else {}
     services = extra.get("services")
     return services if isinstance(services, dict) else {}
-
-
-def format_device_health_section(case: CaseFile) -> list[str]:
-    """Lines for ## Device Health (same columns as nso-summary-run)."""
-    topology = topology_from_case(case)
-    fleet_sync, hardware_health, _system = fleet_maps_from_case(case)
-    rows = build_device_health_rows(
-        topology, fleet_sync, hardware_health=hardware_health
-    )
-    focus = list(case.focus_devices or []) or list(case.device_names or [])
-    # Seed rows for known/focus devices with no topology/hw yet
-    seen = {str(r.get("device")) for r in rows}
-    for name in focus:
-        if name in seen:
-            continue
-        rows.append(
-            {
-                "device": name,
-                "sync": "—",
-                "interfaces": "—",
-                "hardware": "Unavailable",
-                "bgp": "—",
-                "isis": "—",
-                "notes": "",
-            }
-        )
-        seen.add(name)
-    if case.focus_devices:
-        allow = set(case.focus_devices)
-        rows = [r for r in rows if str(r.get("device")) in allow]
-    rows.sort(key=lambda r: str(r.get("device") or ""))
-    if not rows and not hardware_health and not case.device_names:
-        return ["(none — run service spine for sync/HW; ISIS/BGP for peers)"]
-    table = format_device_health_table(rows)
-    # format_device_health_table indents with two spaces; strip for our report
-    return [line[2:] if line.startswith("  ") else line for line in table.splitlines()]
 
 
 def device_detail_lines(

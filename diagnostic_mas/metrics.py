@@ -97,7 +97,6 @@ def metrics_snapshot_from_case(
         "counts": counts,
         "system_health": system_health,
         "hardware_health": hardware_health,
-        "delta": None,
         "service_status": service_status,
         "service_faults": service_faults,
         "devices_not_covered": len(_collection_gap_devices(case)),

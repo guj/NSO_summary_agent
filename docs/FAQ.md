@@ -330,7 +330,9 @@ on such a device is still reported Down.
 **Changes since previous run** also lists "Links gaining errors while up": ports under a service or
 an IS-IS adjacency that are up and whose CRC, input-error or output-error count grew since the
 previous scan, or that went down and came back. It is an early sign of a failing optic or fibre,
-reported as a lead; it does not change any service's status.
+reported as a lead; it does not change any service's status. A link, IS-IS change or routing
+fault seen in earlier scans also says since when and in how many of the scans that read it, so a
+chronic problem no longer looks new each time.
 
 **Changes since previous run** lists a service under "Status changed while the fixed checks read
 the same" when it was investigated in both scans, its basic check read exactly the same, and its
