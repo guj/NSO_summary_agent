@@ -169,7 +169,6 @@ def format_device_health_section(case: CaseFile) -> list[str]:
                 "hardware": "Unavailable",
                 "bgp": "—",
                 "isis": "—",
-                "routes": "—",
                 "notes": "",
             }
         )

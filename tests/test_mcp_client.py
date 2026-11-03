@@ -589,6 +589,21 @@ def test_nso_failing_to_connect_is_not_proof_the_device_is_unreachable():
     assert "live unreachable" not in prose
 
 
+def test_a_refused_nso_login_to_the_device_also_points_at_nsos_connection():
+    from nso_facts.mcp_client import format_live_mcp_quarantine_prose, live_mcp_failure_kind
+
+    # NSO reached the device but the device offered no login method: no timeout, still NSO's own connection.
+    reason = ("check_isis_adjacencies: RESTCONF 500: Failed to connect to device star-data-sw: connection refused: "
+              "NEDCOM CONNECT: authenticate: Socket closed, server allowed: [ ] in new state")
+    prose = format_live_mcp_quarantine_prose("star-data-sw", reason)
+
+    assert live_mcp_failure_kind(reason) == "other"
+    assert prose.startswith("star-data-sw: live query failed this run (check_isis_adjacencies:")
+    assert "NSO itself could not connect to the device" in prose
+    assert "does not prove the device is down" in prose
+    assert "check NSO's management connection to it" in prose
+
+
 @pytest.mark.parametrize(
     ("reason", "operation"),
     [

@@ -237,6 +237,20 @@ def test_fault_found_this_scan_is_reported_as_new_and_not_also_as_still_open():
     assert digest_changes(None, None, open_fault_groups(case, rows))[2] == "**Open service faults:** 8 services, 4 causes"
 
 
+def test_summary_gets_the_open_faults_grouped_as_the_report_lists_them():
+    from diagnostic_mas.case_delta import compact_delta_for_llm
+
+    case, rows = _open_case()
+    open_faults = compact_delta_for_llm({"open_faults": open_fault_groups(case, rows)})["open_faults"]
+
+    assert open_faults["count"] == 4 and open_faults["services"] == 8
+    assert open_faults["lines"][:2] == [
+        f"{MICH} port {PORT}: 4 l2bridge Down. First seen 5 Oct or earlier. Links down 8 to 19 weeks; 1 never came up.",
+        "rutg-data-sw cut off: 2 services Down. First seen 6 Oct.",
+    ]
+    assert "open_faults" not in compact_delta_for_llm({"open_faults": []})
+
+
 ALSO = "Not operational (source interface is also a destination)."
 SAME = "Not operational (source same as destination)."
 
@@ -466,3 +480,14 @@ async def test_runner_sends_the_change_lines_in_the_notification(tmp_path):
     second = await scan()
     assert "**Since the previous scan** (`" in second and "- New service faults: none" in second
     assert second.index("**Since the previous scan**") < second.index("Full findings and evidence")
+
+
+def test_digest_lists_sessions_receiving_far_fewer_prefixes():
+    delta = {"sessions_receiving_fewer_prefixes": [
+        {"device": "wash-data-sw", "peer": "star-data-sw", "before": 515490, "now": 0, "up_down": "34w3d",
+         "reset": False}]}
+
+    lines = digest_changes(delta, R2, [])
+
+    at = lines.index("**BGP sessions receiving far fewer prefixes:** 1")
+    assert lines[at + 1] == "- `wash-data-sw` from `star-data-sw`: 515,490 → 0 prefixes (−100%); session up 34w3d"

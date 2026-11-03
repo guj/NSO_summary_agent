@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent.report_devices import format_devices_section
-from nso_report.delta_format import delta_has_changes, format_delta_section
 
 _LEGACY_SECTIONS: tuple[str, ...] = (
     "problems",

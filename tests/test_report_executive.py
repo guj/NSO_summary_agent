@@ -1,5 +1,4 @@
 from agent.report_executive import (
-    abbreviate_route_total,
     build_action_context,
     build_device_health_rows,
     device_interfaces_label,
@@ -8,12 +7,6 @@ from agent.report_executive import (
     mismatch_phrasing_examples,
     replace_markers_for_plain,
 )
-
-
-def test_abbreviate_routes():
-    assert abbreviate_route_total(446595).endswith("k")
-    assert abbreviate_route_total(500) == "500"
-    assert abbreviate_route_total(None) == "—"
 
 
 def test_service_summary_lines():
@@ -88,7 +81,6 @@ def test_build_health_rows_and_executive_assemble():
                     "edges": [{"id": "bgp:1", "state": {"status": "up"}}]
                 },
             },
-            "route_summary": {"sw1": {"total": 1000, "sources": {}}},
         },
     }
     rows = build_device_health_rows(topology)
@@ -194,7 +186,6 @@ def test_device_health_sync_column():
                 "underlay": {"edges": []},
                 "routing": {"edges": []},
             },
-            "route_summary": {"sw1": {"total": 10, "sources": {}}},
         },
     }
     fleet = {
@@ -245,7 +236,6 @@ def test_device_health_hardware_column():
                 "underlay": {"edges": []},
                 "routing": {"edges": []},
             },
-            "route_summary": {"sw1": {"total": 10, "sources": {}}},
         },
     }
     hw = {

@@ -98,6 +98,17 @@ def _device_details(case: dict | None) -> dict[str, str]:
                 f"  Suggested check: {finding.get('fix_suggestion') or 'none given'}",
             ])
             details[str(finding.get("device"))].extend(_technician_lines(finding, view.evidence))
+    from diagnostic_mas.port_investigation import earlier_when
+
+    for finding in (case.get("earlier_port_findings") or {}).values():
+        details.setdefault(str(finding.get("device")), []).extend([
+            "", f"Port {finding.get('port')} investigation "
+                f"{earlier_when(finding).replace('on ', 'of ', 1)}, not rechecked this scan",
+            f"  Observed: {finding.get('observed')}",
+            f"  Cause: {finding.get('cause')}",
+            f"  Suggested check: {finding.get('fix_suggestion') or 'none given'}",
+        ])
+        details[str(finding.get("device"))].extend(_technician_lines(finding, view.evidence))
     return {
         name: '<details class="device-detail"><summary>Interfaces and hardware</summary><pre>'
         + html.escape("\n".join(lines))

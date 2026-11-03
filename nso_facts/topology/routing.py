@@ -10,8 +10,6 @@ from nso_facts.mcp_client import call_mcp, unwrap_mcp_data
 from nso_facts.topology.graph import (
     bgp_edge_id,
     ordered_bgp_endpoints,
-    summarize_operational_routing,
-    summarize_static_routing,
 )
 
 _BGP_CONFIG_SUFFIXES = (
@@ -55,6 +53,8 @@ class BgpSessionObservation:
     remote_as: int | None = None
     local_as: int | None = None
     up_down: str | None = None
+    # Prefixes received, from the St/PfxRcd column of an Established row; None otherwise.
+    prefixes: int | None = None
 
 
 async def collect_static_routing(
@@ -63,7 +63,7 @@ async def collect_static_routing(
     *,
     seed_from_live: bool = True,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int]]:
-    """Build static BGP session edges for topology.static.json.
+    """Build this scan's static BGP session edges.
 
     BGP intent is read from ``get_device_config`` (one call per device).
     ``explore_nso_path`` is fallback only — shallow depth often returns
@@ -224,25 +224,31 @@ _FAILED_BGP_STATES = frozenset({"idle", "active", "connect", "opensent", "openco
 def _unpaired_session_state(edge, observations):
     """Keep exact endpoint observations when reciprocal pairing is incomplete."""
     local, remote = edge.get("local") or {}, edge.get("remote") or {}
-    def observed(endpoint, peer):
-        rows = {_normalize_bgp_state(o.state) for o in observations
-                if o.device == endpoint.get("device")
-                and o.neighbor_address == peer.get("address")}
-        return next(iter(rows)) if len(rows) == 1 else "unknown"
-    left, right = observed(local, remote), observed(remote, local)
+    def rows(endpoint, peer):
+        return [o for o in observations
+                if o.device == endpoint.get("device") and o.neighbor_address == peer.get("address")]
+    def observed(found):
+        states = {_normalize_bgp_state(o.state) for o in found}
+        return next(iter(states)) if len(states) == 1 else "unknown"
+    near, far = rows(local, remote), rows(remote, local)
+    left, right = observed(near), observed(far)
     failed = bool({left, right} & _FAILED_BGP_STATES)
     return {"local": left, "remote": right,
             "status": "down" if failed else "up" if left == right == "established" else "unknown",
             "detail": ("Observed non-established BGP session; missing endpoint evidence remains unverified"
-                       if failed else "Reciprocal verification incomplete; missing observation does not prove session failure")}
+                       if failed else "Reciprocal verification incomplete; missing observation does not prove session failure"),
+            **_session_readings(near[0] if len(near) == 1 else None, far[0] if len(far) == 1 else None)}
 
 
-def build_static_routing_layer(edges: list[dict[str, Any]]) -> dict[str, Any]:
-    return {"edges": edges, "summary": summarize_static_routing(edges)}
-
-
-def build_operational_routing_layer(edges: list[dict[str, Any]]) -> dict[str, Any]:
-    return {"edges": edges, "summary": summarize_operational_routing(edges)}
+def _session_readings(local: BgpSessionObservation | None,
+                      remote: BgpSessionObservation | None) -> dict[str, Any]:
+    """Prefixes received and Up/Down at each end, as its own table printed them; left out when neither has one."""
+    out: dict[str, Any] = {}
+    for key in ("prefixes", "up_down"):
+        values = {side: getattr(obs, key, None) for side, obs in (("local", local), ("remote", remote))}
+        if any(value is not None for value in values.values()):
+            out[key] = values
+    return out
 
 
 def _fabric_as_numbers(
@@ -286,7 +292,7 @@ def unmatched_bgp_neighbors(
     return [
         {"device": obs.device, "address": obs.neighbor_address, "remote_as": obs.remote_as,
          "state": _normalize_bgp_state(obs.state), "up_down": obs.up_down,
-         "outside": _is_outside_peer(obs, fabric_as)}
+         "outside": _is_outside_peer(obs, fabric_as), "prefixes": obs.prefixes}
         for obs in observations
         if resolve_neighbor_device(obs.neighbor_address, neighbor_configs, router_ids) is None
     ]
@@ -401,8 +407,10 @@ def pair_bgp_observations(
         if any(existing["id"] == edge_id for existing in edges):
             continue
 
-        state_a = _normalize_bgp_state(obs_a.state)
-        state_b = _normalize_bgp_state(obs_b.state)
+        # Each end's own reading, filed under that end's device: ordering may put obs_a's device second.
+        read = {obs_a.device: obs_a, remote_device: obs_b}
+        state_a = _normalize_bgp_state(read[dev_a].state)
+        state_b = _normalize_bgp_state(read[dev_b].state)
         status = _bidirectional_status(state_a, state_b)
         meta = _session_meta(neighbor_configs, obs_a.device, obs_a.neighbor_address)
         edges.append(
@@ -416,6 +424,7 @@ def pair_bgp_observations(
                     "local": state_a,
                     "remote": state_b,
                     "status": status,
+                    **_session_readings(read[dev_a], read[dev_b]),
                 },
             }
         )
@@ -803,6 +812,7 @@ def parse_bgp_summary_text(
             remote_as=int(columns[1]) if whole else None,
             local_as=local_as,
             up_down=columns[7] if whole else None,
+            prefixes=int(columns[8]) if whole and columns[8].isdigit() else None,
         ))
     return observations
 

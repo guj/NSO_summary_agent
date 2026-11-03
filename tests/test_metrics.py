@@ -40,7 +40,6 @@ def _settings(**overrides) -> Settings:
         "prometheus_job": "nso-summary",
         "prometheus_instance": "laptop",
         "prompts_dir": Path("/tmp"),
-        "topology_force_update": False,
         "interface_equivalences_file": None,
         "iface_troubleshoot_max_tool_rounds": 10,
         "iface_troubleshoot_disable": False,

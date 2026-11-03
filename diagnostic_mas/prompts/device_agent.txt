@@ -39,6 +39,8 @@ Conclude with conclude_investigation:
   link (both directions when the far end was read), adjacency, sessions.
   When the Issue names no far end, say the far end was not read. A link
   shut down by configuration is not a link fault.
+- headline: the cause in one sentence of at most 200 characters, without
+  the readings; the report shows it where it has room for one line.
 - confidence: high only when a link that should carry an adjacency was read.
 - fix_suggestion: physical checks for a person to carry out, or the reading
   still needed. Never a configuration change; never imply a fix was applied

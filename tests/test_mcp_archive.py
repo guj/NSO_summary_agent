@@ -78,3 +78,13 @@ def test_an_archive_that_cannot_be_removed_does_not_stop_the_scan(tmp_path, caps
         record_mcp_result('exec_show', {}, source='wire', response='saved')
     assert old.exists() and json.loads(path.read_text())['response'] == 'saved'
     assert f'could not remove {old.name}' in capsys.readouterr().err
+
+
+def test_an_archive_named_with_an_impossible_date_is_kept_and_does_not_stop_the_scan(tmp_path):
+    odd = _archive(tmp_path, '20261399T000000Z-8n6m599c.jsonl')
+    old = _archive(tmp_path, '20261001T000000Z-abcd1234.jsonl')
+    with archive_mcp_results(tmp_path, '20261020T120000Z', keep_days=7) as path:
+        record_mcp_result('exec_show', {}, source='wire', response='saved')
+    # Its age cannot be read, so it is not removed; the older archive still is.
+    assert odd.exists() and not old.exists()
+    assert json.loads(path.read_text())['response'] == 'saved'

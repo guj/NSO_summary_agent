@@ -65,7 +65,7 @@ Neighbor        Spk    AS MsgRcvd MsgSent   TblVer  InQ OutQ  Up/Down  St/PfxRcd
 """
 
 
-def _loop(calls: list[str], *, conclude: bool = True, sessions: str | None = "Idle"):
+def _loop(calls: list[str], *, conclude: bool = True, sessions: str | None = "Idle", headline: str | None = None):
     """``sessions``: state of the first neighbour in the summary it reads; None reads no summary."""
     async def fake(client, settings, case, *, device_names, focus_issue, session,
                    openai_client=None, system_prompt=None, account="drill"):
@@ -81,7 +81,7 @@ def _loop(calls: list[str], *, conclude: bool = True, sessions: str | None = "Id
             record_drill_finding(case, {
                 "observed": "uplink Hu0/0/0/23 down/down", "cause": "the only uplink is down",
                 "fix_suggestion": "check the uplink fibre", "fix_requires_human_approval": True,
-                "confidence": "high"}, session=session)
+                "confidence": "high"} | ({"headline": headline} if headline else {}), session=session)
         return 4, conclude
     return fake
 
@@ -227,3 +227,18 @@ async def test_report_shows_the_device_finding_and_counts_it_with_the_port_inves
     assert "2 services are explained by 1 device investigation" in format_dataplane_dig_line(case)
     details = _device_details(case_to_dict(case))[PE]
     assert "Cut-off investigation" in details and "uplink Hu0/0/0/23 down/down" in details
+
+
+@pytest.mark.asyncio
+async def test_device_finding_is_shown_by_its_headline_in_the_report_and_in_its_services():
+    from diagnostic_mas.operator_report import format_devices_operator
+
+    case = _pe_case()
+    await _run(case, _loop([], headline="Its only uplink receives no light."))
+
+    block = "\n".join(format_devices_operator(case)).split(f"### {PE}\n", 1)[1].split("\n### ", 1)[0]
+    by_name = {d["subject"]["name"]: d for d in case.diagnoses}
+
+    assert ("**Cut off:** Its only uplink receives no light. "
+            "(2 services that use another device; investigated once)") in block
+    assert "The device was investigated once: Its only uplink receives no light." in by_name["two-site"]["cause"]

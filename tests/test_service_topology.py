@@ -1,5 +1,4 @@
 import html
-import json
 import re
 from types import SimpleNamespace
 from diagnostic_mas.service_topology import service_topology_data, render_service_topology

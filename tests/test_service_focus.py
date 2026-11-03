@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from diagnostic_mas.case import Budget, CaseFile, add_diagnosis, add_evidence
+from diagnostic_mas.case import Budget, CaseFile, add_evidence
 from diagnostic_mas.dataplane_verify import (
     init_service_coverage,
     select_dataplane_candidates,

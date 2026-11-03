@@ -7,6 +7,10 @@ they keep the Down from their own fixed check and are not investigated
 individually. A port investigation that does not conclude explains nothing,
 and neither does one whose own reading no longer shows the link down: the
 state may have changed since it was collected.
+
+A port an earlier scan explained keeps that finding, dated, while its down
+links and their services are the same. The ceiling goes to new ports first,
+then to the ports explained longest ago.
 """
 from __future__ import annotations
 
@@ -161,9 +165,93 @@ def _issue_message(target: dict[str, Any]) -> str:
 
 
 def port_findings(case: CaseFile) -> list[dict[str, Any]]:
-    """Recorded port investigations, in the order they ran."""
+    """This scan's port investigations in the order they ran, then the earlier findings it kept."""
     return [ev["payload"] for ev in case.evidence
-            if ev.get("kind") == SOURCE and isinstance(ev.get("payload"), dict)]
+            if ev.get("kind") == SOURCE and isinstance(ev.get("payload"), dict)
+            ] + list((getattr(case, "earlier_port_findings", None) or {}).values())
+
+
+def _port_key(finding: dict[str, Any]) -> str:
+    return f"if:{finding.get('device')}:{finding.get('port')}"
+
+
+def previous_port_findings(previous_case: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Each port's latest concluded finding from earlier scans, by ``if:device:port``.
+
+    The last published scan's own investigations, dated by its ``run_id``, over the findings it
+    kept from scans before it (``earlier_port_findings``). A port it investigated without a
+    conclusion keeps none.
+    """
+    previous_case = previous_case or {}
+    out = {str(key): dict(finding) for key, finding in (previous_case.get("earlier_port_findings") or {}).items()
+           if isinstance(finding, dict)}
+    dated = {"run_id": previous_case["run_id"]} if previous_case.get("run_id") else {}
+    for ev in previous_case.get("evidence") or []:
+        payload = ev.get("payload") if isinstance(ev, dict) and ev.get("kind") == SOURCE else None
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("concluded"):
+            out[_port_key(payload)] = {key: value for key, value in payload.items()
+                                       if key not in ("finding_evidence_id", "tools_used")} | dated
+        else:
+            out.pop(_port_key(payload), None)
+    return out
+
+
+def earlier_when(finding: dict[str, Any]) -> str:
+    """``on 31 Oct`` for a kept finding's scan; ``in an earlier scan`` when it carries no date."""
+    from diagnostic_mas.open_faults import run_day
+
+    return f"on {run_day(finding['run_id'])}" if finding.get("run_id") else "in an earlier scan"
+
+
+def _kept_finding(case: CaseFile, target: dict[str, Any]) -> dict[str, Any] | None:
+    """The earlier finding on this port, if its down links and their services are still those it explained."""
+    found = (getattr(case, "previous_port_findings", None) or {}).get(_port_key(target))
+    return found if found and found.get("links") == target["links"] else None
+
+
+def _investigation_order(case: CaseFile, targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """New ports first, as listed; then the ports an earlier scan explained, the longest ago first."""
+    new = [target for target in targets if _kept_finding(case, target) is None]
+    explained = [target for target in targets if _kept_finding(case, target) is not None]
+    return new + sorted(explained, key=lambda target: str(_kept_finding(case, target).get("run_id") or ""))
+
+
+def _read_at(finding: dict[str, Any]) -> datetime | None:
+    """When a kept finding's link ages hold: as last counted on, else its scan's start."""
+    try:
+        if finding.get("ages_as_of"):
+            return datetime.fromisoformat(str(finding["ages_as_of"]))
+        return datetime.strptime(str(finding.get("run_id") or ""), "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _moved_on(age: Any, days: int) -> Any:
+    """A device's time since a link went down, ``days`` later; ``never`` and unreadable values stay."""
+    from diagnostic_mas.open_faults import age_days
+
+    total = age_days(age)
+    if total is None or not days:
+        return age
+    years, rest = divmod(total + days, 365)
+    return (f"{years}y" if years else "") + (f"{rest // 7}w" if rest >= 7 else "") + f"{rest % 7}d"
+
+
+def _keep(case: CaseFile, target: dict[str, Any], concluded: dict[tuple[str, str], dict[str, Any]],
+          now: datetime) -> None:
+    """Keep the earlier finding on a port this scan does not investigate, its link ages counted on to now."""
+    found = _kept_finding(case, target)
+    if found is None:
+        return
+    read = _read_at(found)
+    days = max(0, (now - read).days) if read else 0
+    kept = {**found, "earlier": True, "concluded": True,
+            "link_ages": {link: _moved_on(age, days) for link, age in (found.get("link_ages") or {}).items()},
+            **({"ages_as_of": now.isoformat()} if read else {})}
+    case.earlier_port_findings[_port_key(target)] = kept
+    concluded[target["device"], target["port"]] = kept
 
 
 def _may_investigate(case: CaseFile) -> bool:
@@ -332,7 +420,8 @@ async def _investigate(
                                **confirm(_readings(case, mark))}
     if payload["concluded"]:
         finding = found["payload"]
-        payload.update({key: finding.get(key) for key in ("observed", "cause", "fix_suggestion", "confidence")},
+        payload.update({key: finding.get(key) for key in ("observed", "cause", "headline", "fix_suggestion",
+                                                          "confidence")},
                        finding_evidence_id=found.get("id"))
         set_issue_status(case, issue_id, "explained")
     add_evidence(case, {"kind": kind, "role": "port", "layer": layer, "payload": payload})
@@ -348,15 +437,15 @@ async def run_port_investigations(
     openai_client: Any | None = None,
     tool_loop: Any | None = None,
 ) -> set[str]:
-    """Investigate qualifying ports within the ceiling; return the services they explain."""
+    """Investigate qualifying ports within the ceiling; return the services they and the kept findings explain."""
     from diagnostic_mas.drill import _quarantined_device_map
 
     unavailable = _quarantined_device_map()
     concluded: dict[tuple[str, str], dict[str, Any]] = {}
-    for target in port_targets(case):
-        if not _may_investigate(case):
-            break
-        if target["device"] in unavailable:
+    now = datetime.now(timezone.utc)
+    for target in _investigation_order(case, port_targets(case)):
+        if not _may_investigate(case) or target["device"] in unavailable:
+            _keep(case, target, concluded, now)
             continue
         payload = await _investigate(
             client, settings, case, target, kind=SOURCE, code="port_down", layer="physical",
@@ -388,7 +477,9 @@ def _explain_services(case: CaseFile, concluded: dict[tuple[str, str], dict[str,
         findings = [concluded[key] for key in sorted(ports)]
         where = "; ".join(f"{link} on {device}" for device, link in links)
         causes = " ".join(
-            f"Port {f['port']} was investigated once: {brief(f.get('cause'), 240)}" for f in findings)
+            f"Port {f['port']} was investigated "
+            + (f"by LLM {earlier_when(f)}, not rechecked this scan" if f.get("earlier") else "once")
+            + f": {short_cause(f, 240)}" for f in findings)
         carries = _still_carries(record.get("basic_checks") or {})
         _record_dataplane_finding(case, record, {
             "dataplane_status": "degraded" if carries else "down",
@@ -397,7 +488,9 @@ def _explain_services(case: CaseFile, concluded: dict[tuple[str, str], dict[str,
             "observed": (
                 f"Fixed check (this run) faulted on {where}; the interface collection recorded it down. "
                 "This service was not investigated individually; the readings are in the port finding under "
-                + ", ".join(sorted({f"{f['device']} {f['port']}" for f in findings})) + "."),
+                + ", ".join(sorted({f"{f['device']} {f['port']}"
+                                    + (f" (found {earlier_when(f)})" if f.get("earlier") else "")
+                                    for f in findings})) + "."),
             "fix_suggestion": next((f["fix_suggestion"] for f in findings if f.get("fix_suggestion")), None),
             "confidence": min((str(f.get("confidence") or "medium") for f in findings),
                               key=("low", "medium", "high").index),
@@ -408,14 +501,27 @@ def _explain_services(case: CaseFile, concluded: dict[tuple[str, str], dict[str,
     return explained
 
 
+# A period ends a sentence unless it closes "i.e.", "e.g." or a list number such as "1.".
+_SENTENCE_END = re.compile(r"(?<!\bi\.e)(?<!\be\.g)(?<![:.] \d)(?<![:.] \d\d)\. ")
+
+
 def brief(text: Any, limit: int) -> str:
     """Text cut to ``limit`` at a sentence end where one exists, else between words."""
     text = " ".join(str(text or "").split())
     if len(text) <= limit:
         return text
     head = text[:limit]
-    end = head.rfind(". ")
+    end = max((m.start() for m in _SENTENCE_END.finditer(head)), default=-1)
     return head[:end + 1] if end > limit // 4 else head.rsplit(" ", 1)[0] + "…"
+
+
+def short_cause(finding: dict[str, Any], limit: int) -> str:
+    """An LLM finding's headline where it fits in ``limit``, else its cause cut to ``limit``."""
+    headline = " ".join(str(finding.get("headline") or "").split())
+    # Report lines put more text after it, such as "Next: …".
+    if headline and not headline.endswith((".", "!", "?")):
+        headline += "."
+    return headline if headline and len(headline) <= limit else brief(finding.get("cause"), limit)
 
 
 def cut_off_devices(case: CaseFile, answered: set[str]) -> list[dict[str, Any]]:
@@ -535,7 +641,7 @@ async def run_device_investigations(
             _record_dataplane_finding(case, record, {
                 "dataplane_status": "down",
                 "cause": (f"{device} has no IS-IS adjacency and no BGP session up, and this service also "
-                          f"uses {others}. The device was investigated once: {brief(payload.get('cause'), 240)}"),
+                          f"uses {others}. The device was investigated once: {short_cause(payload, 240)}"),
                 "observed": (
                     f"This scan: {device} answered the routing queries, reported {n} BGP "
                     f"session{'s' if n != 1 else ''} down and none up, and no adjacency up. The fixed check "

@@ -6,7 +6,7 @@ These instructions guide coding assistants across this repository. They do not r
 - `agent/`: shared configuration, LLM client, Slack/email publishing, and markdown rendering; no entry point.
 - `multi_agent/`: shared spine collection, deep checks, and tool gating used by `diagnostic_mas/`; no entry point.
 - `diagnostic_mas/`: diagnostic coordinator, dataplane investigations, drills, and reports; entry point `nso-diagnostic-run`.
-- `nso-diagnostic-run` and `nso-diagnostic-delta` are the only entry points. `nso-summary-run` and `nso-multi-agent-run` were removed; do not restore or document them.
+- `nso-diagnostic-run` is the only entry point. `nso-summary-run`, `nso-multi-agent-run` and `nso-diagnostic-delta` were removed; do not restore or document them.
 - `nso_facts/`: shared MCP collection, normalization, and topology facts; `nso_report/`: shared reporting.
 - `diagnostic_mas/prompts/`: runtime prompts, including service-specific `dataplane_agent_<type>.txt` and generic fallback `dataplane_agent.txt`.
 - `diagnostic_mas/dataplane_verify.py`: dataplane tool loop; `drill.py`: follow-up investigation; `report.py` and `operator_report.py`: report rendering.

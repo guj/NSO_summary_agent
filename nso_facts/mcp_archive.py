@@ -44,7 +44,9 @@ def _prune(directory: Path, run_id: str, keep_days: int) -> None:
     removed = 0
     for path in sorted(directory.iterdir()):
         match = _ARCHIVE_NAME.fullmatch(path.name)
-        if not match or path.is_symlink() or not path.is_file() or _run_time(match[1]) >= cutoff:
+        # A name whose date cannot be read gives no age, so the file is kept.
+        when = _run_time(match[1]) if match else None
+        if when is None or path.is_symlink() or not path.is_file() or when >= cutoff:
             continue
         try:
             path.unlink()

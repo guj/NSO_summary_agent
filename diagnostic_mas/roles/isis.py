@@ -18,23 +18,33 @@ from nso_facts.topology.underlay import (
 def expected_adjacencies(previous_case: dict[str, Any] | None) -> list[dict[str, Any]]:
     """IS-IS adjacencies the last published scan saw up, or already held Down as missing.
 
-    ``held`` marks the second kind. Adjacencies the routers themselves reported
-    down are not expected: they were not up to begin with.
+    ``held`` marks the second kind, with ``since`` the scan it first went missing in.
+    One up at the only end that scan read counts as up, with ``listed_by`` that end.
+    Adjacencies the routers themselves reported down are not expected: they were
+    not up to begin with.
     """
-    for ev in (previous_case or {}).get("evidence") or []:
+    previous_case = previous_case or {}
+    for ev in previous_case.get("evidence") or []:
         if not isinstance(ev, dict) or ev.get("kind") != "spine" or ev.get("role") != "isis":
             continue
         payload = ev.get("payload") or {}
-        status = {str(edge.get("id")): str((edge.get("state") or {}).get("status") or "")
+        states = {str(edge.get("id")): edge.get("state") or {}
                   for edge in payload.get("operational_edges") or [] if isinstance(edge, dict)}
         out = []
         for edge in payload.get("static_edges") or []:
             if not isinstance(edge, dict) or not edge.get("id"):
                 continue
-            held = bool((edge.get("meta") or {}).get("expected")) and status.get(edge["id"]) != "up"
-            if status.get(edge["id"]) == "up" or held:
+            meta, state = edge.get("meta") or {}, states.get(edge["id"]) or {}
+            status = str(state.get("status") or "")
+            held = bool(meta.get("expected")) and status != "up"
+            since = (meta.get("missing_since") or previous_case.get("run_id")) if held else None
+            listed_by = [str((edge.get(side) or {}).get("device")) for side in ("local", "remote")
+                         if state.get(side) == "up"] if status == "unknown" else []
+            if status == "up" or held or len(listed_by) == 1:
                 out.append({"id": edge["id"], "local": edge.get("local") or {},
-                            "remote": edge.get("remote") or {}, "held": held})
+                            "remote": edge.get("remote") or {}, "held": held,
+                            **({"since": since} if since else {}),
+                            **({"listed_by": listed_by[0]} if not held and len(listed_by) == 1 else {})})
         return out
     return []
 

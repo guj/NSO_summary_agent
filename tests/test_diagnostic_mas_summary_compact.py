@@ -278,3 +278,39 @@ def test_late_findings_reach_the_summary_before_raw_traces():
     assert evidence[-1]["cause"] == "seat's hellos never reach salt's VLAN 3000 sub-interface"
     assert evidence[0]["kind"] == "spine"                             # still in the order recorded
     assert sum(1 for row in evidence if row["kind"] == "drill") == 38
+
+
+def test_compact_case_gives_an_earlier_scans_finding_dated_for_an_issue_this_scan_left_alone():
+    salt_seat = "isis:salt-data-sw:?:seat-data-sw:HundredGigE0/0/0/23.3000"
+    star_cien = "bgp:10.0.0.1:10.0.0.3:star-data-sw:cien-data-sw"
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    for edge in (salt_seat, star_cien):
+        open_issue(case, code="session_down", message="down", evidence_ids=[], layer="routing", edge_id=edge)
+    add_evidence(case, {"kind": "drill_finding", "payload": {"issue_edge_id": star_cien, "cause": "no route"}})
+    case.previous_findings = {
+        salt_seat: {"cause": "salt receives nothing", "confidence": "medium", "run_id": "20261030T221052Z"},
+        star_cien: {"cause": "an older cause", "run_id": "20261030T221052Z"},
+    }
+
+    earlier = _compact_case_for_llm(case)["earlier_scan_findings"]
+    assert earlier["findings"] == [{"issue_edge_id": salt_seat, "investigated": "30 Oct",
+                                    "cause": "salt receives nothing", "confidence": "medium"}]
+    assert "not current evidence" in earlier["note"]
+    case.previous_findings = {}
+    assert "earlier_scan_findings" not in _compact_case_for_llm(case)
+
+
+def test_compact_case_gives_a_port_an_earlier_scan_explained_dated():
+    """test31: two kept ports came in only as service prose, and the summary counted their readings as current."""
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    case.earlier_port_findings = {"if:ucsd-data-sw:HundredGigE0/0/0/24": {
+        "device": "ucsd-data-sw", "port": "HundredGigE0/0/0/24", "run_id": "20261102T193747Z", "earlier": True,
+        "headline": "No received light on any lane", "cause": "A longer cause.", "confidence": "high",
+        "links": {"HundredGigE0/0/0/24/0": ["net1"], "HundredGigE0/0/0/24/1": ["net2"]}}}
+
+    earlier = _compact_case_for_llm(case)["earlier_port_findings"]
+    assert earlier["findings"] == [{"device": "ucsd-data-sw", "port": "HundredGigE0/0/0/24", "investigated": "2 Nov",
+                                    "cause": "No received light on any lane", "confidence": "high", "services": 2}]
+    assert "not current evidence" in earlier["note"]
+    case.earlier_port_findings = {}
+    assert "earlier_port_findings" not in _compact_case_for_llm(case)

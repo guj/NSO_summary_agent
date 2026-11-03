@@ -32,9 +32,12 @@ Conclude with conclude_investigation:
   "flapped 06:31:41 ago".
 - cause: at most three sentences on what the readings establish on this
   device, per link where they differ; the readings themselves belong in
-  observed. No received light with normal transmit points away from this
-  device, but the far end, the fibre and the patch cannot be told apart
-  from here; say so. A link shut down by configuration is not a link fault.
+  observed. Put what the readings establish first and what the fault is not
+  after. No received light with normal transmit points away from this
+  device, but the far end, the fibre and the patch cannot be told apart from
+  here; say so. A link shut down by configuration is not a link fault.
+- headline: the cause in one sentence of at most 200 characters, without
+  the readings; the report shows it where it has room for one line.
 - confidence: high only when every listed link was read.
 - fix_suggestion: physical checks for a person to carry out, or the reading
   still needed. Never a configuration change; never imply a fix was applied

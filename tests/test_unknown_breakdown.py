@@ -1,4 +1,3 @@
-from types import SimpleNamespace
 import pytest
 from diagnostic_mas.unknown_breakdown import category_for, next_step, format_unknown_breakdown
 from diagnostic_mas.investigation import normalize_gap

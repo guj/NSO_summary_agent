@@ -350,7 +350,10 @@ def _one_sided_routing(case: CaseFile, device: str, layer: str) -> str | None:
         return None
 
     def word(state: str) -> str:
-        return ok_word if state == ok_state else state.capitalize()
+        from nso_facts.topology.underlay import NOT_LISTED
+
+        # A router that answered without an adjacency it is expected to have: down at that end.
+        return ok_word if state == ok_state else "down" if state == NOT_LISTED else state.capitalize()
 
     def groups(by_state: dict[str, list[str]], fmt: str) -> list[str]:
         order = sorted(by_state, key=lambda s: (s != ok_state, s))
@@ -417,7 +420,57 @@ def _bgp_sessions_down_text(case: CaseFile, *, limit: int) -> str | None:
             + ", ".join(sessions[:limit]) + more)
 
 
-# IS-IS adjacencies down although both routers answered: neither lists it, or the two see it differently.
+def _bgp_sessions_not_established_text(case: CaseFile) -> list[str]:
+    """Sentences for configured BGP sessions not established, grouped by the end that could not be read."""
+    return [phrase + "." for phrase, _edges in _bgp_sessions_not_established(case)]
+
+
+def _bgp_sessions_not_established(case: CaseFile) -> list[tuple[str, set[str]]]:
+    """Configured BGP sessions not established, grouped by the end that could not be read: (phrase, edge ids)."""
+    from nso_facts.fleet_rollups import merged_edges, operational_layers, static_layers
+
+    topology = topology_from_case(case)
+    op = operational_layers(topology)
+    edges = {edge.get("id"): edge for edge in merged_edges(op, static_layers(topology), "routing")} if op else {}
+    by_unread: dict[str, set[str]] = {}
+    both: list[str] = []
+    one_end: set[str] = set()
+    both_ends: set[str] = set()
+    for issue in case.issues:
+        if not isinstance(issue, dict) or str(issue.get("code") or "") != "configured_no_session":
+            continue
+        edge_id = str(issue.get("edge_id") or "")
+        edge = edges.get(edge_id) or {}
+        state = edge.get("state") or {}
+        ends = [((edge.get(side) or {}).get("device"), str(state.get(side) or "").lower())
+                for side in ("local", "remote")]
+        unread = [device for device, read in ends if read in _UNREAD]
+        if len(unread) == 1 and all(device for device, _ in ends):
+            read = next(device for device, _ in ends if device != unread[0])
+            by_unread.setdefault(unread[0], set()).add(read)
+            one_end.add(edge_id)
+        else:
+            pair = _devices_from_bgp_edge_id(edge_id)
+            both.append(f"`{pair[0]}` ↔ `{pair[1]}`" if pair else f"`{edge_id}`")
+            both_ends.add(edge_id)
+
+    def names(devices: set[str]) -> str:
+        quoted = [f"`{device}`" for device in sorted(devices)]
+        return ", ".join(quoted[:-1]) + " and " + quoted[-1] if len(quoted) > 1 else quoted[0]
+
+    phrases = []
+    n = sum(map(len, by_unread.values()))
+    if n:
+        groups = sorted(by_unread.items(), key=lambda item: (-len(item[1]), item[0]))
+        phrases.append((f"{n} BGP session{'s' if n != 1 else ''} not established, as read at one end only: "
+                        + "; ".join(f"to `{unread}` from {names(read)}" for unread, read in groups), one_end))
+    if both:
+        phrases.append((f"{len(both)} BGP session{'s' if len(both) != 1 else ''} not established: "
+                        + ", ".join(both), both_ends))
+    return phrases
+
+
+# IS-IS adjacencies down at a router that answered: no router lists it, or the two see it differently.
 _ADJACENCY_DOWN_CODES = frozenset({"configured_no_adjacency", "unidirectional_adjacency"})
 
 
@@ -460,7 +513,7 @@ def _adjacency_ports(case: CaseFile, edge_id: str) -> str | None:
 
 
 def _isis_adjacencies_down_text(case: CaseFile, *, limit: int) -> str | None:
-    """Count and endpoints of IS-IS adjacencies down although both routers answered."""
+    """Count and endpoints of IS-IS adjacencies down at a router that answered."""
     pairs: list[str] = []
     for issue in case.issues:
         if not isinstance(issue, dict) or str(issue.get("code") or "") not in _ADJACENCY_DOWN_CODES:
@@ -537,33 +590,48 @@ def _drill_findings_by_issue_key(case: CaseFile) -> dict[str, dict[str, Any]]:
 def _routing_findings(case: CaseFile) -> list[tuple[str, tuple[str, str], dict[str, Any]]]:
     """Concluded LLM drill findings on an IS-IS adjacency or BGP session: (edge id, its devices, finding).
 
-    The latest finding per edge. One that found a BGP session Established has its own line
+    The latest finding per edge; an Issue this scan's drill left alone keeps an earlier scan's,
+    marked ``earlier``. One that found a BGP session Established has its own line
     on the Routing line (``_bgp_routing_qualification``) and is left out here.
     """
+    from diagnostic_mas.drill import earlier_findings
+
+    def pair_of(edge: str) -> tuple[str, str] | None:
+        parts = edge.split(":")
+        return ((parts[1], parts[3]) if parts[0] == "isis" and len(parts) == 5
+                else _devices_from_bgp_edge_id(edge) if parts[0] == "bgp" else None)
+
     out: dict[str, tuple[str, tuple[str, str], dict[str, Any]]] = {}
+    for edge, finding in earlier_findings(case).items():
+        pair = pair_of(edge)
+        if pair:
+            out[edge] = (edge, pair, {**finding, "earlier": True})
     for ev in case.evidence:
         payload = ev.get("payload") if ev.get("kind") == "drill_finding" else None
         if not isinstance(payload, dict):
             continue
         edge = str(payload.get("issue_edge_id") or "")
-        parts = edge.split(":")
-        pair = ((parts[1], parts[3]) if parts[0] == "isis" and len(parts) == 5
-                else _devices_from_bgp_edge_id(edge) if parts[0] == "bgp" else None)
+        pair = pair_of(edge)
         if pair and payload.get("session_state") != "established":
             out[edge] = (edge, pair, payload)
     return list(out.values())
 
 
 def _routing_finding_lines(case: CaseFile, device: str) -> list[str]:
-    from diagnostic_mas.port_investigation import brief
+    from diagnostic_mas.open_faults import run_day
+    from diagnostic_mas.port_investigation import brief, short_cause
 
     lines = []
     for edge, (a, b), finding in _routing_findings(case):
         if device not in (a, b):
             continue
         what = "IS-IS adjacency" if edge.startswith("isis:") else "BGP session"
-        line = (f"**Investigated by LLM** (confidence {finding.get('confidence') or 'not given'}; not verified): "
-                f"{what} {a} ↔ {b} — {scrub_internal_ids(brief(finding.get('cause'), 500))}")
+        when, rechecked = "", ""
+        if finding.get("earlier"):
+            when = f" on {run_day(finding['run_id'])}" if finding.get("run_id") else " in an earlier scan"
+            rechecked = "not rechecked this scan; "
+        line = (f"**Investigated by LLM{when}** ({rechecked}confidence {finding.get('confidence') or 'not given'}; "
+                f"not verified): {what} {a} ↔ {b} — {scrub_internal_ids(short_cause(finding, 500))}")
         # Room for the evidence sentence and the first step: these findings write long sentences.
         then = scrub_internal_ids(brief(finding.get("fix_suggestion"), 360))
         lines.append(line + (f" Next: {then}" if then else ""))
@@ -1042,7 +1110,6 @@ def _device_rows(case: CaseFile) -> list[dict[str, Any]]:
                 "hardware": "Unavailable",
                 "bgp": "—",
                 "isis": "—",
-                "routes": "—",
                 "notes": "",
             }
         )
@@ -1124,8 +1191,8 @@ def format_devices_operator(case: CaseFile) -> list[str]:
 
 
 def _port_finding_lines(case: CaseFile, device: str) -> list[str]:
-    """One line per port investigated on this device."""
-    from diagnostic_mas.port_investigation import brief, device_findings, port_findings
+    """One line per port investigated on this device, or explained by an earlier scan's finding."""
+    from diagnostic_mas.port_investigation import device_findings, earlier_when, port_findings, short_cause
 
     lines: list[str] = []
     for finding in device_findings(case):
@@ -1134,11 +1201,11 @@ def _port_finding_lines(case: CaseFile, device: str) -> list[str]:
         n = len(finding.get("services") or [])
         services = f"{n} service{'s' if n != 1 else ''}"
         if finding.get("concluded") and finding.get("sessions_now", "down") != "down":
-            cause = scrub_internal_ids(brief(finding.get("cause"), 300))
+            cause = scrub_internal_ids(short_cause(finding, 300))
             lines.append(f"**Cut off:** {cause} (not confirmed when re-read; "
                          f"{services} left to {'their' if n != 1 else 'its'} own investigation)")
         elif finding.get("concluded"):
-            cause = scrub_internal_ids(brief(finding.get("cause"), 300))
+            cause = scrub_internal_ids(short_cause(finding, 300))
             lines.append(f"**Cut off:** {cause} ({services} that use another device; investigated once)")
         else:
             lines.append("**Cut off:** investigation did not finish; "
@@ -1153,8 +1220,10 @@ def _port_finding_lines(case: CaseFile, device: str) -> list[str]:
         read_down = n if states is None else sum(
             len(names) for link, names in links.items() if states.get(link) == "down")
         rest = n - read_down
+        dated = (f"investigated by LLM {earlier_when(finding)}, not rechecked this scan; "
+                 if finding.get("earlier") else "")
         if finding.get("concluded") and rest:
-            cause = scrub_internal_ids(brief(finding.get("cause"), 300))
+            cause = scrub_internal_ids(short_cause(finding, 300))
             left = f"{rest} service{'s' if rest != 1 else ''} left to {'their' if rest != 1 else 'its'} own investigation"
             if read_down:
                 note = (f"{read_down} service{'s' if read_down != 1 else ''} on "
@@ -1163,10 +1232,11 @@ def _port_finding_lines(case: CaseFile, device: str) -> list[str]:
                         + f": {'their links were' if rest != 1 else 'its link was'} not read down")
             else:
                 note = f"no link read down; {left}"
-            lines.append(f"**Port {finding.get('port')}:** {cause} ({note})")
+            lines.append(f"**Port {finding.get('port')}:** {cause} ({dated}{note})")
         elif finding.get("concluded"):
-            cause = scrub_internal_ids(brief(finding.get("cause"), 300))
-            lines.append(f"**Port {finding.get('port')}:** {cause} ({services} attached; investigated once)")
+            cause = scrub_internal_ids(short_cause(finding, 300))
+            attached = f"{dated}{services} attached" if dated else f"{services} attached; investigated once"
+            lines.append(f"**Port {finding.get('port')}:** {cause} ({attached})")
         else:
             lines.append(f"**Port {finding.get('port')}:** investigation did not finish; "
                          f"its {services} were left to their own investigation")
@@ -2006,6 +2076,14 @@ def format_followup_operator(case: CaseFile) -> list[str]:
             + ("; an LLM investigation's finding is in the devices' blocks" if found else "")
             + "). Services on these devices may share this cause."
         )
+    for phrase, edges in _bgp_sessions_not_established(case):
+        found = sum(1 for edge, _pair, _finding in _routing_findings(case) if edge in edges)
+        items.append(
+            f"Investigate {phrase}"
+            + (" (an LLM investigation's finding is in the devices' blocks)" if found == 1
+               else " (LLM investigations' findings are in the devices' blocks)" if found else "")
+            + "."
+        )
 
     # 1) One action per device for live-MCP quarantine and/or sync unknowns.
     from nso_facts.mcp_client import (
@@ -2041,7 +2119,7 @@ def format_followup_operator(case: CaseFile) -> list[str]:
         and (i.get("devices") or [None])[0]
     }
 
-    def _timeout_collection_followup(device: str, *, services_n: int | None) -> str:
+    def _live_collection_followup(device: str, *, services_n: int | None) -> str:
         msg = quarantine_messages.get(device, "")
         timeout = parse_live_mcp_read_timeout_sec(msg)
         phase = parse_live_mcp_collection_phase(msg)
@@ -2057,9 +2135,10 @@ def format_followup_operator(case: CaseFile) -> list[str]:
             )
         if nso_could_not_connect(msg):
             # NSO's own session to the device failed; MCP and the NSO CLI would meet the same wall.
+            outcome = "timed out" if live_mcp_failure_kind(msg) == "timeout" else "failed"
             return (
                 f"Check NSO's management connection to `{device}` {resolve}: NSO's own "
-                f"attempt to connect to the device timed out during {site} {phase}; "
+                f"attempt to connect to the device {outcome} during {site} {phase}; "
                 f"`devices device {device} connect` in the NSO CLI shows whether NSO can "
                 "reach it (not device down)."
             )
@@ -2081,11 +2160,14 @@ def format_followup_operator(case: CaseFile) -> list[str]:
             "— not device down)."
         )
 
-    from diagnostic_mas.sync_failure_report import sync_failure_group
+    from diagnostic_mas.sync_failure_report import sync_failure_group, sync_failure_split, unconnected_followup
     sync_failed, affected_count = sync_failure_group(case)
-    if affected_count:
-        commands = "; ".join(f"`devices device {d} check-sync`" for d in sync_failed)
-        items.append(f"Resolve failed sync verification for {affected_count} distinct services (Unknown; operational checks skipped). Run {commands} in the NSO CLI, retain complete responses and compare with MCP; reassess affected services after sync succeeds. These are not confirmed outages.")
+    unconnected, unconnected_count, rest, rest_count = sync_failure_split(case)
+    if unconnected_count:
+        items.append(unconnected_followup(unconnected, unconnected_count))
+    if rest_count:
+        commands = "; ".join(f"`devices device {d} check-sync`" for d in rest)
+        items.append(f"Resolve failed sync verification for {rest_count} distinct services (Unknown; operational checks skipped). Run {commands} in the NSO CLI, retain complete responses and compare with MCP; reassess affected services after sync succeeds. These are not confirmed outages.")
     for device in attributed_devices:
         if device in sync_failed and affected_count:
             continue
@@ -2093,8 +2175,8 @@ def format_followup_operator(case: CaseFile) -> list[str]:
         kind = quarantined_by_device.get(device) or live_mcp_failure_kind(
             quarantine_messages.get(device, "")
         )
-        if kind == "timeout":
-            items.append(_timeout_collection_followup(device, services_n=n))
+        if kind == "timeout" or nso_could_not_connect(quarantine_messages.get(device, "")):
+            items.append(_live_collection_followup(device, services_n=n))
         elif kind == "unreachable":
             items.append(
                 f"Restore live reachability to `{device}` to resume automated "
@@ -2114,13 +2196,13 @@ def format_followup_operator(case: CaseFile) -> list[str]:
     )
     for device in quarantine_only:
         kind = quarantined_by_device[device]
-        if kind == "unreachable":
+        if kind == "timeout" or nso_could_not_connect(quarantine_messages.get(device, "")):
+            items.append(_live_collection_followup(device, services_n=None))
+        elif kind == "unreachable":
             items.append(
                 f"Restore live reachability to `{device}` to resume automated "
                 f"live MCP ({_service_impact(service_totals[device], 0)})."
             )
-        elif kind == "timeout":
-            items.append(_timeout_collection_followup(device, services_n=None))
         else:
             items.append(
                 f"Investigate failed live MCP for `{device}` to restore "
@@ -2476,6 +2558,7 @@ def format_result_line(case: CaseFile) -> str:
     sessions_down = _bgp_sessions_down_text(case, limit=3)
     if sessions_down:
         parts.append(sessions_down + ".")
+    parts.extend(_bgp_sessions_not_established_text(case))
     adjacencies_down = _isis_adjacencies_down_text(case, limit=3)
     if adjacencies_down:
         parts.append(adjacencies_down + ".")
@@ -2554,11 +2637,14 @@ def format_run_details(
         + (f"; {b.drill_issues_unconcluded} ended without a conclusion"
            if getattr(b, "drill_issues_unconcluded", 0) else ""),
     ]
-    if getattr(b, "port_investigations_used", 0):
+    kept = len(getattr(case, "earlier_port_findings", None) or {})
+    if getattr(b, "port_investigations_used", 0) or kept:
         by_port = sum(1 for d in case.diagnoses if d.get("source") in explained_sources)
         lines.append(
             f"**Port and device investigations:** {b.port_investigations_used} / {b.max_port_investigations} "
-            f"(tools used {b.port_tools_used}); {by_port} service{'s' if by_port != 1 else ''} explained")
+            f"(tools used {b.port_tools_used}); {by_port} service{'s' if by_port != 1 else ''} explained"
+            + (f"; {kept} port{'s' if kept != 1 else ''} explained by "
+               + ("an earlier scan's finding" if kept == 1 else "earlier scans' findings") if kept else ""))
     from diagnostic_mas.link_lldp import lldp_reads_line
     from diagnostic_mas.link_optics import optics_reads_line
 

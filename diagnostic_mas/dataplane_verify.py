@@ -20,6 +20,7 @@ from diagnostic_mas.case import Budget, CaseFile, DrillSession, add_evidence
 from diagnostic_mas.deep_checks import DATAPLANE_ALLOWLIST
 from diagnostic_mas.drill import (
     _message_to_dict,
+    _quarantined_device_map,
     execute_one_drill_call,
 )
 from diagnostic_mas.tool_context import BatchProgress, result_error, tool_catalog
@@ -462,7 +463,8 @@ def select_dataplane_candidates(
 ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     """Pick services for LLM dataplane verify.
 
-    ``exclude`` names services a port investigation already explained.
+    ``exclude`` names services a port investigation already explained. A service
+    whose devices are all quarantined this run is skipped: no live MCP is possible.
 
     Default: ``system=up`` and ``dataplane=not_checked`` (fleet runs).
     ``suspicious_only`` (service focus): only instances that look wrong or
@@ -480,8 +482,12 @@ def select_dataplane_candidates(
     ``category_rotate_seed`` rotates which category starts the round-robin.
     """
     eligible: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    quarantined = _quarantined_device_map()
     for ev, rec in iter_service_records(case):
         if str(rec.get("name") or "") in exclude:
+            continue
+        devices = _service_devices(rec)
+        if devices and all(d in quarantined for d in devices):
             continue
         basic = rec.get("basic_checks")
         if isinstance(basic, dict):

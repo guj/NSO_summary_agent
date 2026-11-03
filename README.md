@@ -607,9 +607,6 @@ nso-diagnostic-run --dry-run
 
 # Deliver Slack/email + state/diagnostic_mas/
 nso-diagnostic-run --publish
-
-# Compare two published runs (new / recovered / persistent / coverage)
-nso-diagnostic-delta state/diagnostic_mas/runs/<older> state/diagnostic_mas/runs/<newer>
 ```
 
 ## Project layout

@@ -18,17 +18,6 @@ EquivalenceMap = dict[str, dict[str, list[str]]]
 # Repo-relative draft of heuristic suggestions (review before confirming).
 SUGGESTED_EQUIVALENCES_DRAFT_REL = "config/to_confirm.interface-equivalence.json"
 
-_KIND_NOTES = {
-    "type_change": (
-        "suggested: same port address, different type — confirm or delete"
-    ),
-    "breakout": "suggested: breakout children — confirm list or delete",
-    "missing": (
-        "suggested: no live candidate (phantom?) — delete NSO config "
-        "or leave empty box after review"
-    ),
-}
-
 
 def interface_port_address(name: str) -> str | None:
     """Return port address after IOS-XR type prefix (e.g. ``0/0/0/32``)."""
@@ -168,65 +157,6 @@ def resolve_equivalence(
     by_nso = equivalences.get(device) or {}
     box = by_nso.get(nso)
     return list(box) if box else None
-
-
-def build_suggested_equivalences_draft(
-    issues: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Build the to-confirm JSON payload from ``config_live_mismatch`` issues."""
-    rows: list[dict[str, Any]] = []
-    for issue in issues:
-        if not isinstance(issue, dict):
-            continue
-        if issue.get("code") != "config_live_mismatch":
-            continue
-        if issue.get("confirmed"):
-            continue
-        device = issue.get("device")
-        nso = issue.get("nso")
-        if not isinstance(device, str) or not isinstance(nso, str):
-            continue
-        candidates = issue.get("candidates") or []
-        if not isinstance(candidates, list):
-            candidates = []
-        cand_names = [str(c) for c in candidates if str(c).strip()]
-        if not cand_names:
-            box: Any = []
-        elif len(cand_names) == 1:
-            box = cand_names[0]
-        else:
-            box = cand_names
-        kind = str(issue.get("kind") or "missing")
-        rows.append(
-            {
-                "device": device,
-                "nso": nso,
-                "box": box,
-                "note": _KIND_NOTES.get(kind, f"suggested kind={kind}"),
-            }
-        )
-    rows.sort(key=lambda r: (r["device"], r["nso"]))
-    return {
-        "_comment": (
-            "DRAFT suggested matches from the latest agent run. Review each row, "
-            "copy keepers to config/interface-equivalences.json, then set "
-            "INTERFACE_EQUIVALENCES_FILE. Rows with box=[] are phantoms — fix or "
-            "remove NSO config instead of confirming."
-        ),
-        "equivalences": rows,
-    }
-
-
-def write_suggested_equivalences_draft(
-    path: Path,
-    issues: list[dict[str, Any]],
-) -> int:
-    """Write draft file; return number of suggested rows."""
-    payload = build_suggested_equivalences_draft(issues)
-    rows = payload.get("equivalences") or []
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    return len(rows)
 
 
 def suggested_equivalences_report_note(

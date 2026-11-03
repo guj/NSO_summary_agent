@@ -10,24 +10,22 @@ from nso_facts.fleet_summary_thresholds import (
 )
 from nso_facts.health import build_device_sync_map
 from nso_facts.fleet_rollups import (
+    devices_in_edges,
     fleet_device_sync_counts,
     fleet_infra_alert_counts,
     fleet_routing_totals,
     fleet_service_instance_counts,
+    merged_edges,
+    mismatch_by_edge_id,
+    operational_layers,
+    peer_up_total,
+    static_layers,
+    unmapped_by_device,
 )
 from nso_report.delta_format import delta_has_changes, format_delta_section
 from nso_report.devices import (
     INVENTORY_REVIEW_STATUS,
-    _devices_in_edges,
     _iface_pair_status,
-    _merged_edges,
-    _mismatch_by_edge_id,
-    _operational_layers,
-    _peer_up_total,
-    _route_summaries,
-    _static_layers,
-    _status,
-    _unmapped_by_device,
 )
 
 _I1 = "  "
@@ -67,21 +65,6 @@ def format_service_summary_lines(counts: dict[str, Any]) -> list[str]:
             total, up = 0, 0
         lines.append(f"{_I1}{service_type:<14}{up}/{total} Up")
     return lines
-
-
-def abbreviate_route_total(total: Any) -> str:
-    if total is None:
-        return "—"
-    try:
-        n = int(total)
-    except (TypeError, ValueError):
-        return str(total)
-    if n >= 1000:
-        k = n / 1000.0
-        if abs(k - round(k)) < 0.05:
-            return f"{int(round(k))}k"
-        return f"{k:.0f}k" if k >= 10 else f"{k:.1f}k".rstrip("0").rstrip(".") + "k"
-    return str(n)
 
 
 def device_interfaces_label(
@@ -181,34 +164,28 @@ def build_device_health_rows(
 ) -> list[dict[str, Any]]:
     from nso_facts.hardware_health import device_hardware_label
 
-    op_layers = _operational_layers(topology)
+    op_layers = operational_layers(topology)
     if op_layers is None:
         return []
-    static_layers = _static_layers(topology)
-    phys = _merged_edges(op_layers, static_layers, "physical")
-    under = _merged_edges(op_layers, static_layers, "underlay")
-    route = _merged_edges(op_layers, static_layers, "routing")
-    unmapped_bgp, unmapped_isis = _unmapped_by_device(topology)
-    mismatch_by_edge = _mismatch_by_edge_id(topology)
-    route_summaries = _route_summaries(topology)
+    static = static_layers(topology)
+    phys = merged_edges(op_layers, static, "physical")
+    under = merged_edges(op_layers, static, "underlay")
+    route = merged_edges(op_layers, static, "routing")
+    unmapped_bgp, unmapped_isis = unmapped_by_device(topology)
+    mismatch_by_edge = mismatch_by_edge_id(topology)
     sync_map = build_device_sync_map(fleet_sync)
     hw = hardware_health if isinstance(hardware_health, dict) else {}
 
     devices = sorted(
-        _devices_in_edges(phys, under, route)
+        devices_in_edges(phys, under, route)
         | set(unmapped_bgp)
         | set(unmapped_isis)
-        | set(route_summaries)
         | set(hw)
     )
     rows: list[dict[str, Any]] = []
     for device in devices:
-        bgp_up, bgp_total = _peer_up_total(device, route)
-        isis_up, isis_total = _peer_up_total(device, under)
-        rs = route_summaries.get(device) or {}
-        routes_txt = "—"
-        if rs and not rs.get("error") and rs.get("total") is not None:
-            routes_txt = abbreviate_route_total(rs.get("total"))
+        bgp_up, bgp_total = peer_up_total(device, route)
+        isis_up, isis_total = peer_up_total(device, under)
         rows.append(
             {
                 "device": device,
@@ -219,7 +196,6 @@ def build_device_health_rows(
                 "hardware": device_hardware_label(hw.get(device)),
                 "bgp": f"{bgp_up}/{bgp_total}" if bgp_total else "—",
                 "isis": f"{isis_up}/{isis_total}" if isis_total else "—",
-                "routes": routes_txt,
                 "notes": device_notes_label(device, phys, mismatch_by_edge),
             }
         )
@@ -229,7 +205,7 @@ def build_device_health_rows(
 def format_device_health_table(rows: list[dict[str, Any]]) -> str:
     header = (
         f"{'Device':<16}{'Sync':<12}{'Interfaces':<20}{'Hardware':<12}"
-        f"{'BGP':<6}{'IS-IS':<7}{'Routes':<10}{'Notes':<28}"
+        f"{'BGP':<6}{'IS-IS':<7}{'Notes':<28}"
     )
     sep = "-" * len(header)
     if not rows:
@@ -243,7 +219,6 @@ def format_device_health_table(rows: list[dict[str, Any]]) -> str:
             f"{str(row.get('hardware') or 'Unavailable'):<12}"
             f"{str(row['bgp']):<6}"
             f"{str(row['isis']):<7}"
-            f"{str(row['routes']):<10}"
             f"{str(row.get('notes') or '')}"
         )
     return "\n".join(lines)
@@ -476,7 +451,7 @@ def _mismatches_from_topology(topology: Any) -> list[dict[str, Any]]:
     if not isinstance(topology, dict):
         return []
     out: list[dict[str, Any]] = []
-    for issue in _mismatch_by_edge_id(topology).values():
+    for issue in mismatch_by_edge_id(topology).values():
         out.append(
             {
                 "device": issue.get("device"),

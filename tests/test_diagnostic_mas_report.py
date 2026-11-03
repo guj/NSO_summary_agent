@@ -159,6 +159,21 @@ def test_devices_nso_could_not_connect_to_are_not_reported_unreachable(monkeypat
     assert "Restore live reachability" not in followup
 
 
+def test_a_device_nso_could_not_log_in_to_gets_the_connection_followup(monkeypatch):
+    from diagnostic_mas.operator_report import format_followup_operator
+
+    refused = ("check_isis_adjacencies: RESTCONF 500: Failed to connect to device star-data-sw: connection refused: "
+               "NEDCOM CONNECT: authenticate: Socket closed, server allowed: [ ] in new state")
+    case = _case_with_dropped_devices(monkeypatch, {}, {"star-data-sw": refused})
+
+    followup = "\n".join(format_followup_operator(case))
+
+    assert "Check NSO's management connection to `star-data-sw`" in followup
+    assert "NSO's own attempt to connect to the device failed during" in followup
+    assert "timed out" not in followup
+    assert "Investigate failed live MCP for `star-data-sw`" not in followup
+
+
 def test_followup_for_a_dropped_device_says_what_it_carries(monkeypatch):
     from diagnostic_mas.operator_report import format_followup_operator
 

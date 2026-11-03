@@ -3,7 +3,6 @@
 The route output is as amst-data-sw returned it in the scan of 6 October 2026,
 when two pairs of services shared a gateway address and the LLM found it.
 """
-import pytest
 
 from diagnostic_mas.case import Budget, CaseFile, add_evidence
 from diagnostic_mas.operational_checks.l3rt import gateway_owners

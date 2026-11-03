@@ -549,3 +549,177 @@ def test_cli_ceiling_for_port_investigations():
 
     assert parser.parse_args([]).max_port_investigations == 6
     assert parser.parse_args(["--max-port-investigations", "0"]).max_port_investigations == 0
+
+
+@pytest.mark.parametrize("abbreviation", ["i.e.", "e.g."])
+def test_brief_does_not_end_a_sentence_at_an_abbreviation(abbreviation):
+    text = (f"All four lanes are down with no received light (-40.00 dBm, {abbreviation} RX-LOS on "
+            "lanes 1-4) while this end transmits normally, so the loss arrives from outside.")
+
+    assert pi.brief(text, 80) == (f"All four lanes are down with no received light (-40.00 dBm, {abbreviation} "
+                                  "RX-LOS on…")
+
+
+def test_brief_does_not_end_a_sentence_at_a_list_number():
+    text = ("No config change is recommended. All actions below need human approval:\n"
+            "1. Read the punt counters on salt and the line-card log before any recovery attempt.")
+
+    assert pi.brief(text, 90) == "No config change is recommended."
+
+
+@pytest.mark.parametrize("headline", ["No light arrives from the far end", "No light arrives from the far end."])
+def test_a_headline_is_shown_as_a_sentence_so_the_next_one_does_not_run_into_it(headline):
+    finding = {"headline": headline, "cause": "No light arrives from the far end; the readings follow."}
+
+    assert pi.short_cause(finding, 300) == "No light arrives from the far end."
+
+
+def _headline_loop():
+    async def fake(client, settings, case, *, device_names, focus_issue, session,
+                   openai_client=None, system_prompt=None, account="drill"):
+        _read_links(case, focus_issue, session)
+        record_drill_finding(case, {
+            "observed": LONG_OBSERVED, "cause": LONG_CAUSE, "headline": "No light arrives from the far end.",
+            "fix_suggestion": "check the fibre", "fix_requires_human_approval": True, "confidence": "high"},
+            session=session)
+        return 1, True
+    return fake
+
+
+@pytest.mark.asyncio
+async def test_port_finding_is_shown_by_its_headline_in_the_report_and_in_its_services():
+    from diagnostic_mas.operator_report import format_devices_operator
+
+    case = _mich_case()
+    await _run(case, _headline_loop())
+
+    port_lines = [line for line in format_devices_operator(case) if line.startswith("**Port ")]
+    by_name = {d["subject"]["name"]: d for d in case.diagnoses}
+
+    assert port_lines and all(":** No light arrives from the far end. (" in line for line in port_lines)
+    assert "was investigated once: No light arrives from the far end." in by_name["a"]["cause"]
+
+
+# A port an earlier scan explained keeps that finding; the ceiling goes to new ports first, then to the
+# ports explained longest ago.
+OCT31, NOV2 = "20261031T120000Z", "20261102T120000Z"
+PORT_24 = {"HundredGigE0/0/0/24/0": ["a"], "HundredGigE0/0/0/24/1": ["b"]}
+PORT_25 = {"HundredGigE0/0/0/25/0": ["c"]}
+
+
+def _earlier(port: str, links: dict, run_id: str, **extra) -> dict:
+    """A concluded finding an earlier scan saved for a mich port."""
+    return {"device": MICH, "port": f"HundredGigE0/0/0/{port}", "links": links, "concluded": True,
+            "cause": "no light arriving", "confidence": "high", "link_states": {link: "down" for link in links},
+            "run_id": run_id, **extra}
+
+
+def _carrying(*findings: dict) -> CaseFile:
+    case = _mich_case()
+    case.previous_port_findings = {f"if:{f['device']}:{f['port']}": f for f in findings}
+    case.budget.max_port_investigations = 1
+    return case
+
+
+@pytest.mark.asyncio
+async def test_a_new_port_goes_before_one_an_earlier_scan_explained_which_keeps_that_finding():
+    case, calls = _carrying(_earlier("24", PORT_24, NOV2)), []
+
+    explained = await _run(case, _loop(calls))
+
+    assert calls == [f"if:{MICH}:HundredGigE0/0/0/25"]
+    assert explained == {"a", "b", "c"}
+    by_name = {d["subject"]["name"]: d for d in case.diagnoses}
+    assert ("Port HundredGigE0/0/0/24 was investigated by LLM on 2 Nov, not rechecked this scan: "
+            "no light arriving") in by_name["a"]["cause"]
+    assert "Port HundredGigE0/0/0/25 was investigated once: no light arriving" in by_name["c"]["cause"]
+    assert case.service_coverage["a"] == "port_investigated"
+    assert case.budget.port_investigations_used == 1
+
+
+@pytest.mark.asyncio
+async def test_spare_room_rechecks_the_port_an_earlier_scan_explained_longest_ago():
+    case, calls = _carrying(_earlier("24", PORT_24, NOV2), _earlier("25", PORT_25, OCT31)), []
+
+    assert await _run(case, _loop(calls)) == {"a", "b", "c"}
+    assert calls == [f"if:{MICH}:HundredGigE0/0/0/25"]
+
+
+@pytest.mark.asyncio
+async def test_a_port_whose_services_changed_since_its_finding_is_new_again():
+    then = {"HundredGigE0/0/0/25/0": ["c-before-the-slice-was-recreated"]}
+    case, calls = _carrying(_earlier("24", PORT_24, OCT31), _earlier("25", then, NOV2)), []
+
+    assert await _run(case, _loop(calls)) == {"a", "b", "c"}
+    assert calls == [f"if:{MICH}:HundredGigE0/0/0/25"]
+
+
+@pytest.mark.asyncio
+async def test_the_next_scan_gets_each_ports_latest_finding_with_the_date_it_was_made():
+    from diagnostic_mas.state_paths import case_to_dict
+
+    case = _carrying(_earlier("24", PORT_24, OCT31), _earlier("25", PORT_25, OCT31))
+    await _run(case, _loop([]))    # rechecks port 24, the one with more services; keeps 25's finding
+
+    kept = pi.previous_port_findings({**case_to_dict(case), "run_id": NOV2})
+
+    assert {key: finding["run_id"] for key, finding in kept.items()} == {
+        f"if:{MICH}:HundredGigE0/0/0/24": NOV2, f"if:{MICH}:HundredGigE0/0/0/25": OCT31}
+    assert kept[f"if:{MICH}:HundredGigE0/0/0/24"]["links"] == PORT_24
+
+
+@pytest.mark.asyncio
+async def test_a_port_whose_last_investigation_did_not_conclude_keeps_no_finding():
+    from diagnostic_mas.state_paths import case_to_dict
+
+    case = _carrying(_earlier("24", PORT_24, OCT31), _earlier("25", PORT_25, OCT31))
+    assert await _run(case, _loop([], conclude=False)) == {"c"}
+
+    kept = pi.previous_port_findings({**case_to_dict(case), "run_id": NOV2})
+
+    assert list(kept) == [f"if:{MICH}:HundredGigE0/0/0/25"]
+
+
+@pytest.mark.asyncio
+async def test_report_dates_a_port_finding_kept_from_an_earlier_scan():
+    from diagnostic_mas.html_report import _device_details
+    from diagnostic_mas.operator_report import format_devices_operator, format_run_details
+    from diagnostic_mas.report import format_dataplane_dig_line
+    from diagnostic_mas.state_paths import case_to_dict
+
+    case = _carrying(_earlier("24", PORT_24, OCT31, observed="24/0: Rx -40 dBm"))
+    await _run(case, _loop([]))
+
+    details = _device_details(case_to_dict(case))[MICH]
+    assert "Port HundredGigE0/0/0/24 investigation of 31 Oct, not rechecked this scan" in details
+    assert "24/0: Rx -40 dBm" in details
+
+    block = "\n".join(format_devices_operator(case)).split(f"### {MICH}\n", 1)[1].split("\n### ", 1)[0]
+
+    assert ("**Port HundredGigE0/0/0/24:** no light arriving (investigated by LLM on 31 Oct, "
+            "not rechecked this scan; 2 services attached)") in block
+    assert "**Port HundredGigE0/0/0/25:** no light arriving (1 service attached; investigated once)" in block
+    assert ("**Port and device investigations:** 1 / 1 (tools used 3); 3 services explained; "
+            "1 port explained by an earlier scan's finding") in "\n".join(format_run_details(case))
+    assert ("3 services are explained by 2 port investigations (1 from an earlier scan)"
+            in format_dataplane_dig_line(case))
+
+
+@pytest.mark.asyncio
+async def test_a_kept_finding_counts_its_link_ages_on_from_when_they_were_read():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    ages = {"HundredGigE0/0/0/24/0": "11w2d", "HundredGigE0/0/0/24/1": "never"}
+    read = {
+        "read by the investigation": _earlier("24", PORT_24, (now - timedelta(days=3)).strftime("%Y%m%dT%H%M%SZ"),
+                                              link_ages=ages),
+        "moved on by the last scan": _earlier("24", PORT_24, (now - timedelta(days=10)).strftime("%Y%m%dT%H%M%SZ"),
+                                              link_ages=ages, ages_as_of=(now - timedelta(days=3)).isoformat()),
+    }
+
+    for why, earlier in read.items():
+        case = _carrying(earlier)
+        await _run(case, _loop([]))
+        [kept] = [finding for finding in pi.port_findings(case) if finding.get("earlier")]
+        assert kept["link_ages"] == {"HundredGigE0/0/0/24/0": "11w5d", "HundredGigE0/0/0/24/1": "never"}, why

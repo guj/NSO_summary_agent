@@ -16,6 +16,8 @@ def diagnostic_mas_state_dir(settings: Settings) -> Path:
 
 
 def case_to_dict(case: CaseFile) -> dict[str, Any]:
+    from diagnostic_mas.drill import earlier_findings
+
     return {
         "budget": asdict(case.budget),
         "run_configuration": dict(case.run_configuration),
@@ -30,6 +32,8 @@ def case_to_dict(case: CaseFile) -> dict[str, Any]:
         "focus_devices": list(case.focus_devices),
         "service_coverage": dict(case.service_coverage),
         "last_known_service_faults": list(case.last_known_service_faults),
+        "earlier_findings": earlier_findings(case),
+        "earlier_port_findings": dict(case.earlier_port_findings),
         "llm_usage": dict(case.llm_usage),
         "mcp_calls": dict(case.mcp_calls),
     }

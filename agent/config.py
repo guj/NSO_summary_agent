@@ -63,7 +63,6 @@ class Settings:
     prometheus_job: str
     prometheus_instance: str
     prompts_dir: Path
-    topology_force_update: bool
     interface_equivalences_file: Path | None
     iface_troubleshoot_max_tool_rounds: int
     iface_troubleshoot_disable: bool
@@ -298,8 +297,6 @@ def load_settings(*, require_llm_key: bool = True) -> Settings:
         prometheus_job=os.environ.get("PROMETHEUS_JOB", "nso-summary"),
         prometheus_instance=os.environ.get("PROMETHEUS_INSTANCE", "default"),
         prompts_dir=root / "prompts",
-        topology_force_update=os.environ.get("TOPOLOGY_FORCE_UPDATE", "0")
-        in ("1", "true", "yes"),
         interface_equivalences_file=_parse_optional_path(
             os.environ.get("INTERFACE_EQUIVALENCES_FILE")
         ),

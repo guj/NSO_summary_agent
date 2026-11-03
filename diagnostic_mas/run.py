@@ -450,9 +450,11 @@ async def _run_after_accounting(
         from diagnostic_mas.drill import previous_findings
 
         from diagnostic_mas.port_counters import _saved as saved_port_counters
+        from diagnostic_mas.port_investigation import previous_port_findings
 
         previous_case = load_previous_case(diagnostic_mas_state_dir(settings))[0]
         case.previous_findings = previous_findings(previous_case)
+        case.previous_port_findings = previous_port_findings(previous_case)
         case.previous_port_counters = saved_port_counters(previous_case or {})
         expected_isis_edges = None
         if run_isis:

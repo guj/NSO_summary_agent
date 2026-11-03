@@ -1,4 +1,4 @@
-"""LLDP at both ends of an IS-IS adjacency that is down although both routers answered.
+"""LLDP at both ends of an IS-IS adjacency that is down at a router that answered.
 
 Read once per scan, after the spines and before the optics: each end router's IOS-XR
 ``show lldp neighbors``. An entry on router X records frames X received from the listed

@@ -2,13 +2,11 @@ import json
 from pathlib import Path
 
 from nso_facts.topology.iface_equiv import (
-    build_suggested_equivalences_draft,
     compact_box_list,
     find_live_candidates,
     interface_port_address,
     load_interface_equivalences,
     resolve_equivalence,
-    write_suggested_equivalences_draft,
 )
 
 
@@ -96,38 +94,3 @@ def test_load_and_resolve_equivalences(tmp_path: Path):
 def test_load_missing_file_returns_empty(tmp_path: Path):
     assert load_interface_equivalences(tmp_path / "nope.json") == {}
     assert load_interface_equivalences(None) == {}
-
-
-def test_build_and_write_suggested_draft(tmp_path: Path):
-    issues = [
-        {
-            "code": "config_live_mismatch",
-            "device": "renc",
-            "nso": "FourHundredGigE0/0/0/32",
-            "candidates": ["Hu0/0/0/32"],
-            "kind": "type_change",
-            "confirmed": False,
-        },
-        {
-            "code": "config_live_mismatch",
-            "device": "uky",
-            "nso": "FourHundredGigE0/0/0/34",
-            "candidates": [],
-            "kind": "missing",
-            "confirmed": False,
-        },
-        {
-            "code": "config_live_mismatch",
-            "device": "renc",
-            "nso": "already",
-            "candidates": ["Hu1"],
-            "confirmed": True,
-        },
-    ]
-    draft = build_suggested_equivalences_draft(issues)
-    assert len(draft["equivalences"]) == 2
-    path = tmp_path / "to_confirm.interface-equivalence.json"
-    assert write_suggested_equivalences_draft(path, issues) == 2
-    loaded = json.loads(path.read_text(encoding="utf-8"))
-    assert loaded["equivalences"][0]["box"] == "Hu0/0/0/32"
-    assert loaded["equivalences"][1]["box"] == []

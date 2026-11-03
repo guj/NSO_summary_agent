@@ -122,22 +122,6 @@ def peer_up_total(device: str, edges: list) -> tuple[int, int]:
     return up, len(mine)
 
 
-def route_summaries(topology: Any) -> dict[str, dict[str, Any]]:
-    if not isinstance(topology, dict):
-        return {}
-    operational = topology.get("operational")
-    if not isinstance(operational, dict):
-        return {}
-    summary = operational.get("route_summary")
-    if not isinstance(summary, dict):
-        return {}
-    return {
-        str(device): entry
-        for device, entry in summary.items()
-        if isinstance(entry, dict)
-    }
-
-
 def unmapped_by_device(
     topology: Any,
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
@@ -182,7 +166,6 @@ def devices_in_topology(topology: Any) -> set[str]:
         devices_in_edges(phys, under, route)
         | set(unmapped_bgp)
         | set(unmapped_isis)
-        | set(route_summaries(topology))
     )
 
 
@@ -317,7 +300,6 @@ def fleet_inventory_review_count(topology: Any, fleet_sync: Any = None) -> int:
         devices_in_edges(phys, under, route)
         | set(unmapped_bgp)
         | set(unmapped_isis)
-        | set(route_summaries(topology))
     )
     mismatch = mismatch_by_edge_id(topology)
     return sum(

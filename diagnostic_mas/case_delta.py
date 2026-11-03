@@ -184,6 +184,20 @@ def _services_no_longer_present(older: dict[str, Any], newer: dict[str, Any]) ->
     }
 
 
+def _services_new_since(older: dict[str, Any], newer: dict[str, Any]) -> set[str]:
+    """Services the newer scan lists that a full older scan of their type did not.
+
+    Created since, so a fault on one is no regression. Only claimed when the
+    older run was unfiltered and collected that type; otherwise it may just
+    have been a narrower scan.
+    """
+    collected = _collected_types(older)
+    if collected is None:
+        return set()
+    before = {name for name, _kind, _removed in _service_records(older)}
+    return {name for name, kind in _service_inventory(newer).items() if name not in before and kind in collected}
+
+
 # Routing protocol (spine role) -> the layer its collection errors are filed under.
 _ROUTING_LAYERS = {"bgp": "routing", "isis": "underlay"}
 
@@ -490,7 +504,8 @@ def _interfaces_lost(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[
     Only a recorded down or admin-down state counts. An interface missing from
     the newer list, or without a collected state, is not evidence of a fault.
     ``services_deleted`` counts the older run's services on the port when every
-    one of them is gone from the newer run; otherwise it is 0.
+    one of them is gone from the newer run and no newer service uses the port;
+    otherwise it is 0.
     ``services_down_before`` counts those the older run itself found Down: the
     port can fail after that run read it up, and the run then reports the loss.
     """
@@ -498,6 +513,7 @@ def _interfaces_lost(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[
 
     gone = set(_services_no_longer_present(older, newer))
     riders = _services_on_ports(older)
+    riders_now = _services_on_ports(newer)
     down_before = {name for name, finding in _service_findings(older).items()
                    if finding.get("status") == "down" and finding.get("complete") is not False}
     now = _interface_states(newer)
@@ -512,10 +528,12 @@ def _interfaces_lost(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[
         if dot and unit.isdigit() and (device, parent) in lost:
             rows[device, parent]["sub_interfaces"] += 1   # the parent sorts first
         else:
-            on_port = riders.get((device, _parent_port(interface)), set())
+            port = (device, _parent_port(interface))
+            on_port = riders.get(port, set())
+            deleted = on_port and on_port <= gone and not riders_now.get(port)
             rows[device, interface] = {"device": device, "interface": interface,
                                        "now": state, "sub_interfaces": 0,
-                                       "services_deleted": len(on_port) if on_port and on_port <= gone else 0,
+                                       "services_deleted": len(on_port) if deleted else 0,
                                        "services_down_before": len(on_port & down_before),
                                        "services_on_port": len(on_port)}
     return list(rows.values())
@@ -772,6 +790,68 @@ def _status_change_line(row: dict[str, str]) -> str:
     return f"`{name}` — {label.get(row['was'], row['was'])} → {label.get(row['now'], row['now'])}"
 
 
+# An end must have received at least this many prefixes before a drop is a lead: smaller
+# tables change whenever an owner adds or deletes a service.
+_PREFIX_FLOOR = 1000
+
+
+def _prefix_drop(was: Any, now_state: Any, before: Any, now: Any, up_before: Any, up_now: Any) -> dict[str, Any] | None:
+    """An end Established in both scans that now receives fewer than half the prefixes it did; None otherwise."""
+    from diagnostic_mas.port_counters import _age_seconds
+
+    if not (was == now_state == "established" and isinstance(before, int) and isinstance(now, int)):
+        return None
+    if before < _PREFIX_FLOOR or now * 2 >= before:
+        return None
+    age_before, age_now = _age_seconds(up_before), _age_seconds(up_now)
+    # A shorter Up/Down than in the previous scan: the session went down and came back in between.
+    reset = age_before is not None and age_now is not None and age_now < age_before
+    return {"before": before, "now": now, "up_down": up_now, "reset": reset}
+
+
+def _sessions_receiving_fewer_prefixes(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[str, Any]]:
+    """BGP sessions still Established whose end now receives far fewer prefixes, largest drop first.
+
+    A lead on a working session, like a link gaining errors: no service status rests on it.
+    A session that is no longer Established is reported as lost instead.
+    """
+    rows: list[dict[str, Any]] = []
+    then_edges = _routing_edges(older, "bgp") or {}
+    for edge_id, state in (_routing_edges(newer, "bgp") or {}).items():
+        then, devices = then_edges.get(edge_id), _session_devices(edge_id)
+        if not then or not devices:
+            continue
+        for side, device, peer in (("local", *devices), ("remote", *devices[::-1])):
+            found = _prefix_drop(then.get(side), state.get(side),
+                                 (then.get("prefixes") or {}).get(side), (state.get("prefixes") or {}).get(side),
+                                 (then.get("up_down") or {}).get(side), (state.get("up_down") or {}).get(side))
+            if found:
+                rows.append({"device": device, "peer": peer, **found})
+    then_rows = _unmatched_rows(older) or {}
+    for (device, address), row in (_unmatched_rows(newer) or {}).items():
+        then = then_rows.get((device, address))
+        found = then and _prefix_drop(then.get("state"), row.get("state"), then.get("prefixes"), row.get("prefixes"),
+                                      then.get("up_down"), row.get("up_down"))
+        if found:
+            rows.append({"device": device, "address": address, "remote_as": row.get("remote_as"),
+                         "outside": bool(row.get("outside")), **found})
+    return sorted(rows, key=lambda row: (row["now"] - row["before"], row["device"]))
+
+
+def prefix_drop_line(row: dict[str, Any]) -> str:
+    """``wash-data-sw`` from ``star-data-sw``: 515,490 → 0 prefixes (−100%); session up 34w3d."""
+    if row.get("peer"):
+        source = f"`{row['peer']}`"
+    else:
+        source = (f"{'outside peer' if row.get('outside') else 'neighbor'} {row.get('address')}"
+                  + (f" (AS {row['remote_as']})" if row.get("remote_as") else ""))
+    drop = f"{(row['before'] - row['now']) / row['before'] * 100:.1f}".rstrip("0").rstrip(".")
+    up = (f"session re-established since the previous scan (up {row['up_down']})" if row.get("reset")
+          else f"session up {row['up_down']}" if row.get("up_down") else "")
+    return (f"`{row['device']}` from {source}: {row['before']:,} → {row['now']:,} prefixes (−{drop}%)"
+            + (f"; {up}" if up else ""))
+
+
 def _links_gaining_errors(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[str, Any]]:
     from diagnostic_mas.port_counters import links_gaining_errors
 
@@ -952,7 +1032,7 @@ def compute_case_delta(
     - newly missing evidence
     - persistent problems
     Plus legacy issue lists (new_problems / recovered / out_of_scope) and
-    coverage_changes for the CLI.
+    coverage_changes.
     """
     old_probs = problem_map(older)
     new_probs = problem_map(newer)
@@ -1120,6 +1200,7 @@ def compute_case_delta(
             row["service_type"] = service_type
         newly_failed_services.append(row)
 
+    new_services = _services_new_since(older, newer)
     for name, row in new_dp.items():
         st = str(row.get("status") or "").lower()
         if st not in _FAULT_DP:
@@ -1133,6 +1214,8 @@ def compute_case_delta(
                 detail=(
                     f"dataplane {prev_st or 'unchecked'} → {st}"
                     if prev is not None
+                    else f"dataplane={st}; service not in the previous scan"
+                    if name in new_services
                     else f"dataplane={st} (new)"
                 ),
                 service_type=str(row.get("service_type") or "") or None,
@@ -1206,6 +1289,7 @@ def compute_case_delta(
         ],
         "status_changed_on_unchanged_checks": _status_changed_on_unchanged_checks(older, newer),
         "links_gaining_errors": _links_gaining_errors(older, newer),
+        "sessions_receiving_fewer_prefixes": _sessions_receiving_fewer_prefixes(older, newer),
         "routing_sessions_lost": _routing_sessions_lost(older, newer) + _outside_sessions_lost(older, newer),
         "routing_sessions_regained": _routing_sessions_regained(older, newer),
         "adjacencies_changed_between_scans": _adjacencies_changed_between(older, newer),
@@ -1235,6 +1319,8 @@ def delta_has_operational_changes(delta: dict[str, Any]) -> bool:
         return True
     if delta.get("status_changed_on_unchanged_checks") or delta.get("links_gaining_errors"):
         return True
+    if delta.get("sessions_receiving_fewer_prefixes"):
+        return True
     if delta.get("service_faults_cleared"):
         return True
     if delta.get("services_no_longer_present"):
@@ -1246,135 +1332,6 @@ def delta_has_operational_changes(delta: dict[str, Any]) -> bool:
     if delta.get("coverage_changes"):
         return True
     return False
-
-
-def format_case_delta(
-    delta: dict[str, Any],
-    *,
-    older_label: str = "older",
-    newer_label: str = "newer",
-) -> str:
-    """Full CLI delta report (``nso-diagnostic-delta``)."""
-    lines = [
-        f"# Diagnostic delta ({older_label} → {newer_label})",
-        "",
-    ]
-    for note in delta.get("notes") or []:
-        lines.append(f"*Note: {note}*")
-        lines.append("")
-
-    def _section(title: str, items: list[Any], empty: str) -> None:
-        lines.append(f"## {title}")
-        if not items:
-            lines.append(empty)
-        else:
-            for item in items:
-                if isinstance(item, dict) and "service" in item and "from" in item:
-                    lines.append(
-                        f"- {item['service']}: {item['from']} → {item['to']}"
-                    )
-                elif isinstance(item, dict) and item.get("kind") in {
-                    "coverage_gap",
-                    "incomplete_dig",
-                    "collection_gap",
-                }:
-                    lines.append(
-                        f"- {item.get('subject')}: {item.get('detail')}"
-                    )
-                elif isinstance(item, dict) and "service" in item:
-                    st = item.get("status") or "?"
-                    detail = item.get("detail") or ""
-                    bit = f"- {item['service']} ({st})"
-                    if detail:
-                        bit += f": {detail}"
-                    lines.append(bit)
-                elif isinstance(item, dict):
-                    lines.append(f"- {_issue_line(item)}")
-                else:
-                    lines.append(f"- {item}")
-        lines.append("")
-
-    _section(
-        "Newly detected service faults",
-        list(delta.get("newly_failed_services") or []),
-        "None",
-    )
-    _section(
-        "Recovered devices",
-        list(delta.get("recovered_devices") or []),
-        "None",
-    )
-    _section(
-        "Newly missing evidence",
-        list(delta.get("newly_missing_evidence") or []),
-        "None",
-    )
-    if delta.get("routing_sessions_lost"):
-        _section(
-            "Routing sessions up before, not up now",
-            [_routing_session_line(row) for row in delta["routing_sessions_lost"]],
-            "None",
-        )
-    if delta.get("routing_sessions_regained"):
-        _section(
-            "Routing sessions not up before, up now",
-            [_routing_session_line(row) for row in delta["routing_sessions_regained"]],
-            "None",
-        )
-    if delta.get("adjacencies_changed_between_scans"):
-        _section(
-            "IS-IS adjacencies up in both scans, last changed after the previous scan began",
-            [_adjacency_change_line(row) for row in delta["adjacencies_changed_between_scans"]],
-            "None",
-        )
-    if delta.get("service_faults_cleared"):
-        _section(
-            "Service faults no longer observed",
-            [_cleared_line(row) for row in delta["service_faults_cleared"]],
-            "None",
-        )
-    if delta.get("interfaces_lost"):
-        _section(
-            "Interfaces up before, down now",
-            _interface_lines(delta["interfaces_lost"]),
-            "None",
-        )
-    if delta.get("services_no_longer_present"):
-        _section(
-            "Services no longer present",
-            [f"{row['service_type']}/{row['service']}"
-             for row in delta["services_no_longer_present"]],
-            "None",
-        )
-    _section(
-        "New problems",
-        list(delta.get("new_problems") or []),
-        "None",
-    )
-    _section(
-        "Recovered problems",
-        list(delta.get("recovered") or []),
-        "None",
-    )
-    _section(
-        "Persistent problems",
-        list(delta.get("persistent") or []),
-        "None",
-    )
-    _section(
-        "Coverage changes",
-        list(delta.get("coverage_changes") or []),
-        "None",
-    )
-    out_of_scope = list(delta.get("out_of_scope") or [])
-    if out_of_scope:
-        _section(
-            "Out of scope (not in newer coverage; not counted as recovered)",
-            out_of_scope,
-            "None",
-        )
-    lines.extend(format_last_known_faults(list(delta.get("last_known_service_faults") or [])))
-    return "\n".join(lines).rstrip() + "\n"
 
 
 def format_changes_since_previous(
@@ -1505,6 +1462,15 @@ def format_changes_since_previous(
         if extra > 0:
             lines.append(f"- …and {extra} more")
         lines.append("")
+    fewer = list(delta.get("sessions_receiving_fewer_prefixes") or [])
+    if fewer:
+        # A lead on a session that still works, like a link gaining errors.
+        lines.append("**BGP sessions still Established but receiving far fewer prefixes:**")
+        lines.extend(f"- {prefix_drop_line(row)}" for row in fewer[:persistent_limit])
+        extra = len(fewer) - persistent_limit
+        if extra > 0:
+            lines.append(f"- …and {extra} more")
+        lines.append("")
     interface_lines = _interface_lines(list(delta.get("interfaces_lost") or []))
     if interface_lines:
         lines.append("**Interfaces up in the previous run, down now:**")
@@ -1570,17 +1536,6 @@ def format_changes_since_previous(
     return lines
 
 
-def compare_run_dirs(older: Path | str, newer: Path | str) -> str:
-    older_p = Path(older)
-    newer_p = Path(newer)
-    delta = compute_case_delta(load_case_dict(older_p), load_case_dict(newer_p))
-    return format_case_delta(
-        delta,
-        older_label=older_p.name,
-        newer_label=newer_p.name,
-    )
-
-
 def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None:
     """Small delta payload for the summary LLM (no full issue dumps)."""
     if delta is None:
@@ -1611,8 +1566,13 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
     changed = [_adjacency_change_line(row).replace("`", "")
                for row in delta.get("adjacencies_changed_between_scans") or []]
     interfaces = list(delta.get("interfaces_lost") or [])
-    cleared = [row["service"] for row in delta.get("service_faults_cleared") or []]
+    cleared = [f"{row['service']} (was {row['was']})" if row.get("was") else row["service"]
+               for row in delta.get("service_faults_cleared") or []]
     new = list(delta.get("new_problems") or [])
+    from diagnostic_mas.open_faults import format_open_faults
+
+    open_faults = list(delta.get("open_faults") or [])
+    fewer = [prefix_drop_line(row).replace("`", "") for row in delta.get("sessions_receiving_fewer_prefixes") or []]
     links: list[str] = []
     if delta.get("links_gaining_errors"):
         from diagnostic_mas.port_counters import gain_lines
@@ -1661,6 +1621,13 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
             "note": ("Up now; gained errors or changed state since the previous scan. A lead on a "
                      "working link, not a fault: no service status rests on it."),
         }} if links else {}),
+        **({"sessions_receiving_fewer_prefixes": {
+            "count": len(fewer),
+            "sessions": fewer[:10],
+            "note": ("Established in both scans; this end received at least 1,000 prefixes in the previous "
+                     "scan and fewer than half now. A lead on a working session, not a fault: no service "
+                     "status rests on it."),
+        }} if fewer else {}),
         **({"services_no_longer_present": {
             "count": len(gone),
             "services": gone[:20],
@@ -1673,6 +1640,15 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
             :20
         ],
         "last_known_service_faults": list(delta.get("last_known_service_faults") or [])[:20],
+        **({"open_faults": {
+            "count": len(open_faults),
+            "services": sum(len(group["services"]) for group in open_faults),
+            "lines": [line.removeprefix("- ").replace("`", "")
+                      for line in format_open_faults(open_faults, limit=20)],
+            "note": ("The faults still open, one line per port, cut-off device or shared reason that "
+                     "explains them, else per service: last_known_service_faults grouped as the "
+                     "report lists them. count is the number of lines."),
+        }} if open_faults else {}),
         "regression_policy": "No proven regression from status changes alone; comparable checks are required. Failure onset is unverified.",
         "persistent_count": len(delta.get("persistent") or []),
         "persistent_sample": _trim_issues(list(delta.get("persistent") or [])),

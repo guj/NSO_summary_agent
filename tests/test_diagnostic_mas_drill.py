@@ -7,7 +7,6 @@ import json
 import pytest
 
 from diagnostic_mas.case import Budget, CaseFile, add_evidence, open_issue
-from diagnostic_mas.deep_checks import DRILL_ALLOWLIST
 
 
 def test_drill_allowlist_has_expected_tools():
@@ -1467,7 +1466,6 @@ def _earlier_scan() -> dict:
 
 def test_the_previous_scans_routing_finding_reaches_the_drill_as_a_lead():
     from diagnostic_mas.drill import previous_findings, prior_exploration_for_issue
-    from diagnostic_mas.state_paths import case_to_dict
 
     carried = previous_findings(_earlier_scan())
     assert list(carried) == [SALT_SEAT]                                  # the latest per issue, routing only
@@ -1485,5 +1483,119 @@ def test_the_previous_scans_routing_finding_reaches_the_drill_as_a_lead():
     other = open_issue(case, code="session_down", message="BGP down", evidence_ids=[], layer="routing",
                        edge_id="bgp:10.0.0.1:10.0.0.2:a-data-sw:b-data-sw")
     assert "previous_scan_finding" not in prior_exploration_for_issue(case, next(i for i in case.issues if i["id"] == other))
-    assert "previous_findings" not in case_to_dict(case)                # never saved with this scan
     assert previous_findings(None) == {}
+
+
+def test_drill_slots_go_first_to_routing_issues_the_previous_scan_did_not_investigate():
+    from diagnostic_mas.drill import select_drill_issues
+
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0, max_drill_issues=2, max_tools_per_drill=12))
+    amst_newy = "isis:amst-data-sw:HundredGigE0/0/0/23.2030:newy-data-sw:FourHundredGigE0/0/0/60.4030"
+    cern_wash = "isis:cern-data-sw:FourHundredGigE0/0/0/26.2040:wash-data-sw:HundredGigE0/0/0/19.2040"
+    open_issue(case, code="unidirectional_adjacency", message="IS-IS adjacency down", evidence_ids=[],
+               severity="high", layer="underlay", devices=["salt-data-sw", "seat-data-sw"], edge_id=SALT_SEAT)
+    for edge, devices in ((amst_newy, ["amst-data-sw", "newy-data-sw"]), (cern_wash, ["cern-data-sw", "wash-data-sw"])):
+        open_issue(case, code="configured_no_adjacency", message="IS-IS adjacency down", evidence_ids=[],
+                   severity="high", layer="underlay", devices=devices, edge_id=edge)
+
+    def picked(limit=2):
+        return [i["edge_id"] for i in select_drill_issues(case, limit=limit)]
+
+    assert picked() == [SALT_SEAT, amst_newy]                     # no earlier finding: listing order decides
+    case.previous_findings = {SALT_SEAT: {"cause": "salt's VLAN 3000 sub-interface receives nothing"}}
+    assert picked() == [amst_newy, cern_wash]                     # the slots go to what the last scan left alone
+    assert picked(limit=3)[-1] == SALT_SEAT                       # still drilled when a slot is left over
+
+
+def test_a_routing_issue_without_a_device_list_still_outranks_one_the_previous_scan_investigated():
+    from diagnostic_mas.drill import select_drill_issues
+
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0, max_drill_issues=2, max_tools_per_drill=12))
+    star_cape = "bgp:10.0.0.1:10.0.0.2:star-data-sw:cape-data-sw"
+    star_cien = "bgp:10.0.0.1:10.0.0.3:star-data-sw:cien-data-sw"
+    open_issue(case, code="unidirectional_adjacency", message="IS-IS adjacency down", evidence_ids=[],
+               severity="high", layer="underlay", devices=["salt-data-sw", "seat-data-sw"], edge_id=SALT_SEAT)
+    for edge in (star_cape, star_cien):              # BGP session Issues carry no device list
+        open_issue(case, code="configured_no_session", message="BGP down", evidence_ids=[],
+                   severity="high", layer="routing", edge_id=edge)
+
+    assert [i["edge_id"] for i in select_drill_issues(case, limit=2)] == [SALT_SEAT, star_cape]
+    case.previous_findings = {SALT_SEAT: {"cause": "salt's VLAN 3000 sub-interface receives nothing"}}
+    assert [i["edge_id"] for i in select_drill_issues(case, limit=2)] == [star_cape, star_cien]
+
+
+# Drill slots rotate, so a routing finding has to outlast the scans that leave its Issue alone.
+SCAN_24, SCAN_25, SCAN_26 = "20261030T221052Z", "20261031T181418Z", "20261101T120000Z"
+STAR_CIEN = "bgp:10.0.0.1:10.0.0.3:star-data-sw:cien-data-sw"
+
+
+def test_a_routing_finding_is_kept_until_a_drill_concludes_on_its_issue_again():
+    from diagnostic_mas.drill import previous_findings, prior_exploration_for_issue
+    from diagnostic_mas.state_paths import case_to_dict
+
+    recovered = "bgp:10.0.0.1:10.0.0.2:star-data-sw:cape-data-sw"
+    scan_24 = {"run_id": SCAN_24, "evidence": [
+        {"kind": "drill_finding", "payload": {"issue_edge_id": SALT_SEAT, "cause": "salt receives nothing",
+                                              "confidence": "medium"}},
+        {"kind": "drill_finding", "payload": {"issue_edge_id": recovered, "cause": "no route to cape"}},
+    ]}
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    case.previous_findings = previous_findings(scan_24)
+    for edge in (SALT_SEAT, STAR_CIEN):
+        open_issue(case, code="session_down", message="down", evidence_ids=[], layer="routing", edge_id=edge)
+    add_evidence(case, {"kind": "drill_finding", "payload": {"issue_edge_id": STAR_CIEN, "cause": "no route to cien"}})
+
+    saved = case_to_dict(case)["earlier_findings"]
+    assert saved == {SALT_SEAT: {"cause": "salt receives nothing", "confidence": "medium", "run_id": SCAN_24}}
+
+    carried = previous_findings({**case_to_dict(case), "run_id": SCAN_25})
+    assert carried[SALT_SEAT]["run_id"] == SCAN_24                      # still dated by the scan that concluded it
+    assert carried[STAR_CIEN] == {"cause": "no route to cien", "run_id": SCAN_25}
+    lead = prior_exploration_for_issue(case, case.issues[0])["previous_scan_finding"]
+    assert "30 Oct" in lead["note"] and "run_id" not in lead
+
+
+def test_drill_slots_go_to_the_routing_issue_concluded_longest_ago():
+    from diagnostic_mas.drill import select_drill_issues
+
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0, max_drill_issues=2, max_tools_per_drill=12))
+    star_cape = "bgp:10.0.0.1:10.0.0.2:star-data-sw:cape-data-sw"
+    salt_cien = "bgp:10.0.0.4:10.0.0.3:salt-data-sw:cien-data-sw"
+    open_issue(case, code="unidirectional_adjacency", message="IS-IS adjacency down", evidence_ids=[],
+               severity="high", layer="underlay", devices=["salt-data-sw", "seat-data-sw"], edge_id=SALT_SEAT)
+    for edge in (star_cape, STAR_CIEN, salt_cien):
+        open_issue(case, code="configured_no_session", message="BGP down", evidence_ids=[],
+                   severity="high", layer="routing", edge_id=edge)
+    open_issue(case, code="collection_error", message="brist-data-sw: southbound locked", evidence_ids=[],
+               severity="medium", layer="routing")            # never carries a finding
+
+    def concluded(run_id, *edges):
+        case.previous_findings.update({edge: {"cause": "a cause", "run_id": run_id} for edge in edges})
+
+    def picked():
+        return [i["edge_id"] for i in select_drill_issues(case, limit=2)]
+
+    concluded(SCAN_24, SALT_SEAT, star_cape)
+    concluded(SCAN_25, STAR_CIEN)
+    assert picked() == [SALT_SEAT, salt_cien]       # the last scan's waits; never concluded on before 30 Oct's
+    concluded(SCAN_26, salt_cien, SALT_SEAT)
+    assert picked() == [star_cape, STAR_CIEN]       # the oldest first, still ahead of the collection error
+
+
+def test_drill_finding_keeps_its_headline():
+    from diagnostic_mas.drill import parse_drill_finding
+
+    base = {"observed": "o", "cause": "c"}
+    assert parse_drill_finding(base | {"headline": "  Cien's loopback is\nmissing from IS-IS. "})["headline"] == (
+        "Cien's loopback is missing from IS-IS.")
+    assert "headline" not in parse_drill_finding(base | {"headline": "  "})
+    assert "headline" not in parse_drill_finding(base)
+
+
+def test_a_routing_findings_headline_is_carried_to_the_next_scan():
+    from diagnostic_mas.drill import previous_findings
+
+    scan = {"run_id": "20261102T165258Z", "evidence": [{"kind": "drill_finding", "payload": {
+        "issue_edge_id": SALT_SEAT, "cause": "a long cause", "headline": "Salt drops seat's hellos."}}]}
+
+    assert previous_findings(scan)[SALT_SEAT]["headline"] == "Salt drops seat's hellos."

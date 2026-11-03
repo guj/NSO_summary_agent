@@ -1,7 +1,7 @@
 from agent.report_devices import format_devices_section
 
 
-def _topo(physical, underlay, routing, *, issues=None, route_summary=None):
+def _topo(physical, underlay, routing, *, issues=None):
     operational = {
         "layers": {
             "physical": {"edges": physical, "summary": {}},
@@ -11,8 +11,6 @@ def _topo(physical, underlay, routing, *, issues=None, route_summary=None):
     }
     if issues is not None:
         operational["issues"] = issues
-    if route_summary is not None:
-        operational["route_summary"] = route_summary
     return {"operational": operational}
 
 
@@ -165,14 +163,10 @@ def test_devices_review_with_inventory_and_operational_down():
                 ),
             },
         ],
-        route_summary={"sw1": {"total": 446595, "sources": {"bgp 398900": 1}}},
     )
     text = format_devices_section(topology)
     assert "Overall: Inventory Review" in text
     assert "interface inventory mismatch" in text
-    assert "Routes" in text
-    assert "446,595" in text
-    assert "bgp 398900: 1" in text
     assert "Exceptions" in text
     assert "Inventory mismatch:" in text
     assert "Fo0/0/0/32 → Hu0/0/0/32  [suggested]" in text

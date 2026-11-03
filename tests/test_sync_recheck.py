@@ -77,3 +77,81 @@ async def test_error_false_is_unknown_and_services_group_once():
     assert _sync_prose("error").startswith("Unknown")
     assert parse_in_sync({"status":"success","data":{"in_sync":False,"result":"out-of-sync","outcome":"failed"}}) is False
     assert parse_in_sync({"status":"success","data":{"in_sync":True,"result":"in-sync"}}) is True
+
+
+@pytest.mark.asyncio
+async def test_a_quarantined_device_is_not_retried_and_its_audit_says_so(monkeypatch):
+    calls=[]
+    async def call(client, tool, params):
+        calls.append(params['device_name'])
+        return {'status':'success','data':{'in_sync':False,'result':'error','outcome':'failed'}}
+    monkeypatch.setattr('nso_facts.mcp_client.is_device_quarantined', lambda device: device=='star')
+    effective,audit=await recheck_sync(None,{'star':'error','cien':'error'},['star','cien'],call=call)
+    assert calls==['cien']
+    assert effective['star']=='error'
+    assert audit['star']['skipped']=='device quarantined this run' and not audit['star']['resolved']
+    assert 'skipped' not in audit['cien']
+
+
+_STAR_REFUSED = ("check_isis_adjacencies: RESTCONF 500: Failed to connect to device star-data-sw: connection refused: "
+                 "NEDCOM CONNECT: authenticate: Socket closed, server allowed: [ ] in new state")
+_CIEN_TIMED_OUT = ("get_hardware_health: RESTCONF 404: Failed to connect to device cien-data-sw: connection refused: "
+                   "Failed to connect: Connect timed out")
+
+
+def _sync_failed_case(monkeypatch):
+    """test32's shape: NSO could not connect to cien (retried) or star (quarantined first); utah answered but its sync stayed unread."""
+    from diagnostic_mas.case import CaseFile, Budget, add_evidence
+    from diagnostic_mas.ingest import ingest_quarantined_devices
+    sync = {"cien-data-sw":"error","star-data-sw":"error","utah-data-sw":"error"}
+    services = {}
+    for name, devices in [("a",["star-data-sw"]),("b",["star-data-sw","cien-data-sw"]),("c",["cien-data-sw"]),
+                          ("d",["utah-data-sw","star-data-sw"]),("e",["utah-data-sw"])]:
+        services["l2sts/"+name] = {"name":name,"service_type":"l2sts","devices":devices,
+            "device_sync":{d:sync[d] for d in devices},"system_status":"unknown","status":"unknown"}
+    unresolved = {"fleet_result":"error","effective_result":"error","resolved":False}
+    audit = {"cien-data-sw":{**unresolved,"retry_result":{"status":"success","data":{"in_sync":False,"result":"error"}}},
+             "star-data-sw":{**unresolved,"retry_result":None,"skipped":"device quarantined this run"},
+             "utah-data-sw":{**unresolved,"retry_result":{"status":"success","data":{"in_sync":False,"result":"error"}}}}
+    case = CaseFile(budget=Budget(0,0))
+    add_evidence(case, {"kind":"spine","role":"service","layer":"services",
+                        "payload":{"extra":{"services":services,"sync_rechecks":audit}}})
+    monkeypatch.setattr("nso_facts.mcp_client.quarantined_devices",
+                        lambda: {"cien-data-sw":_CIEN_TIMED_OUT,"star-data-sw":_STAR_REFUSED})
+    ingest_quarantined_devices(case)
+    return case
+
+
+def test_a_skipped_sync_retry_is_not_reported_as_run(monkeypatch):
+    from diagnostic_mas.report import render_report
+    from diagnostic_mas.sync_failure_report import format_sync_failure_group
+    case = _sync_failed_case(monkeypatch)
+
+    report = render_report(case)
+    group = "\n".join(format_sync_failure_group(case))
+
+    assert "- star-data-sw: fleet `error` → retry skipped (device quarantined this run); Sync Unknown retained." in report
+    assert "- cien-data-sw: fleet `error` → retry inconclusive; Sync Unknown retained." in report
+    assert "(the retry was skipped on `star-data-sw`, quarantined this run)" in group
+
+
+def test_devices_nso_could_not_connect_to_get_connect_not_check_sync(monkeypatch):
+    from diagnostic_mas.operator_report import format_followup_operator
+    from diagnostic_mas.sync_failure_report import format_sync_failure_group
+    case = _sync_failed_case(monkeypatch)
+
+    group = "\n".join(format_sync_failure_group(case))
+    follow = "\n".join(format_followup_operator(case))
+
+    assert "devices device cien-data-sw connect" in group and "devices device star-data-sw connect" in group
+    assert "devices device utah-data-sw check-sync" in group
+    assert "star-data-sw check-sync" not in group and "cien-data-sw check-sync" not in group
+    # Services behind a device NSO could not reach are counted there; the rest with check-sync.
+    assert ("Check NSO's management connection to `cien-data-sw` and `star-data-sw` to settle 4 services "
+            "left Unknown: NSO's own attempts to connect to these devices failed, so their sync could not be read; "
+            "`devices device cien-data-sw connect`; `devices device star-data-sw connect` in the NSO CLI show "
+            "whether NSO can reach them; run `check-sync` once they connect. These are not confirmed outages.") in follow
+    assert "Resolve failed sync verification for 1 distinct services" in follow
+    assert "`devices device utah-data-sw check-sync`" in follow
+    assert "star-data-sw check-sync" not in follow
+    assert follow.count("management connection to `star-data-sw`") == 0

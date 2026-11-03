@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from diagnostic_mas.expand import expand_spine_devices
-from nso_facts.topology.routing import BgpNeighborConfig, BgpSessionObservation
+from nso_facts.topology.routing import BgpSessionObservation
 from nso_facts.topology.underlay import AdjacencyObservation
 
 

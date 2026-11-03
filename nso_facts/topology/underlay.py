@@ -11,8 +11,6 @@ from nso_facts.mcp_client import call_mcp, unwrap_mcp_data
 from nso_facts.topology.graph import (
     isis_edge_id,
     ordered_isis_endpoints,
-    summarize_operational_underlay,
-    summarize_static_underlay,
 )
 from nso_facts.topology.interfaces import (
     canonical_interface_name,
@@ -100,10 +98,10 @@ async def collect_static_underlay(
     physical_edges: list[dict[str, Any]] | None = None,
     expected_edges: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int]]:
-    """Build static IS-IS adjacency edges for topology.static.json.
+    """Build this scan's static IS-IS adjacency edges.
 
     IS-IS config in IOS-XR usually lists local interfaces only, not remote device
-    names. On static rebuild we optionally pair adjacencies using one live
+    names. We optionally pair adjacencies using one live
     `check_isis_adjacencies` pass (`seed_from_live`) and validate against
     config-enabled IS-IS interfaces. ``expected_edges`` (from an earlier scan)
     adds the adjacencies this pass no longer shows, when its answers and the
@@ -217,27 +215,34 @@ async def collect_operational_underlay(
     paired_ids = {edge["id"] for edge in paired}
     unread_now = _unread_devices(issues)
     for static_id, static_edge in static_by_id.items():
-        # A one-sided edge only stood for a far end that could not be read.
-        if static_id in paired_ids or _is_one_sided(static_edge):
+        meta = static_edge.get("meta") or {}
+        # A one-sided edge only stood for a far end that could not be read, unless an earlier scan expects it.
+        if static_id in paired_ids or (_is_one_sided(static_edge) and not meta.get("expected")):
             continue
         local = static_edge.get("local") or {}
         remote = static_edge.get("remote") or {}
         ends = [device for device in (local.get("device"), remote.get("device")) if device]
-        # A router that did not answer this pass proves nothing about the adjacency.
-        if unread_now & set(ends):
+        answered = [end for end in (local, remote) if end.get("device") not in unread_now]
+        # A router that did not answer this pass proves nothing about the adjacency; an expected
+        # one still goes down in the view of a router that answered and can name its end.
+        if len(answered) < 2 and not (meta.get("expected") and any(
+                end.get("interface") != UNREAD_INTERFACE for end in answered)):
             continue
-        operational.append(
-            {
-                "id": static_id,
-                "state": {
-                    "local": "unknown",
-                    "remote": "unknown",
-                    "status": "down",
-                    "detail": MISSING_DETAIL,
-                },
-            }
-        )
-        why = _EXPECTED_WHY.get((static_edge.get("meta") or {}).get("expected"), "seen up earlier in this scan")
+        why = _expected_why(meta)
+        if len(answered) == 2:
+            state = {"local": "unknown", "remote": "unknown", "status": "down", "detail": MISSING_DETAIL}
+        else:
+            unread = next(end for end in (local, remote) if end not in answered)
+            state = {side: NOT_LISTED if end in answered else "unknown"
+                     for side, end in (("local", local), ("remote", remote))}
+            state |= {"status": "down",
+                      "detail": f"not reported by {answered[0].get('device')}; {unread.get('device')} not read"}
+        operational.append({"id": static_id, "state": state})
+        if len(answered) == 2 and not _is_one_sided(static_edge):
+            message = (f"IS-IS adjacency down: {local.get('device')} {local.get('interface')} ↔ "
+                       f"{remote.get('device')} {remote.get('interface')} (both routers answered without it; {why})")
+        else:
+            message = f"IS-IS adjacency down: {_missing_view(local, unread_now)}; {_missing_view(remote, unread_now)} ({why})"
         issues.append(
             {
                 "severity": "high",
@@ -245,12 +250,7 @@ async def collect_operational_underlay(
                 "code": "configured_no_adjacency",
                 "edge_id": static_id,
                 "devices": ends,
-                "message": (
-                    f"IS-IS adjacency down: "
-                    f"{local.get('device')} {local.get('interface')} ↔ "
-                    f"{remote.get('device')} {remote.get('interface')} "
-                    f"(both routers answered without it; {why})"
-                ),
+                "message": message,
             }
         )
 
@@ -267,14 +267,6 @@ async def collect_operational_underlay(
             )
 
     return operational, issues, coverage
-
-
-def build_static_underlay_layer(edges: list[dict[str, Any]]) -> dict[str, Any]:
-    return {"edges": edges, "summary": summarize_static_underlay(edges)}
-
-
-def build_operational_underlay_layer(edges: list[dict[str, Any]]) -> dict[str, Any]:
-    return {"edges": edges, "summary": summarize_operational_underlay(edges)}
 
 
 def pair_adjacency_observations(
@@ -867,6 +859,37 @@ _EXPECTED_WHY = {
 MISSING_DETAIL = "not reported by either router; both answered"
 
 
+def _missing_view(end: dict[str, Any], unread: set[str]) -> str:
+    """One router's view of an expected adjacency it does not list, or that it was not read."""
+    device, interface = end.get("device"), end.get("interface")
+    if device in unread:
+        return f"{device} not read this scan"
+    return f"{device} does not list it" if interface == UNREAD_INTERFACE else f"{device} {interface} does not list it"
+
+
+def _expected_why(meta: dict[str, Any]) -> str:
+    """Why a missing expected adjacency is Down: where its expectation came from."""
+    if meta.get("expected") == "held":
+        stamp = re.fullmatch(r"\d{4}(\d{2})(\d{2})T\d{6}Z", str(meta.get("missing_since") or ""))
+        if stamp and 1 <= int(stamp[1]) <= 12:
+            return f"missing since {int(stamp[2])} {_MONTHS[int(stamp[1]) - 1]}"
+    elif meta.get("expected") == "previous_scan" and meta.get("listed_by"):
+        return f"listed as up by {meta['listed_by']} in the previous scan"
+    return _EXPECTED_WHY.get(meta.get("expected"), "seen up earlier in this scan")
+
+
+def _ends(edge: dict[str, Any]) -> list[tuple[Any, Any]]:
+    return [((edge.get(side) or {}).get("device"), (edge.get(side) or {}).get("interface"))
+            for side in ("local", "remote")]
+
+
+def _could_be(expected: dict[str, Any], live: dict[str, Any]) -> bool:
+    """A live adjacency between the same two routers that names no other interface at either end."""
+    ours, theirs = dict(_ends(expected)), dict(_ends(live))
+    return set(ours) == set(theirs) and len(ours) == 2 and all(
+        UNREAD_INTERFACE in {ours[d], theirs[d]} or interfaces_match(str(ours[d]), str(theirs[d])) for d in ours)
+
+
 def _missing_expected_edges(
     expected: list[dict[str, Any]],
     live: list[dict[str, Any]],
@@ -877,28 +900,35 @@ def _missing_expected_edges(
 ) -> list[dict[str, Any]]:
     """Expected adjacencies absent from this pass that its answers and NSO config still call for.
 
-    Both routers answered, neither interface is in another adjacency now (parallel
-    links, recabling), and IS-IS is still configured on both interfaces.
+    A router that answered can name its end; no end it names is in another adjacency
+    now (parallel links, recabling), and IS-IS is still configured there (at an end
+    not read, when NSO config lists any IS-IS for it). The other router answered
+    without it too, or was not read: then this is the answering end's view.
     """
     live_ids = {edge["id"] for edge in live}
-    live_ends = [((edge.get(side) or {}).get("device"), (edge.get(side) or {}).get("interface"))
-                 for edge in live for side in ("local", "remote")]
+    live_ends = [end for edge in live for end in _ends(edge)]
     out: list[dict[str, Any]] = []
     for edge in expected:
-        ends = [((edge.get(side) or {}).get("device"), (edge.get(side) or {}).get("interface"))
-                for side in ("local", "remote")]
-        if edge.get("id") in live_ids or not all(d and i and i != UNREAD_INTERFACE for d, i in ends):
+        ends = _ends(edge)
+        known = [(d, i) for d, i in ends if i != UNREAD_INTERFACE]
+        if edge.get("id") in live_ids or not all(d and i for d, i in ends):
             continue
-        if any(d not in device_names or d in unread for d, _ in ends):
+        if any(d not in device_names for d, _ in ends) or all(d in unread for d, _ in known):
             continue
         if any(d == live_d and live_i not in {None, UNREAD_INTERFACE} and interfaces_match(i, live_i)
-               for d, i in ends for live_d, live_i in live_ends):
+               for d, i in known for live_d, live_i in live_ends):
             continue
-        if not all(_interface_in_isis_set(i, isis_interfaces.get(d) or set()) for d, i in ends):
+        if any(_could_be(edge, other) for other in live):
             continue
+        if not all(_interface_in_isis_set(i, isis_interfaces.get(d) or set())
+                   for d, i in known if d not in unread or isis_interfaces.get(d)):
+            continue
+        held = bool(edge.get("held"))
+        meta = {"expected": "held" if held else "previous_scan",
+                **({"missing_since": edge["since"]} if held and edge.get("since") else {}),
+                **({"listed_by": edge["listed_by"]} if not held and edge.get("listed_by") else {})}
         out.append({"id": edge["id"], "type": "isis_adjacency", "local": edge["local"],
-                    "remote": edge["remote"],
-                    "meta": {"expected": "held" if edge.get("held") else "previous_scan"}})
+                    "remote": edge["remote"], "meta": meta})
     return out
 
 

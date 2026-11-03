@@ -46,46 +46,45 @@ Bottom-up troubleshooting order:
 | `physical` | 0 — Physical | Configured interfaces | `exec_show` (`interfaces brief`): admin and line-protocol state; `get_interface_health` when the device has no CLI (`exec_unavailable`) |
 | `underlay` | 1 — Underlay IGP | Configured IS-IS interfaces/neighbors | `check_isis_adjacencies`: neighbor state |
 | `routing` | 2 — Routing (BGP) | Configured BGP peers | `exec_show` (`bgp ipv4 unicast summary`): session state |
-| `services` | 3 — Services | Service endpoint pairs | Left empty by the diagnostic runner; service evidence lives in the case and is drawn in the report's service topology |
+| `services` | 3 — Services | Not built (empty) | Not built (empty); service evidence lives in the case and is drawn in the report's service topology |
 
 ## Topology structure
 
-Each run builds one structure with a **static** half (configuration) and an **operational** half (live state). The diagnostic runner assembles it from the run's evidence in `diagnostic_mas/device_health.py`:
+Each run builds one structure with a **static** half (configuration) and an **operational** half (live state). Nothing is cached between runs: each scan collects both halves afresh (`diagnostic_mas/coordinator.py`, `roles/isis.py`, `roles/bgp.py`) and the diagnostic runner assembles them from the run's evidence in `diagnostic_mas/device_health.py` (`topology_from_case`):
 
 ```json
 {
   "static": {
     "nodes": [{"id": "pe-den1", "site_id": null}],
     "layers": {
-      "physical": {"edges": [], "summary": {"total": 0}},
-      "underlay": {"edges": [], "summary": {"total": 0}},
-      "routing": {"edges": [], "summary": {"total": 0}},
-      "services": {"edges": [], "summary": {"total": 0}}
+      "physical": {"edges": [], "summary": {}},
+      "underlay": {"edges": [], "summary": {}},
+      "routing": {"edges": [], "summary": {}},
+      "services": {"edges": [], "summary": {}}
     }
   },
   "operational": {
     "layers": {
       "physical": {
         "edges": [],
-        "summary": {"total": 0, "up": 0, "down": 0, "degraded": 0, "unknown": 0}
+        "summary": {"total": 0, "up": 0, "down": 0, "admin-down": 0, "degraded": 0, "unknown": 0, "by_device": {}}
       },
       "underlay": {
         "edges": [],
-        "summary": {"total": 0, "up": 0, "down": 0, "unidirectional": 0, "unknown": 0}
+        "summary": {"total": 0, "up": 0, "down": 0, "unidirectional": 0, "unknown": 0, "by_device": {}}
       },
       "routing": {
         "edges": [],
-        "summary": {"total": 0, "up": 0, "down": 0, "unknown": 0}
+        "summary": {"total": 0, "up": 0, "down": 0, "degraded": 0, "unknown": 0, "by_device": {}}
       },
-      "services": {
-        "edges": [],
-        "summary": {"total": 0, "up": 0, "down": 0, "degraded": 0, "unknown": 0}
-      }
+      "services": {"edges": [], "summary": {}}
     },
     "issues": []
   }
 }
 ```
+
+Static summaries are left empty; the operational ones come from `graph.py` (`summarize_operational_*`).
 
 Operational layer `edges` reference the same `id` as static edges and carry **`state`** (see below). An operational edge with no matching static edge is flagged with `code: "unexpected_live_object"`.
 
@@ -118,7 +117,6 @@ Links between devices are modeled in **higher layers**, where both ends are know
 | **Physical** | `interface` | device + interface | **`null`** |
 | **Underlay** | `isis_adjacency` | device + interface | neighbor device + interface |
 | **Routing** | `bgp_session` | device + peer | peer device / address |
-| **Services** | `l2vpn_endpoint`, … | service endpoint | far-end endpoint |
 
 ```text
 Physical:   lbnl-data-sw  HundredGigE0/0/0/0.2402     remote = null   (port exists)
@@ -147,7 +145,7 @@ Operational state (admin/oper up/down, errors) is attached in **`operational.lay
 
 ### Per-device counts
 
-Use **`layers.physical.summary.by_device`** (static: interface count; operational: up/down/degraded/unknown per device) instead of filtering the flat `edges` list by hand.
+Use **`operational.layers.physical.summary.by_device`** (up/down/admin-down/degraded/unknown per device) instead of filtering the flat `edges` list by hand. The static half carries no summary.
 
 ## Underlay layer (IS-IS)
 
@@ -211,12 +209,15 @@ IOS-XR config often says **“IS-IS on this interface”** rather than naming th
 - **Explicit adjacency pairs** when config names a remote endpoint (NED-dependent)
 
 Because config does not name the far end, the expected adjacencies are this scan's live ones plus
-the last published scan's (passed in as `expected_edges`): those that were up there, or already
-held Down as missing. One absent now is Down (`configured_no_adjacency`) only when both routers
-answered `check_isis_adjacencies` this scan, neither interface is in another adjacency now, and
-NSO config still has IS-IS on both interfaces. The previous scan sets the expectation; the proof
-is this scan's two answers. It is not caught on a first scan, or when the adjacency was already
-gone before the last published one.
+the last published scan's (passed in as `expected_edges`): those that were up there, up at the
+only end it read (`listed_by`, its far interface `?`), or already held Down as missing (`since`,
+the scan it first went missing in). One absent now is Down (`configured_no_adjacency`) only when
+a router that answered `check_isis_adjacencies` this scan can name its end, no interface the
+adjacency names is in another adjacency now, and NSO config still has IS-IS there (at an end not
+read, when its config lists any IS-IS). The other router answered without it too, or was not
+read: the issue then gives each end's view ("newy … does not list it; rutg not read this scan").
+The previous scan sets the expectation; the proof is this scan's answers. It is not caught on a
+first scan, or when the adjacency was already gone before the last published one.
 
 ### Finding operational IS-IS (live)
 
@@ -292,7 +293,7 @@ Common abbreviations (IOS-XR):
 |------|---------|
 | `unidirectional_adjacency` | Both routers answered but do not both have it Up: one lists it (Up or Init), the other lists another state or does not list it. Reported as "IS-IS adjacency down" with each router's view |
 | `live_adjacency_not_in_config` | Live pair rejected — often **abbreviated vs long interface name** before normalization; or IS-IS not configured on that interface |
-| `configured_no_adjacency` | An expected adjacency (seen earlier in this scan, up in the last published scan, or held Down since) that both routers answered without; shown as Down with both routers named |
+| `configured_no_adjacency` | An expected adjacency (seen earlier in this scan, up in the last published scan at both ends or at the one it read, or held Down since) that a router answered without; shown as Down with both routers named, and the other's view or that it was not read |
 | `unexpected_live_object` | Live neighbor not present in static scope |
 | `collection_error` | MCP / device unreachable for this device |
 
@@ -435,10 +436,10 @@ Stored in `static.layers.*.edges`:
 | Field | Required | Description |
 |-------|----------|-------------|
 | `id` | yes | Stable across runs (see ID convention) |
-| `type` | yes | e.g. `interface`, `isis_adjacency`, `bgp_session`, `l2vpn_endpoint` |
+| `type` | yes | `interface`, `isis_adjacency` or `bgp_session` |
 | `local` | yes | Near-end from config (device + layer-specific fields, e.g. interface name) |
 | `remote` | yes or null | Far-end from config when the relationship is **between two endpoints**; **`null` for physical `interface` edges** (see [Physical layer: local and remote](DESIGN.md#physical-layer-nodes-local-and-remote)) |
-| `meta` | no | Config-only (admin state, IS-IS level, ASN, service type, …) |
+| `meta` | no | Config-only (admin state, IS-IS level, ASN, …) |
 
 No operational `state` on static edges.
 
@@ -479,7 +480,6 @@ Examples:
 isis:pe-chi1:Gi0/0/1:pe-den1:Gi0/0/1
 bgp:10.0.0.1:10.0.0.2:pe-den1:pe-chi1
 if:pe-den1:Gi0/0/1
-svc:l2ptp:customer-a:pe-chi1:pe-den1
 ```
 
 ## Issue object
@@ -516,7 +516,6 @@ Transport: stdio MCP via `nso_facts/mcp_client.py` (`StdioTransport` → `cisco-
 | `iface_equiv.py` | Admin-confirmed NSO-to-device interface name mappings |
 | `graph.py` | Edge IDs and per-layer summaries |
 | `physical.py`, `underlay.py`, `routing.py` | Static and operational collectors for each layer |
-| `collect.py`, `persist.py`, `services.py`, `route_summary.py` | Whole-topology build with an on-disk static cache, from the earlier summary runner; not called by `nso-diagnostic-run` |
 
 ## Partial failure
 

@@ -2,26 +2,27 @@
 
 from __future__ import annotations
 
-import re
 from collections import Counter
 from typing import Any
 
+from nso_facts.fleet_rollups import (
+    devices_in_edges,
+    edge_status,
+    merged_edges,
+    mismatch_by_edge_id,
+    operational_issues,
+    operational_layers,
+    peer_up_total,
+    static_layers,
+    unmapped_by_device,
+)
 from nso_facts.health import build_device_sync_map
 from nso_facts.topology.iface_equiv import (
     compact_box_list,
     suggested_equivalences_report_note,
 )
 
-_OK = frozenset({"up"})
-
 INVENTORY_REVIEW_STATUS = "Inventory Review"
-
-_UNMAPPED_ISIS = re.compile(
-    r"^(?P<device>\S+)\s+\S+:\s+unmapped IS-IS system id ['\"]?(?P<label>[^'\"]+)['\"]?\s*$"
-)
-_UNMAPPED_BGP = re.compile(
-    r"^(?P<device>\S+)\s+(?P<label>\S+):\s+could not map neighbor address"
-)
 
 _BANNER = "====================================================="
 _I1 = "  "
@@ -39,18 +40,17 @@ def format_devices_section(
     only_devices: list[str] | None = None,
 ) -> str:
     """Build Detailed Device Analysis body from topology (+ optional services)."""
-    op_layers = _operational_layers(topology)
+    op_layers = operational_layers(topology)
     if op_layers is None:
         return "No device topology in snapshot."
 
-    static_layers = _static_layers(topology)
-    phys = _merged_edges(op_layers, static_layers, "physical")
-    under = _merged_edges(op_layers, static_layers, "underlay")
-    route = _merged_edges(op_layers, static_layers, "routing")
-    unmapped_bgp, unmapped_isis = _unmapped_by_device(topology)
+    static = static_layers(topology)
+    phys = merged_edges(op_layers, static, "physical")
+    under = merged_edges(op_layers, static, "underlay")
+    route = merged_edges(op_layers, static, "routing")
+    unmapped_bgp, unmapped_isis = unmapped_by_device(topology)
     unexpected_live = _unexpected_live_by_device(topology)
-    mismatch_by_edge = _mismatch_by_edge_id(topology)
-    route_summaries = _route_summaries(topology)
+    mismatch_by_edge = mismatch_by_edge_id(topology)
     sync_map = build_device_sync_map(fleet_sync)
     services_by_device = _index_services_by_device(services)
     hw = hardware_health if isinstance(hardware_health, dict) else {}
@@ -61,11 +61,10 @@ def format_devices_section(
     }
 
     devices = sorted(
-        _devices_in_edges(phys, under, route)
+        devices_in_edges(phys, under, route)
         | set(unmapped_bgp)
         | set(unmapped_isis)
         | set(unexpected_live)
-        | set(route_summaries)
         | set(services_by_device)
         | set(hw)
         | named
@@ -90,7 +89,6 @@ def format_devices_section(
                     phys=phys,
                     under=under,
                     route=route,
-                    route_summary=route_summaries.get(device),
                     unmapped_bgp=unmapped_bgp.get(device, []),
                     unmapped_isis=unmapped_isis.get(device, []),
                     unexpected_live=unexpected_live.get(device, []),
@@ -125,19 +123,19 @@ def device_detail_lines(
     """
     from nso_facts.hardware_health import format_device_hardware_section
 
-    op_layers = _operational_layers(topology)
+    op_layers = operational_layers(topology)
     if op_layers is None:
         return {}
-    static_layers = _static_layers(topology)
-    phys = _merged_edges(op_layers, static_layers, "physical")
-    under = _merged_edges(op_layers, static_layers, "underlay")
-    route = _merged_edges(op_layers, static_layers, "routing")
-    unmapped_bgp, unmapped_isis = _unmapped_by_device(topology)
+    static = static_layers(topology)
+    phys = merged_edges(op_layers, static, "physical")
+    under = merged_edges(op_layers, static, "underlay")
+    route = merged_edges(op_layers, static, "routing")
+    unmapped_bgp, unmapped_isis = unmapped_by_device(topology)
     unexpected_live = _unexpected_live_by_device(topology)
-    mismatch_by_edge = _mismatch_by_edge_id(topology)
+    mismatch_by_edge = mismatch_by_edge_id(topology)
     hw = hardware_health if isinstance(hardware_health, dict) else {}
     devices = (
-        _devices_in_edges(phys, under, route)
+        devices_in_edges(phys, under, route)
         | set(unmapped_bgp)
         | set(unmapped_isis)
         | set(unexpected_live)
@@ -202,7 +200,6 @@ def _format_one_device(
     phys: list,
     under: list,
     route: list,
-    route_summary: dict[str, Any] | None,
     unmapped_bgp: list[str],
     unmapped_isis: list[str],
     unexpected_live: list[str],
@@ -233,8 +230,6 @@ def _format_one_device(
     )
     lines.append("")
     lines.extend(_routing_section(device, route, under))
-    lines.append("")
-    lines.extend(_routes_section(route_summary))
     lines.append("")
     lines.extend(_services_section(service_records))
     lines.append("")
@@ -343,8 +338,8 @@ def _device_reason_bullets(
                 f"{len(bad)} service instance(s) not fully up"
             )
 
-    bgp_up, bgp_total = _peer_up_total(device, route)
-    isis_up, isis_total = _peer_up_total(device, under)
+    bgp_up, bgp_total = peer_up_total(device, route)
+    isis_up, isis_total = peer_up_total(device, under)
     routing_bits: list[str] = []
     if bgp_total and bgp_up == bgp_total:
         routing_bits.append("BGP")
@@ -435,7 +430,7 @@ def _bgp_peers_for_device(device: str, route: list) -> list[tuple[str, str]]:
         if peer in seen:
             continue
         seen.add(peer)
-        rows.append((peer, _status(e)))
+        rows.append((peer, edge_status(e)))
     return sorted(rows, key=lambda r: r[0])
 
 
@@ -458,34 +453,8 @@ def _isis_neighbors_for_device(
         if peer in seen:
             continue
         seen.add(peer)
-        rows.append((peer, _status(e)))
+        rows.append((peer, edge_status(e)))
     return sorted(rows, key=lambda r: r[0])
-
-
-def _routes_section(route_summary: dict[str, Any] | None) -> list[str]:
-    lines = ["Routes", "------"]
-    if not route_summary:
-        lines.append(f"{_I1}Total: —")
-        return lines
-    if route_summary.get("error"):
-        lines.append(f"{_I1}Total: (unavailable)")
-        return lines
-    total = route_summary.get("total")
-    try:
-        total_txt = f"{int(total):,}"
-    except (TypeError, ValueError):
-        total_txt = str(total) if total is not None else "—"
-    lines.append(f"{_I1}Total: {total_txt}")
-    sources = route_summary.get("sources") or {}
-    if isinstance(sources, dict) and any(int(v) > 0 for v in sources.values()):
-        lines.append("")
-        lines.append(f"{_I1}Source:")
-        for name, count in sorted(
-            ((str(k), int(v)) for k, v in sources.items() if int(v) > 0),
-            key=lambda item: (-item[1], item[0]),
-        ):
-            lines.append(f"{_I2}{name}: {count:,}")
-    return lines
 
 
 def _services_section(service_records: list[dict[str, Any]]) -> list[str]:
@@ -680,21 +649,6 @@ def _suggested_mismatch_count(
     return sum(1 for issue in mismatch_by_edge.values() if not issue.get("confirmed"))
 
 
-def _peer_up_total(device: str, edges: list) -> tuple[int, int]:
-    mine = [
-        e
-        for e in edges
-        if isinstance(e, dict)
-        and device
-        in {
-            (e.get("local") or {}).get("device"),
-            (e.get("remote") or {}).get("device"),
-        }
-    ]
-    up = sum(1 for e in mine if _status(e) in _OK)
-    return up, len(mine)
-
-
 def _troubleshooting_for_device(
     topology: Any, device: str
 ) -> dict[str, Any] | None:
@@ -710,97 +664,10 @@ def _troubleshooting_for_device(
     return entry if isinstance(entry, dict) else None
 
 
-def _route_summaries(topology: Any) -> dict[str, dict[str, Any]]:
-    if not isinstance(topology, dict):
-        return {}
-    operational = topology.get("operational")
-    if not isinstance(operational, dict):
-        return {}
-    summary = operational.get("route_summary")
-    if not isinstance(summary, dict):
-        return {}
-    return {
-        str(device): entry
-        for device, entry in summary.items()
-        if isinstance(entry, dict)
-    }
-
-
-def _mismatch_by_edge_id(topology: Any) -> dict[str, dict[str, Any]]:
-    out: dict[str, dict[str, Any]] = {}
-    for issue in _operational_issues(topology):
-        if issue.get("code") != "config_live_mismatch":
-            continue
-        edge_id = issue.get("edge_id")
-        if isinstance(edge_id, str):
-            out[edge_id] = issue
-    return out
-
-
-def _operational_layers(topology: Any) -> dict[str, Any] | None:
-    if not isinstance(topology, dict):
-        return None
-    operational = topology.get("operational")
-    if not isinstance(operational, dict):
-        return None
-    layers = operational.get("layers")
-    return layers if isinstance(layers, dict) else None
-
-
-def _static_layers(topology: Any) -> dict[str, Any]:
-    if not isinstance(topology, dict):
-        return {}
-    static = topology.get("static")
-    if not isinstance(static, dict):
-        return {}
-    layers = static.get("layers")
-    return layers if isinstance(layers, dict) else {}
-
-
-def _operational_issues(topology: Any) -> list[dict[str, Any]]:
-    if not isinstance(topology, dict):
-        return []
-    operational = topology.get("operational")
-    if not isinstance(operational, dict):
-        return []
-    issues = operational.get("issues") or []
-    return [i for i in issues if isinstance(i, dict)]
-
-
-def _unmapped_by_device(
-    topology: Any,
-) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    """Return (bgp_unmapped, isis_unmapped) keyed by local device name."""
-    bgp: dict[str, list[str]] = {}
-    isis: dict[str, list[str]] = {}
-    for issue in _operational_issues(topology):
-        code = issue.get("code")
-        message = str(issue.get("message") or "")
-        if code == "unknown_neighbor_address":
-            match = _UNMAPPED_BGP.match(message)
-            if not match:
-                continue
-            device = match.group("device")
-            label = match.group("label")
-            bgp.setdefault(device, [])
-            if label not in bgp[device]:
-                bgp[device].append(label)
-        elif code == "unknown_neighbor_system_id":
-            match = _UNMAPPED_ISIS.match(message)
-            if not match:
-                continue
-            device = match.group("device")
-            label = match.group("label")
-            isis.setdefault(device, [])
-            if label not in isis[device]:
-                isis[device].append(label)
-    return bgp, isis
-
-
 def _unexpected_live_by_device(topology: Any) -> dict[str, list[str]]:
     """Live interfaces not in static config, keyed by device (report-only)."""
     out: dict[str, list[str]] = {}
-    for issue in _operational_issues(topology):
+    for issue in operational_issues(topology):
         if issue.get("code") != "unexpected_live_object":
             continue
         layer = issue.get("layer")
@@ -830,56 +697,6 @@ def _unexpected_live_device_iface(issue: dict[str, Any]) -> tuple[str | None, st
     return None, None
 
 
-def _merged_edges(
-    op_layers: dict[str, Any],
-    static_layers: dict[str, Any],
-    layer: str,
-) -> list[dict[str, Any]]:
-    op_edges = (op_layers.get(layer) or {}).get("edges") or []
-    static_edges = (static_layers.get(layer) or {}).get("edges") or []
-    by_id = {
-        edge["id"]: edge
-        for edge in static_edges
-        if isinstance(edge, dict) and isinstance(edge.get("id"), str)
-    }
-    merged: list[dict[str, Any]] = []
-    for edge in op_edges:
-        if not isinstance(edge, dict):
-            continue
-        static = by_id.get(edge.get("id")) if isinstance(edge.get("id"), str) else None
-        if static is None:
-            if (edge.get("local") or {}).get("device") or (
-                edge.get("remote") or {}
-            ).get("device"):
-                merged.append(edge)
-            continue
-        row = dict(edge)
-        if "local" not in row or row.get("local") is None:
-            row["local"] = static.get("local")
-        if "remote" not in row or row.get("remote") is None:
-            row["remote"] = static.get("remote")
-        merged.append(row)
-    return merged
-
-
-def _devices_in_edges(*edge_lists: list) -> set[str]:
-    names: set[str] = set()
-    for edges in edge_lists:
-        for edge in edges:
-            if not isinstance(edge, dict):
-                continue
-            for end in ("local", "remote"):
-                device = (edge.get(end) or {}).get("device")
-                if isinstance(device, str) and device.strip():
-                    names.add(device.strip())
-    return names
-
-
-def _status(edge: dict[str, Any]) -> str:
-    status = (edge.get("state") or {}).get("status", "unknown")
-    return str(status).lower() if status is not None else "unknown"
-
-
 def _admin_oper(edge: dict[str, Any]) -> tuple[str, str]:
     """Return (Status/Intf, Protocol/LineP) for an interface edge."""
     state = edge.get("state") or {}
@@ -887,7 +704,7 @@ def _admin_oper(edge: dict[str, Any]) -> tuple[str, str]:
     oper = state.get("oper")
     if admin is not None and oper is not None:
         return str(admin).lower(), str(oper).lower()
-    st = _status(edge)
+    st = edge_status(edge)
     if st == "up":
         return "up", "up"
     if st == "admin-down":

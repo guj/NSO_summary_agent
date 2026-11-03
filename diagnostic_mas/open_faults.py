@@ -217,6 +217,15 @@ def digest_changes(delta: dict[str, Any] | None, previous_run_id: str | None,
         if len(links) > 3:
             lines.append(f"- …and {len(links) - 3} more")
         lines.append("")
+    fewer = list((delta or {}).get("sessions_receiving_fewer_prefixes") or [])
+    if fewer:
+        from diagnostic_mas.case_delta import prefix_drop_line
+
+        lines.append(f"**BGP sessions receiving far fewer prefixes:** {len(fewer)}")
+        lines.extend(f"- {prefix_drop_line(row)}" for row in fewer[:3])
+        if len(fewer) > 3:
+            lines.append(f"- …and {len(fewer) - 3} more")
+        lines.append("")
     services = sum(len(group["services"]) for group in groups)
     heading = "**Open service faults:**" if delta is None else "**Still open:**"
     if not groups:

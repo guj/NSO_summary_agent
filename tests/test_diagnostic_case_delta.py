@@ -6,12 +6,7 @@ import json
 from pathlib import Path
 
 from diagnostic_mas.case import Budget, CaseFile, open_issue
-from diagnostic_mas.case_delta import (
-    compare_run_dirs,
-    compute_case_delta,
-    format_case_delta,
-    load_case_dict,
-)
+from diagnostic_mas.case_delta import compute_case_delta
 from diagnostic_mas.state_paths import case_to_dict, persist_case
 
 
@@ -100,15 +95,6 @@ def test_new_recovered_persistent_and_coverage():
     failed = {f["service"] for f in delta["newly_failed_services"]}
     assert "svc-new" in failed
 
-    text = format_case_delta(delta)
-    assert "Newly detected service faults" in text
-    assert "Newly missing evidence" in text
-    assert "New problems" in text
-    assert "svc-new" in text
-    assert "svc-old" in text
-    assert "svc-persist" in text
-    assert "svc-skip" in text
-
 
 def test_recovered_devices_and_incomplete_dig_missing_evidence():
     from diagnostic_mas.case import add_diagnosis
@@ -178,18 +164,16 @@ def test_recovered_devices_and_incomplete_dig_missing_evidence():
 
 def test_italic_lines_of_the_changes_show_as_italics_in_the_html_report_not_as_underscores():
     from agent.markdown_channels import markdown_to_html
-    from diagnostic_mas.case_delta import format_case_delta, format_changes_since_previous
+    from diagnostic_mas.case_delta import format_changes_since_previous
 
     issue = {"code": "collection_error", "layer": "underlay", "status": "open", "message": "no answer"}
     delta = {"notes": ["Older scan had no service step."], "persistent": [issue, dict(issue, message="again")]}
     section = format_changes_since_previous(delta, previous_run_id="run-old")
     assert any("Unchanged open items" in line for line in section)
 
-    for text in ("\n".join(section), format_case_delta(delta, older_label="run-old", newer_label="run-new")):
-        page = markdown_to_html(text)
-        assert "<em>Note: Older scan had no service step.</em>" in page
-        assert "_Note" not in page and "._" not in page and "_Unchanged" not in page
     page = markdown_to_html("\n".join(section))
+    assert "<em>Note: Older scan had no service step.</em>" in page
+    assert "_Note" not in page and "._" not in page and "_Unchanged" not in page
     assert "<em>Compared to <code>run-old</code>.</em>" in page
     assert "<em>Unchanged open items" in page and "not re-summarized as new findings.</em>" in page
 
@@ -244,41 +228,6 @@ def test_out_of_scope_not_counted_as_recovered():
     delta = compute_case_delta(case_to_dict(older), case_to_dict(newer))
     assert delta["recovered"] == []
     assert {i["edge_id"] for i in delta["out_of_scope"]} == {"svc-narrow"}
-
-
-def test_compare_run_dirs(tmp_path: Path):
-    older = CaseFile(budget=Budget(max_deep_checks=1, max_handoffs=1))
-    open_issue(
-        older,
-        code="isis_adj_down",
-        message="adj down",
-        evidence_ids=["ev_1"],
-        layer="underlay",
-        edge_id="a|b",
-        devices=["a", "b"],
-    )
-    older.service_coverage = {}
-    newer = CaseFile(budget=Budget(max_deep_checks=1, max_handoffs=1))
-    newer.service_coverage = {}
-
-    d1 = persist_case(
-        tmp_path / "diagnostic_mas",
-        run_id="run-old",
-        case=older,
-        report="# old\n",
-    ).parent
-    d2 = persist_case(
-        tmp_path / "diagnostic_mas",
-        run_id="run-new",
-        case=newer,
-        report="# new\n",
-    ).parent
-
-    text = compare_run_dirs(d1, d2)
-    assert "Recovered problems" in text
-    assert "a|b" in text
-    loaded = load_case_dict(d1)
-    assert "issues" in loaded
 
 
 def _dp_case(status=None, complete=True):
@@ -421,6 +370,38 @@ def test_service_gone_from_a_full_scan_is_reported_no_longer_present_not_as_miss
          "previous_coverage": "category_peer_skipped"}
     ]
     assert delta["newly_missing_evidence"] == []
+
+
+def _down(case: dict, name: str, kind: str) -> dict:
+    """The saved case with ``name`` found dataplane down."""
+    from diagnostic_mas.case import add_diagnosis
+
+    found = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    add_diagnosis(found, kind="dataplane", source="llm", status="down", observed="AC down",
+                  cause="no light", subject={"name": name, "service_type": kind}, extra={"complete": True})
+    return {**case, "diagnoses": case_to_dict(found)["diagnoses"]}
+
+
+def test_a_fault_on_a_service_a_full_previous_scan_did_not_list_says_the_service_is_new():
+    """test30's lan_ucsd: created since the previous scan, on a port down for over a year."""
+    newer = _down(_scan({"keep": "l2bridge", "lan_ucsd": "l2bridge"}), "lan_ucsd", "l2bridge")
+
+    [row] = compute_case_delta(_scan({"keep": "l2bridge"}), newer)["newly_failed_services"]
+
+    assert row["detail"] == "dataplane=down; service not in the previous scan"
+
+
+def test_a_fault_is_not_called_a_new_service_unless_a_full_previous_scan_lacked_it():
+    newer = _down(_scan({"keep": "l2bridge", "lan_ucsd": "l2bridge"}), "lan_ucsd", "l2bridge")
+    older = {
+        "listed before": _scan({"keep": "l2bridge", "lan_ucsd": "l2bridge"}),
+        "narrower scan before": _scan({"keep": "l2bridge"}, scope={**FULL_SCOPE, "Service ID filter": "keep"}),
+        "type not collected before": _scan({"keep": "l2sts"}),
+    }
+
+    for why, before in older.items():
+        [row] = compute_case_delta(before, newer)["newly_failed_services"]
+        assert row["detail"] == "dataplane=down (new)", why
 
 
 def test_service_outside_a_narrower_scan_is_still_missing_evidence_not_reported_gone():
@@ -809,7 +790,7 @@ def test_adjacency_is_not_listed_unless_both_scans_read_it_up_and_it_changed_aft
         assert compute_case_delta(before, now)["adjacencies_changed_between_scans"] == [], why
 
 
-def test_changes_section_delta_report_and_summary_input_list_adjacencies_changed_between_scans():
+def test_changes_section_and_summary_input_list_adjacencies_changed_between_scans():
     from diagnostic_mas.case_delta import (
         compact_delta_for_llm, delta_has_operational_changes, format_changes_since_previous)
 
@@ -823,7 +804,6 @@ def test_changes_section_delta_report_and_summary_input_list_adjacencies_changed
 
     assert delta_has_operational_changes(delta)
     assert f"**{title}:**\n{line}" in text
-    assert f"## {title}\n{line}" in format_case_delta(delta)
     assert compact_delta_for_llm(delta)["adjacencies_changed_between_scans"]["adjacencies"] == [
         line[2:].replace("`", "")]
 
@@ -846,7 +826,7 @@ def test_session_still_down_now_absent_or_up_both_times_is_not_regained():
         assert compute_case_delta(older, newer)["routing_sessions_regained"] == [], why
 
 
-def test_changes_section_delta_report_and_summary_input_list_regained_routing_sessions():
+def test_changes_section_and_summary_input_list_regained_routing_sessions():
     from diagnostic_mas.case_delta import (
         compact_delta_for_llm, delta_has_operational_changes, format_changes_since_previous)
 
@@ -862,7 +842,6 @@ def test_changes_section_delta_report_and_summary_input_list_regained_routing_se
 
     assert delta_has_operational_changes(delta)
     assert f"**Routing sessions not up in the previous run, up now:**\n{bgp}\n{isis}" in text
-    assert f"## Routing sessions not up before, up now\n{bgp}\n{isis}" in format_case_delta(delta)
     assert compact_delta_for_llm(delta)["routing_sessions_regained"]["sessions"] == [
         line[2:].replace("`", "") for line in (bgp, isis)]
 
@@ -961,6 +940,14 @@ def test_interface_that_went_down_after_all_its_services_were_deleted_is_marked(
     assert marked == {LANE0: 1, LANE1: 0, "HundredGigE0/0/0/5": 0}
 
 
+def test_interface_is_not_marked_when_a_new_service_uses_it_after_the_deletion():
+    # The owner deleted the lane's service and created another on the same lane.
+    older = _ports_scan({"link-old": LANE0}, {LANE0: "up"})
+    newer = _ports_scan({"link-new": LANE0}, {LANE0: "down"})
+
+    assert [row["services_deleted"] for row in compute_case_delta(older, newer)["interfaces_lost"]] == [0]
+
+
 def test_changes_section_and_summary_input_say_the_services_were_deleted():
     from diagnostic_mas.case_delta import compact_delta_for_llm, format_changes_since_previous
 
@@ -1049,6 +1036,17 @@ def test_last_known_fault_ends_when_the_service_passes_the_fixed_checks_this_run
     text = "\n".join(format_changes_since_previous(delta, previous_run_id="r1"))
     assert "- `l3rt/svc` — passes the checks this run (was down in run `r1`)" in text
     assert "Last-known service faults" not in text
+
+
+def test_summary_input_gives_each_cleared_service_its_earlier_status():
+    from diagnostic_mas.case_delta import compact_delta_for_llm
+
+    delta = {"service_faults_cleared": [
+        {"service": "svc", "service_type": "l3rt", "was": "down", "last_observed_run_id": "r1"},
+        {"service": "flapper", "service_type": "l2bridge", "was": "degraded", "last_observed_run_id": "r1"}]}
+
+    assert compact_delta_for_llm(delta)["service_faults_cleared"]["services"] == [
+        "svc (was down)", "flapper (was degraded)"]
 
 
 def test_last_known_fault_is_kept_without_a_passing_check_this_run():
@@ -1193,3 +1191,66 @@ def test_the_summary_gets_links_gaining_errors_one_line_per_link():
     assert sent["links"][0].startswith("salt-data-sw HundredGigE0/0/0/17 ↔ kans-data-sw HundredGigE0/0/0/23, one IS-IS link")
     assert "not a fault" in sent["note"]
     assert "links_gaining_errors" not in compact_delta_for_llm({})
+
+
+# A BGP session still Established at both scans whose end now receives far fewer prefixes: a lead, like CRC errors.
+STAR_WASH = "bgp:10.129.128.1:10.133.0.1:star-data-sw:wash-data-sw"
+
+
+def _received(star: int | None, wash: int | None, *, wash_up: str = "34w3d", wash_state: str = "established") -> dict:
+    """star-wash session state: what star (local) and wash (remote) each received, and their Up/Down."""
+    return {STAR_WASH: {"local": "established", "remote": wash_state, "status": "up",
+                        "prefixes": {"local": star, "remote": wash}, "up_down": {"local": "34w3d", "remote": wash_up}}}
+
+
+def test_a_session_still_established_but_receiving_far_fewer_prefixes_is_a_lead():
+    from diagnostic_mas.case_delta import (compact_delta_for_llm, delta_has_operational_changes,
+                                           format_changes_since_previous)
+
+    # star keeps its full table (churn only); wash now gets nothing from star.
+    delta = compute_case_delta(_routing_scan(_received(515491, 515490)), _routing_scan(_received(515512, 0)))
+
+    assert delta["sessions_receiving_fewer_prefixes"] == [
+        {"device": "wash-data-sw", "peer": "star-data-sw", "before": 515490, "now": 0, "up_down": "34w3d",
+         "reset": False}]
+    line = "`wash-data-sw` from `star-data-sw`: 515,490 → 0 prefixes (−100%); session up 34w3d"
+    text = "\n".join(format_changes_since_previous(delta, previous_run_id="run-1"))
+    assert f"**BGP sessions still Established but receiving far fewer prefixes:**\n- {line}" in text
+    sent = compact_delta_for_llm(delta)["sessions_receiving_fewer_prefixes"]
+    assert sent["sessions"] == [line.replace("`", "")] and "not a fault" in sent["note"]
+    assert delta_has_operational_changes(delta)
+    assert "sessions_receiving_fewer_prefixes" not in compact_delta_for_llm({})
+
+
+def test_churn_small_tables_and_sessions_no_longer_established_are_not_leads():
+    older = _routing_scan(_received(515491, 1000))
+    for newer in (_received(515000, 500),                       # star: churn; wash: half, not less than half
+                  _received(515491, 0, wash_state="idle"),      # lost, reported as a routing session lost
+                  _received(None, None)):                       # counts not read
+        assert compute_case_delta(older, _routing_scan(newer))["sessions_receiving_fewer_prefixes"] == []
+    # Below the 1,000-prefix floor a drop is routine, such as an owner deleting a service.
+    assert compute_case_delta(_routing_scan(_received(2, 999)),
+                              _routing_scan(_received(1, 0)))["sessions_receiving_fewer_prefixes"] == []
+
+
+def test_a_session_that_reset_between_scans_says_so():
+    from diagnostic_mas.case_delta import format_changes_since_previous
+
+    delta = compute_case_delta(_routing_scan(_received(515491, 515490)),
+                               _routing_scan(_received(515491, 1204, wash_up="02:13:05")))
+
+    assert delta["sessions_receiving_fewer_prefixes"][0]["reset"] is True
+    assert ("- `wash-data-sw` from `star-data-sw`: 515,490 → 1,204 prefixes (−99.8%); "
+            "session re-established since the previous scan (up 02:13:05)") in format_changes_since_previous(
+                delta, previous_run_id="run-1")
+
+
+def test_an_outside_peer_sending_far_fewer_prefixes_is_a_lead():
+    from diagnostic_mas.case_delta import format_changes_since_previous
+
+    older = _bgp_scan([ESNET | {"state": "established", "up_down": "1y08w", "prefixes": 18350}])
+    delta = compute_case_delta(older, _bgp_scan([ESNET | {"state": "established", "up_down": "1y08w",
+                                                          "prefixes": 1204}]))
+
+    assert ("- `star-data-sw` from outside peer 198.125.141.24 (AS 293): 18,350 → 1,204 prefixes (−93.4%); "
+            "session up 1y08w") in format_changes_since_previous(delta, previous_run_id="run-1")

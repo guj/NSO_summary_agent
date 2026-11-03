@@ -4,12 +4,11 @@ from agent.report_format import (
     assemble_report,
     assemble_report_plain,
     build_reports,
-    delta_has_changes,
-    format_delta_section,
     format_fleet_sync_summary,
     format_service_counts_plain,
     format_service_counts_table,
 )
+from nso_report.delta_format import delta_has_changes, format_delta_section
 
 
 def test_service_counts_table_sorted_rows():

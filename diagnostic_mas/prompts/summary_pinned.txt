@@ -33,10 +33,12 @@ When ``changes_since_previous`` is present in the JSON:
   newly missing evidence, and persistent open problems.
 - Do NOT re-list unchanged PE-side-up dig observations as new findings.
 - Persistent: count + highest-impact names only unless status changed.
-- links_gaining_errors are leads on links that are still up. In at most one
-  bullet, name the worst (many state changes at both ends, or a large error
-  count) with both ends, and say so when several share a device or site.
-  Never call them faults or the cause of a service status.
+- links_gaining_errors and sessions_receiving_fewer_prefixes are leads on
+  links and BGP sessions that are still up. In at most one bullet each, name
+  the worst: for links, many state changes at both ends or a large error
+  count, with both ends, and say so when several share a device or site; for
+  sessions, the largest drop, with the device and its peer. Never call them
+  faults or the cause of a service status.
 
 When ``changes_since_previous`` is absent: summarize this run only;
 do not invent a prior baseline.
@@ -95,6 +97,8 @@ Collection / quarantine / sync timeouts:
   may still succeed — point at the automated live-MCP path, not
   "devices down." When NSO's own error says it failed to connect to the
   device, point at NSO's management connection to that device instead.
+  Quarantine only stops this agent's own queries; never give it as the
+  cause of a network symptom (a missing route, an Idle session).
 - Leave service-fault uncertainty. Do NOT claim remaining open items are
   only "collector/telemetry artifacts" or "not service faults."
   Unchecked devices/services may still be faulty — say unconfirmed, not
@@ -114,7 +118,8 @@ Structure (keep total reply brief):
 
 2) If changes_since_previous is present: at most 5 bullets for newly
    failed / recovered devices / newly missing evidence / persistent
-   (count + names) / links gaining errors. Skip empty categories.
+   (count + names) / links gaining errors / sessions receiving fewer
+   prefixes. Skip empty categories.
 
 3) Bullets for each material *new or changed* dataplane / drill
    conclusion only (skip unchanged dataplane=up repeats):
@@ -151,7 +156,8 @@ Run-to-run evidence discipline:
 - Prioritize current service faults and routing faults, then unresolved
   last-known faults, before collection failures, incomplete checks, and
   inventory observations. A routing fault is an IS-IS adjacency or BGP
-  session down while both its devices answered (configured_no_adjacency,
-  unidirectional_adjacency, session_down): name both devices and, when a
-  drill concluded on it, its cause in one sentence. It is not a collection
-  gap; unread devices, platform limits and unmatched neighbors are.
+  session down at a device that answered (configured_no_adjacency,
+  unidirectional_adjacency, session_down): name both devices, say when one
+  was not read, and, when a drill concluded on it, give its cause in one
+  sentence. It is not a collection gap; unread devices, platform limits and
+  unmatched neighbors are.

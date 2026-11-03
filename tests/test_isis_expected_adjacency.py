@@ -72,11 +72,12 @@ async def test_still_missing_says_so(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["router_unread", "interface_in_another_adjacency", "isis_removed_from_config",
-                                    "router_out_of_scope", "not_expected"])
+@pytest.mark.parametrize("change", ["both_routers_unread", "interface_in_another_adjacency",
+                                    "isis_removed_from_config", "router_out_of_scope", "not_expected"])
 async def test_nothing_is_claimed_without_all_the_evidence(monkeypatch, change):
     handlers, expected, devices = {**CONFIGS, **SILENT}, [WAS_UP], (NEWY, RUTG)
-    if change == "router_unread":
+    if change == "both_routers_unread":
+        handlers[("check_isis_adjacencies", NEWY)] = UNREACHABLE
         handlers[("check_isis_adjacencies", RUTG)] = UNREACHABLE
     elif change == "interface_in_another_adjacency":
         # rutg's end moved to another port: newy's interface has an adjacency again.
@@ -306,3 +307,124 @@ def test_a_neighbor_named_in_another_form_still_pairs_and_is_not_called_down():
     newy = AdjacencyObservation(NEWY, "Hu0/0/0/19.3000", RUTG, "Up")
     edges, issues = pair_adjacency_observations([newy, rutg], [NEWY, RUTG])
     assert [(e["id"], e["state"]["status"]) for e in edges] == [(EDGE, "up")] and issues == []
+
+
+# A link seen from one end only: rutg's IS-IS could not be read, newy listed the adjacency as Up.
+ONE_END = isis_edge_id(NEWY, NEWY_IF, RUTG, "?")
+RUTG_UNREAD = {**CONFIGS, ("check_isis_adjacencies", RUTG): UNREACHABLE}
+
+
+async def _seen_from_newy(monkeypatch) -> dict:
+    """The saved scan in which newy alone listed the adjacency, as the next scan reads it."""
+    spine = await _spine(monkeypatch, {**RUTG_UNREAD, ("check_isis_adjacencies", NEWY): _adjacencies(NEWY, (RUTG, NEWY_IF))}, [])
+    assert [(e["id"], e["state"]["status"]) for e in spine["operational_edges"]] == [(ONE_END, "unknown")]
+    return {**_saved(spine), "run_id": "20261102T234904Z"}
+
+
+@pytest.mark.asyncio
+async def test_a_link_up_at_its_read_end_is_expected(monkeypatch):
+    saved = await _seen_from_newy(monkeypatch)
+    assert [(e["id"], e["held"], e.get("listed_by")) for e in expected_adjacencies(saved)] == [(ONE_END, False, NEWY)]
+
+
+@pytest.mark.asyncio
+async def test_a_link_its_read_end_stops_listing_is_down_in_that_ends_view(monkeypatch):
+    expected = expected_adjacencies(await _seen_from_newy(monkeypatch))
+    spine = await _spine(monkeypatch, {**RUTG_UNREAD, ("check_isis_adjacencies", NEWY): _adjacencies(NEWY)}, expected)
+
+    assert [e["state"] for e in spine["operational_edges"] if e["id"] == ONE_END] == [{
+        "local": "not listed", "remote": "unknown", "status": "down",
+        "detail": f"not reported by {NEWY}; {RUTG} not read"}]
+    [issue] = _down(spine)
+    assert set(issue["devices"]) == {NEWY, RUTG}
+    assert issue["message"] == (f"IS-IS adjacency down: {NEWY} {NEWY_IF} does not list it; {RUTG} not read this scan "
+                                f"(listed as up by {NEWY} in the previous scan)")
+
+
+@pytest.mark.asyncio
+async def test_a_link_up_at_both_ends_is_down_when_the_end_still_read_stops_listing_it(monkeypatch):
+    spine = await _spine(monkeypatch, {**RUTG_UNREAD, ("check_isis_adjacencies", NEWY): _adjacencies(NEWY)}, [WAS_UP])
+
+    [issue] = _down(spine)
+    assert issue["edge_id"] == EDGE
+    assert issue["message"] == (f"IS-IS adjacency down: {NEWY} {NEWY_IF} does not list it; {RUTG} not read this scan "
+                                "(up in the previous scan)")
+
+
+@pytest.mark.asyncio
+async def test_a_held_link_says_since_when(monkeypatch):
+    expected = expected_adjacencies(await _seen_from_newy(monkeypatch))
+    silent = {**RUTG_UNREAD, ("check_isis_adjacencies", NEWY): _adjacencies(NEWY)}
+    missing = await _spine(monkeypatch, silent, expected)
+    held = expected_adjacencies({**_saved(missing), "run_id": "20261103T014500Z"})
+    assert [(e["id"], e["held"]) for e in held] == [(ONE_END, True)]
+
+    still = await _spine(monkeypatch, silent, held)
+    assert _down(still)[0]["message"] == (f"IS-IS adjacency down: {NEWY} {NEWY_IF} does not list it; {RUTG} not read "
+                                          "this scan (missing since 3 Nov)")
+    # The date it went missing is kept, not moved on to each later scan.
+    assert _down(await _spine(monkeypatch, silent, expected_adjacencies(
+        {**_saved(still), "run_id": "20261103T060000Z"})))[0]["message"].endswith("(missing since 3 Nov)")
+
+
+@pytest.mark.asyncio
+async def test_a_one_end_link_both_routers_now_answer_without_is_down(monkeypatch):
+    expected = expected_adjacencies(await _seen_from_newy(monkeypatch))
+    spine = await _spine(monkeypatch, {**CONFIGS, **SILENT}, expected)
+
+    [issue] = _down(spine)
+    assert issue["message"] == (f"IS-IS adjacency down: {NEWY} {NEWY_IF} does not list it; {RUTG} does not list it "
+                                f"(listed as up by {NEWY} in the previous scan)")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["read_end_unread", "isis_removed_from_config", "interface_in_another_adjacency",
+                                    "listed_again", "far_router_lists_it"])
+async def test_a_one_end_link_is_not_claimed_down_without_its_read_ends_answer(monkeypatch, change):
+    expected = expected_adjacencies(await _seen_from_newy(monkeypatch))
+    handlers = {**RUTG_UNREAD, ("check_isis_adjacencies", NEWY): _adjacencies(NEWY)}
+    if change == "read_end_unread":
+        handlers.update(SILENT)
+        handlers[("check_isis_adjacencies", NEWY)] = UNREACHABLE
+    elif change == "isis_removed_from_config":
+        handlers[("get_device_config", NEWY)] = _config("HundredGigE0/0/0/20.3000")
+    elif change == "interface_in_another_adjacency":
+        handlers[("get_device_config", PRIN)] = _config("HundredGigE0/0/0/1.3000")
+        handlers[("check_isis_adjacencies", NEWY)] = _adjacencies(NEWY, (PRIN, NEWY_IF))
+        handlers[("check_isis_adjacencies", PRIN)] = _adjacencies(PRIN, (NEWY, "HundredGigE0/0/0/1.3000"))
+    elif change == "listed_again":
+        handlers[("check_isis_adjacencies", NEWY)] = _adjacencies(NEWY, (RUTG, NEWY_IF))
+    elif change == "far_router_lists_it":
+        # rutg is read again and lists newy, newy does not: one fault, reported once with each view.
+        handlers[("check_isis_adjacencies", RUTG)] = _adjacencies(RUTG, (NEWY, RUTG_IF))
+
+    spine = await _spine(monkeypatch, handlers, expected, (NEWY, RUTG, PRIN))
+    assert _down(spine) == []
+    if change == "far_router_lists_it":
+        assert [i["message"] for i in spine["issues"] if i["code"] == "unidirectional_adjacency"] == [
+            f"IS-IS adjacency down: {NEWY} does not list it (no entry in its IS-IS adjacency table); "
+            f"{RUTG} {RUTG_IF} lists it as Up"]
+
+
+def _one_end_down() -> CaseFile:
+    case = CaseFile(budget=Budget(0, 0))
+    case.device_names = [NEWY, RUTG]
+    add_evidence(case, {"kind": "spine", "role": "isis", "payload": {
+        "static_edges": [{"id": ONE_END, "type": "isis_adjacency", "local": WAS_UP["local"],
+                          "remote": {"device": RUTG, "interface": "?"}}],
+        "operational_edges": [{"id": ONE_END, "state": {"local": "not listed", "remote": "unknown", "status": "down",
+                                                        "detail": f"not reported by {NEWY}; {RUTG} not read"}}]}})
+    open_issue(case, code="configured_no_adjacency", severity="high", layer="underlay", evidence_ids=[],
+               edge_id=ONE_END, devices=[NEWY, RUTG],
+               message=f"IS-IS adjacency down: {NEWY} {NEWY_IF} does not list it; {RUTG} not read this scan "
+                       "(missing since 3 Nov)")
+    return case
+
+
+def test_the_routing_lines_show_a_link_down_at_its_read_end():
+    case = _one_end_down()
+    assert "IS-IS 0/1 up; 1 down (rutg-data-sw)" in _attention(case, NEWY)
+    assert "not read on rutg-data-sw; its neighbors report 0 of 1 up, 1 down (newy-data-sw)" in _attention(case, RUTG)
+    for device in (NEWY, RUTG):
+        assert f"{NEWY} {NEWY_IF} does not list it; {RUTG} not read this scan (missing since 3 Nov)." in _attention(case, device)
+    assert f"1 IS-IS adjacency down: `{NEWY}` ↔ `{RUTG}`." in format_result_line(case)

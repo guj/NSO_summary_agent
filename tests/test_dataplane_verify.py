@@ -9,7 +9,6 @@ import pytest
 from diagnostic_mas.case import Budget, CaseFile, DrillSession, add_evidence
 from diagnostic_mas.dataplane_verify import (
     coerce_dataplane_mcp_call,
-    dataplane_system_prompt,
     disallowed_dataplane_show_command,
     disallowed_explore_nso_path,
     empty_mcp_tool_name_error,
@@ -446,6 +445,49 @@ def test_select_dataplane_candidates_system_up_not_checked():
     )
     picked = select_dataplane_candidates(case, limit=5, one_per_typed_category=False)
     assert [r.get("name") for _e, r in picked] == ["a"]
+
+
+def test_select_dataplane_skips_services_whose_devices_are_all_quarantined(monkeypatch):
+    """No live MCP to any device of a service: its investigation could read nothing live."""
+    from diagnostic_mas.dataplane_verify import apply_coverage_after_candidate_select
+
+    monkeypatch.setattr(
+        "diagnostic_mas.dataplane_verify._quarantined_device_map",
+        lambda: {"amst-data-sw": "timeout"},
+    )
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+
+    def unknown(name, service_type, devices):
+        return {
+            "name": name,
+            "service_type": service_type,
+            "devices": devices,
+            "system_status": "up",
+            "dataplane_status": "not_checked",
+            "status": "unknown",
+            "basic_checks": {"status": "unknown", "needs_investigation": True},
+        }
+
+    services = {
+        "l3rt/a": unknown("amst-only", "l3rt", ["amst-data-sw"]),
+        "l2sts/b": unknown("amst-kans", "l2sts", ["kans-data-sw", "amst-data-sw"]),
+        "l3rt/c": unknown("star-only", "l3rt", ["star-data-sw"]),
+    }
+    add_evidence(
+        case,
+        {
+            "kind": "spine",
+            "role": "service",
+            "layer": "services",
+            "payload": {"extra": {"services": services}},
+        },
+    )
+    picked = select_dataplane_candidates(case, limit=10)
+    assert {r["name"] for _e, r in picked} == {"amst-kans", "star-only"}
+    case.service_coverage["amst-only"] = "needs_investigation"
+    apply_coverage_after_candidate_select(case, picked)
+    # Not a budget miss: the fixed check already left it Unknown.
+    assert case.service_coverage["amst-only"] == "collection_concluded"
 
 
 def test_select_dataplane_one_per_typed_category():

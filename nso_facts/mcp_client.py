@@ -461,6 +461,11 @@ def format_live_mcp_quarantine_prose(
     else:
         head = f"{device}: live query failed this run"
         action = "further live MCP to this device was skipped for the rest of the run"
+        if nso_could_not_connect(detail):
+            action = (
+                "NSO itself could not connect to the device — this does not prove "
+                f"the device is down; check NSO's management connection to it; {action}"
+            )
     if detail and kind != "timeout":
         head = f"{head} ({detail})"
     elif detail and kind == "timeout":

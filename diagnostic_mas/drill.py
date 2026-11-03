@@ -7,6 +7,7 @@ from agent.config import llm_temperature_kwargs
 import json
 import re
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
@@ -83,6 +84,13 @@ DRILL_CONCLUDE_TOOL = {
                 "cause": {
                     "type": "string",
                     "description": "Root cause or best grounded hypothesis",
+                },
+                "headline": {
+                    "type": "string",
+                    "description": (
+                        "The cause in one sentence of at most 200 characters, without "
+                        "the readings; shown where the report has room for one line"
+                    ),
                 },
                 "fix_suggestion": {
                     "type": "string",
@@ -231,15 +239,36 @@ _CARRIED_ISSUES = ("isis:", "bgp:")
 
 
 def previous_findings(previous_case: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
-    """The last published scan's concluded drill findings on routing Issues, the latest per issue edge id."""
-    out: dict[str, dict[str, Any]] = {}
-    for ev in (previous_case or {}).get("evidence") or []:
+    """Each routing Issue's latest concluded drill finding from earlier scans, by issue edge id.
+
+    The last published scan's own findings, dated by its ``run_id``, over those it kept from
+    scans before it for Issues it left alone (``earlier_findings``).
+    """
+    previous_case = previous_case or {}
+    out = {str(edge): dict(finding) for edge, finding in (previous_case.get("earlier_findings") or {}).items()
+           if isinstance(finding, dict)}
+    dated = {"run_id": previous_case["run_id"]} if previous_case.get("run_id") else {}
+    for ev in previous_case.get("evidence") or []:
         payload = ev.get("payload") if isinstance(ev, dict) and ev.get("kind") == "drill_finding" else None
         edge = str((payload or {}).get("issue_edge_id") or "")
         if edge.startswith(_CARRIED_ISSUES) and payload.get("cause"):
-            out[edge] = {key: payload[key] for key in ("cause", "confidence", "fix_suggestion", "observed")
-                         if payload.get(key)}
+            out[edge] = {key: payload[key] for key in ("cause", "headline", "confidence", "fix_suggestion", "observed")
+                         if payload.get(key)} | dated
     return out
+
+
+def earlier_findings(case: CaseFile) -> dict[str, dict[str, Any]]:
+    """Earlier scans' findings on routing Issues still open that this scan's drill did not conclude on.
+
+    Saved with the scan, so a finding stays, dated, until a drill concludes on its Issue again.
+    """
+    carried = getattr(case, "previous_findings", None) or {}
+    if not carried:
+        return {}
+    concluded = {str(ev["payload"].get("issue_edge_id") or "") for ev in case.evidence
+                 if ev.get("kind") == "drill_finding" and isinstance(ev.get("payload"), dict)}
+    waiting = {str(i.get("edge_id") or "") for i in case.issues if i.get("status") in _DRILL_STATUSES}
+    return {edge: finding for edge, finding in carried.items() if edge in waiting and edge not in concluded}
 
 
 def prior_exploration_for_issue(
@@ -358,10 +387,13 @@ def prior_exploration_for_issue(
             }
     earlier = (getattr(case, "previous_findings", None) or {}).get(edge)
     if earlier:
-        lead = dict(earlier)
+        from diagnostic_mas.open_faults import run_day
+
+        lead = {key: value for key, value in earlier.items() if key != "run_id"}
         if lead.get("observed"):
             lead["observed"] = _clip_prior_text(lead["observed"], limit=1200)
-        lead["note"] = "The last published scan's conclusion on this Issue: a lead, not current evidence."
+        when = f" (scan of {run_day(earlier['run_id'])})" if earlier.get("run_id") else ""
+        lead["note"] = f"An earlier scan's conclusion on this Issue{when}: a lead, not current evidence."
         out["previous_scan_finding"] = lead
     return out
 
@@ -387,10 +419,14 @@ _DRILL_STATUS_RANK = {
 }
 
 
-def _drill_issue_priority(issue: dict[str, Any]) -> tuple:
+def _drill_issue_priority(
+    issue: dict[str, Any], carried: Mapping[str, Mapping[str, Any]] | None = None, latest: str = ""
+) -> tuple:
     """Higher sort key = drill sooner.
 
-    Prefer ``open`` over ``budget_exhausted``, then live_l2 DN / degraded / severity.
+    Prefer ``open`` over ``budget_exhausted``, then an Issue the last scan's drill did not conclude on
+    (``carried`` findings, by edge id, from scan ``latest``), then one that lists its devices,
+    then live_l2 DN / degraded / severity, then the one that has waited longest.
     """
     status_rank = _DRILL_STATUS_RANK.get(str(issue.get("status") or "").lower(), -1)
     sev = {"critical": 4, "high": 3, "medium": 2, "low": 1}.get(
@@ -407,7 +443,13 @@ def _drill_issue_priority(issue: dict[str, Any]) -> tuple:
             break
     code = str(issue.get("code") or "")
     degraded = 1 if "degraded" in code or "down" in code else 0
-    return (status_rank, has_dn, degraded, sev)
+    earlier = (carried or {}).get(str(issue.get("edge_id") or ""))
+    run = None if earlier is None else str(earlier.get("run_id") or "")
+    fresh = 0 if run == latest else 1
+    # Never concluded on, then the oldest finding; a scan id is its start time (20261030T221052Z).
+    waited = (1, 0) if run is None else (0, -int(re.sub(r"\D", "", run) or 0))
+    listed = 1 if any(str(d).strip() for d in issue.get("devices") or [] if d) else 0
+    return (status_rank, fresh, listed, has_dn, degraded, sev, waited)
 
 
 def _quarantined_device_map() -> dict[str, str]:
@@ -454,20 +496,17 @@ def select_drill_issues(case: CaseFile, *, limit: int) -> list[dict[str, Any]]:
             and i.get("edge_id") in dataplane_done
         )
     ]
-    live: list[dict[str, Any]] = []
-    no_device: list[dict[str, Any]] = []
-    for issue in candidates:
-        devices = [str(d).strip() for d in (issue.get("devices") or []) if d]
-        if not devices:
-            no_device.append(issue)
-            continue
-        if _issue_live_devices(issue):
-            live.append(issue)
-        # else: all endpoints quarantined — skip (availability-aware)
-    live.sort(key=_drill_issue_priority, reverse=True)
-    no_device.sort(key=_drill_issue_priority, reverse=True)
-    ordered = live + no_device
-    return ordered[:limit]
+    # An Issue whose listed devices are all quarantined is skipped (availability-aware).
+    drillable = [
+        issue for issue in candidates
+        if not any(str(d).strip() for d in issue.get("devices") or [] if d) or _issue_live_devices(issue)
+    ]
+    # An earlier finding is still handed to a later drill as a lead: what the last scan (its newest
+    # finding's scan) concluded on waits a scan, and short slots go to what waited longest.
+    carried = getattr(case, "previous_findings", None) or {}
+    latest = max((str(finding.get("run_id") or "") for finding in carried.values()), default="")
+    drillable.sort(key=lambda issue: _drill_issue_priority(issue, carried, latest), reverse=True)
+    return drillable[:limit]
 
 
 def compact_drill_context(
@@ -957,6 +996,9 @@ def parse_drill_finding(data: Any) -> dict[str, Any] | None:
     state = str(data.get("session_state") or "").strip().lower()
     if state in {"established", "not_established", "unknown"}:
         finding["session_state"] = state
+    headline = " ".join(str(data.get("headline") or "").split())
+    if headline:
+        finding["headline"] = headline
     return finding
 
 

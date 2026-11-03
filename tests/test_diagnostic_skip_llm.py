@@ -96,6 +96,24 @@ async def test_skip_llm_run_contacts_no_llm_endpoint(
 
 
 @pytest.mark.asyncio
+async def test_a_run_loads_the_port_findings_of_the_last_published_scan(
+    nso_env, llm_requests, tmp_path, monkeypatch
+):
+    """A port the last scan explained can keep its finding: the run hands that scan to the port step."""
+    from diagnostic_mas import port_investigation
+    from diagnostic_mas.case import Budget, CaseFile
+    from diagnostic_mas.state_paths import persist_case
+
+    persist_case(tmp_path / "diagnostic_mas", run_id="20261102T120000Z", case=CaseFile(budget=Budget(0, 0)))
+    loaded: list[str] = []
+    monkeypatch.setattr(port_investigation, "previous_port_findings",
+                        lambda previous: loaded.append((previous or {}).get("run_id")) or {})
+
+    assert await _run_offline(_args(skip_llm=True)) == 0
+    assert loaded == ["20261102T120000Z"]
+
+
+@pytest.mark.asyncio
 async def test_llm_run_still_requires_llm_key(nso_env, llm_requests):
     with pytest.raises(RuntimeError, match="FABRIC_AI_API_KEY is required"):
         await _run_offline(_args(skip_llm=False))

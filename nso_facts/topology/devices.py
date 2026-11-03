@@ -41,10 +41,6 @@ def parse_device_names(response: Any) -> list[str]:
     return []
 
 
-def nodes_from_device_names(device_names: list[str]) -> list[dict[str, str | None]]:
-    return [{"id": name, "site_id": None} for name in sorted(device_names)]
-
-
 def _name_from_device_entry(entry: Any) -> str:
     if isinstance(entry, str):
         return entry.strip()

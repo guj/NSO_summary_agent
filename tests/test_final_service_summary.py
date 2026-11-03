@@ -1,4 +1,3 @@
-import json
 import pytest
 from diagnostic_mas.case import CaseFile, Budget
 from diagnostic_mas.service_final_status import assessment, final_service_counts, format_final_services_table, STATUSES

@@ -1,5 +1,4 @@
 """Basic evidence closes coverage gaps without overriding dig failures."""
-from copy import deepcopy
 import pytest
 from diagnostic_mas.dataplane_verify import accept_dataplane_conclusion
 

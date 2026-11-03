@@ -183,8 +183,6 @@ def test_bgp_routing_qualification_spine_vs_drill():
         _bgp_routing_qualification,
         format_devices_operator,
     )
-    from diagnostic_mas.device_health import topology_from_case
-    from nso_report.executive import build_device_health_rows
 
     case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
     case.device_names = ["atla-data-sw", "star-data-sw", "wash-data-sw"]

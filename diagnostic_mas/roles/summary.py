@@ -451,6 +451,35 @@ def _compact_case_for_llm(
                 "A device with 0 services leaves no service unchecked."
             ),
         }
+    from diagnostic_mas.drill import earlier_findings
+    from diagnostic_mas.open_faults import run_day
+
+    earlier = earlier_findings(case)
+    if earlier:
+        out["earlier_scan_findings"] = {
+            "findings": [
+                {"issue_edge_id": edge,
+                 "investigated": run_day(finding["run_id"]) if finding.get("run_id") else "an earlier scan",
+                 **{key: finding[key] for key in ("cause", "confidence", "fix_suggestion") if finding.get(key)}}
+                for edge, finding in earlier.items()
+            ],
+            "note": ("An earlier scan's LLM investigation of an Issue still open; this scan did not "
+                     "recheck it. A dated lead, not current evidence."),
+        }
+    kept_ports = list((getattr(case, "earlier_port_findings", None) or {}).values())
+    if kept_ports:
+        out["earlier_port_findings"] = {
+            "findings": [
+                {"device": finding.get("device"), "port": finding.get("port"),
+                 "investigated": run_day(finding["run_id"]) if finding.get("run_id") else "an earlier scan",
+                 **{key: value for key, value in (("cause", finding.get("headline") or finding.get("cause")),
+                                                  ("confidence", finding.get("confidence"))) if value},
+                 "services": len({name for names in (finding.get("links") or {}).values() for name in names})}
+                for finding in kept_ports
+            ],
+            "note": ("A port an earlier scan's LLM investigated. Its links are down on this scan's own check, "
+                     "but this scan did not re-read its optics: the finding is a dated lead, not current evidence."),
+        }
     if case_delta is not None:
         out["changes_since_previous"] = case_delta
         if previous_run_id:

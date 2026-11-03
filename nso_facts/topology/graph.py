@@ -22,18 +22,6 @@ def isis_edge_id(
     return f"isis:{device_b}:{interface_b}:{device_a}:{interface_a}"
 
 
-def service_edge_id(
-    service_type: str,
-    name: str,
-    device_a: str,
-    device_b: str | None,
-) -> str:
-    if device_b is None:
-        return f"svc:{service_type}:{name}:{device_a}:_local"
-    a, b = sorted((device_a, device_b))
-    return f"svc:{service_type}:{name}:{a}:{b}"
-
-
 def bgp_edge_id(
     device_a: str,
     address_a: str,
@@ -72,63 +60,6 @@ def ordered_isis_endpoints(
     if end_a <= end_b:
         return end_a, end_b
     return end_b, end_a
-
-
-def empty_static_layers() -> dict[str, Any]:
-    return {
-        "physical": {"edges": [], "summary": {"total": 0, "by_device": {}}},
-        "underlay": {"edges": [], "summary": {"total": 0, "by_device": {}}},
-        "routing": {"edges": [], "summary": {"total": 0, "by_device": {}}},
-        "services": {"edges": [], "summary": {"total": 0, "by_type": {}}},
-    }
-
-
-def empty_operational_layers() -> dict[str, Any]:
-    return {
-        "physical": {
-            "edges": [],
-            "summary": {
-                "total": 0,
-                "up": 0,
-                "down": 0,
-                "admin-down": 0,
-                "degraded": 0,
-                "unknown": 0,
-                "by_device": {},
-            },
-        },        "underlay": {
-            "edges": [],
-            "summary": {
-                "total": 0,
-                "up": 0,
-                "down": 0,
-                "unidirectional": 0,
-                "unknown": 0,
-                "by_device": {},
-            },
-        },
-        "routing": {
-            "edges": [],
-            "summary": {
-                "total": 0,
-                "up": 0,
-                "down": 0,
-                "degraded": 0,
-                "unknown": 0,
-                "by_device": {},
-            },
-        },
-        "services": {
-            "edges": [],
-            "summary": {
-                "total": 0,
-                "up": 0,
-                "down": 0,
-                "degraded": 0,
-                "unknown": 0,
-            },
-        },
-    }
 
 
 def summarize_static_physical(edges: list[dict[str, Any]]) -> dict[str, Any]:
@@ -270,32 +201,6 @@ def summarize_static_routing(edges: list[dict[str, Any]]) -> dict[str, Any]:
     return {"total": len(edges), "by_device": _count_routing_edges_by_device(edges)}
 
 
-def summarize_static_services(edges: list[dict[str, Any]]) -> dict[str, Any]:
-    by_type: dict[str, int] = {}
-    for edge in edges:
-        meta = edge.get("meta") or {}
-        st = str(meta.get("service_type") or "unknown")
-        by_type[st] = by_type.get(st, 0) + 1
-    return {"total": len(edges), "by_type": dict(sorted(by_type.items()))}
-
-
-def summarize_operational_services(edges: list[dict[str, Any]]) -> dict[str, Any]:
-    summary: dict[str, Any] = {
-        "total": len(edges),
-        "up": 0,
-        "down": 0,
-        "degraded": 0,
-        "unknown": 0,
-    }
-    for edge in edges:
-        status = (edge.get("state") or {}).get("status", "unknown")
-        if status in summary and isinstance(summary[status], int):
-            summary[status] += 1
-        else:
-            summary["unknown"] += 1
-    return summary
-
-
 def summarize_operational_routing(edges: list[dict[str, Any]]) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "total": len(edges),
@@ -350,17 +255,3 @@ def _count_routing_edges_by_device(edges: list[dict[str, Any]]) -> dict[str, int
         for device in devices_from_routing_edge(edge):
             counts[device] = counts.get(device, 0) + 1
     return dict(sorted(counts.items()))
-
-
-def summarize_issues(issues: list[dict[str, Any]]) -> dict[str, Any]:
-    by_layer: dict[str, int] = {
-        "physical": 0,
-        "underlay": 0,
-        "routing": 0,
-        "services": 0,
-    }
-    for issue in issues:
-        layer = issue.get("layer")
-        if layer in by_layer:
-            by_layer[layer] += 1
-    return {"issues_total": len(issues), "issues_by_layer": by_layer}

@@ -68,9 +68,13 @@ class CaseFile:
     # Set when provider LLM spend budget is exceeded; stop further LLM calls.
     # Historical faults are not current evidence or fresh diagnoses.
     last_known_service_faults: list[dict[str, Any]] = field(default_factory=list)
-    # The last published scan's routing drill findings, by issue edge id: leads for this
-    # scan's drills. Not current evidence, and not saved with this case.
+    # Earlier scans' latest routing drill findings, by issue edge id, dated by ``run_id``: leads for
+    # this scan's drills, not current evidence. Those on Issues this scan leaves alone are saved with it.
     previous_findings: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Earlier scans' latest concluded port findings, by ``if:device:port``, dated by ``run_id``. Not saved.
+    previous_port_findings: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Those this scan kept for ports it did not investigate again, link ages counted on; saved with it.
+    earlier_port_findings: dict[str, dict[str, Any]] = field(default_factory=dict)
     # The last published scan's port counters, to subtract from this scan's. Not saved with this case.
     previous_port_counters: dict[str, Any] = field(default_factory=dict)
     # Token counts for the scan, and its cost and the budget when the provider reports them.

@@ -375,7 +375,10 @@ def format_dataplane_dig_line(case: CaseFile) -> str:
     if explained:
         counts = [(sum(1 for f in found(case) if f.get("concluded")), kind)
                   for found, kind in ((port_findings, "port"), (device_findings, "device"))]
-        by = " and ".join(f"{n} {kind} investigation{'s' if n != 1 else ''}" for n, kind in counts if n)
+        kept = sum(1 for f in port_findings(case) if f.get("earlier"))
+        earlier = {"port": f" ({kept} from {'an earlier scan' if kept == 1 else 'earlier scans'})" if kept else ""}
+        by = " and ".join(f"{n} {kind} investigation{'s' if n != 1 else ''}{earlier.get(kind, '')}"
+                          for n, kind in counts if n)
         line += (
             f" {explained} service{'s are' if explained != 1 else ' is'} explained by {by}: "
             "Down on this scan's own evidence, not investigated individually.")
@@ -645,7 +648,9 @@ def render_report(
                 for device, result in sorted(retries.items()):
                     initial = result.get("fleet_result") or "missing"
                     effective = result.get("effective_result") or "unknown"
-                    outcome = effective if result.get("resolved") else "inconclusive; Sync Unknown retained"
+                    outcome = effective if result.get("resolved") else (
+                        f"skipped ({result['skipped']})" if result.get("skipped") else "inconclusive"
+                    ) + "; Sync Unknown retained"
                     lines.append(f"- {device}: fleet `{initial}` → retry {outcome}.")
                 lines.append("")
     from diagnostic_mas.unknown_breakdown import format_unknown_breakdown

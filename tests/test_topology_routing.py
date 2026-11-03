@@ -201,6 +201,19 @@ def test_pair_bgp_observations_bidirectional_up():
     assert not any(i["code"] == "one_sided_session" for i in issues)
 
 
+def test_each_end_of_a_paired_session_keeps_its_own_state_whichever_table_is_read_first():
+    router_ids = {"aaa-data-sw": "10.0.0.1", "zzz-data-sw": "10.0.0.2"}
+    aaa = BgpSessionObservation("aaa-data-sw", "10.0.0.2", "Idle")
+    zzz = BgpSessionObservation("zzz-data-sw", "10.0.0.1", "Established")
+    for observations in ([aaa, zzz], [zzz, aaa]):
+        edges, issues = pair_bgp_observations(observations, {}, router_ids)
+
+        assert edges[0]["local"]["device"] == "aaa-data-sw"
+        assert (edges[0]["state"]["local"], edges[0]["state"]["remote"]) == ("idle", "established")
+        assert [i["message"] for i in issues if i["code"] == "one_sided_session"] == [
+            "BGP session aaa-data-sw 10.0.0.1 (idle) ↔ zzz-data-sw 10.0.0.2 (established)"]
+
+
 def _pair_states(state_a: str, state_b: str):
     observations = [
         BgpSessionObservation("lbnl-data-sw", "10.0.0.2", state_a),
@@ -511,12 +524,46 @@ def test_unmatched_neighbor_in_another_networks_as_is_an_outside_peer():
                                   "(Up/Down 00:00:00); only this end is visible")
     assert unmatched_bgp_neighbors(observations, configs, STAR_IDS) == [
         {"device": "star-data-sw", "address": "10.129.134.2", "remote_as": 47065,
-         "state": "active", "up_down": "00:00:00", "outside": True},
+         "state": "active", "up_down": "00:00:00", "outside": True, "prefixes": None},
         {"device": "star-data-sw", "address": "10.128.128.1", "remote_as": 398900,
-         "state": "established", "up_down": "4w6d", "outside": False},
+         "state": "established", "up_down": "4w6d", "outside": False, "prefixes": 0},
         {"device": "star-data-sw", "address": "198.125.141.24", "remote_as": 293,
-         "state": "established", "up_down": "1y08w", "outside": True},
+         "state": "established", "up_down": "1y08w", "outside": True, "prefixes": 18350},
     ]
+
+
+def test_an_established_row_keeps_the_prefixes_it_received():
+    rows = {obs.neighbor_address: obs.prefixes for obs in parse_bgp_summary_text("star-data-sw", BGP_SUMMARY_STAR)}
+    estab = {obs.neighbor_address: obs.prefixes for obs in parse_bgp_summary_text("lbnl-data-sw", BGP_SUMMARY_LBNL)}
+
+    assert rows == {"10.129.134.2": None, "10.133.0.1": 496338, "10.128.128.1": 0, "198.125.141.24": 18350}
+    assert estab["10.148.0.1"] is None                    # Idle: the column holds the state, not a count
+    assert estab["10.128.128.1"] == 200160                # the older "200160 (Estab)" row
+
+
+def test_a_paired_session_keeps_each_ends_prefixes_and_up_down_under_its_own_device():
+    edge_id = bgp_edge_id("star-data-sw", "10.129.128.1", "wash-data-sw", "10.133.0.1")
+    wash = BGP_SUMMARY_WASH.replace("32w4d     496338", "32w3d     515490")
+    configs = {"star-data-sw": [BgpNeighborConfig("star-data-sw", "10.133.0.1", 398900, 398900)]}
+    star_rows, wash_rows = parse_bgp_summary_text("star-data-sw", BGP_SUMMARY_STAR), parse_bgp_summary_text("wash-data-sw", wash)
+    # Whichever device's table is read first, each count stays with the device that received it.
+    for observations in (star_rows + wash_rows, wash_rows + star_rows):
+        edge = next(e for e in pair_bgp_observations(observations, configs, STAR_IDS)[0] if e["id"] == edge_id)
+
+        # star (10.129.128.1) is the edge's local end.
+        assert edge["state"]["prefixes"] == {"local": 496338, "remote": 515490}
+        assert edge["state"]["up_down"] == {"local": "32w4d", "remote": "32w3d"}
+
+
+def test_a_session_read_at_one_end_keeps_that_ends_prefixes():
+    from nso_facts.topology.routing import _unpaired_session_state
+
+    static = {"local": {"device": "star-data-sw", "address": "10.129.128.1"},
+              "remote": {"device": "wash-data-sw", "address": "10.133.0.1"}}
+    state = _unpaired_session_state(static, parse_bgp_summary_text("star-data-sw", BGP_SUMMARY_STAR))
+
+    assert state["prefixes"] == {"local": 496338, "remote": None}
+    assert state["up_down"] == {"local": "32w4d", "remote": None}
 
 
 def test_no_neighbor_is_called_outside_without_a_known_fabric_as():

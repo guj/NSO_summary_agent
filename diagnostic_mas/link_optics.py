@@ -1,4 +1,4 @@
-"""Optics at both ends of an IS-IS adjacency that is down although both routers answered.
+"""Optics at both ends of an IS-IS adjacency that is down at a router that answered.
 
 Read once per scan, after the spines: each end's transmit and receive power per lane and
 its DOM alarms, from IOS-XR ``show controllers <port>``. The report sets one direction
