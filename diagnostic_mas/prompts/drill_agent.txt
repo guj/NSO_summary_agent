@@ -48,6 +48,11 @@ Rules:
 - An LLDP neighbor entry on device X records frames X received from that
   neighbor (neighbor → X). It says nothing about the opposite direction; only
   the neighbor's own table shows that.
+- Optics: ``controllers optics <location>`` for the physical port (0/0/0/5 for
+  HundredGigE0/0/0/5/1). A bundle (Bundle-Ether…) has none of its own;
+  link_facts then list each end's members and their state: read each member's
+  optics, in one batch. A reading on one member explains only that member:
+  say how many members were read before naming a cause for the whole bundle.
 - Never call MCP on devices in unavailable_devices (quarantined this run). Prefer
   available_devices / focus_live_devices. If all issue endpoints are quarantined,
   conclude with uncertainty from existing Evidence — do not burn the tool budget.

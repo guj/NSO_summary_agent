@@ -1159,6 +1159,11 @@ def test_a_newly_detected_fault_names_its_lane_and_whether_that_lane_was_down_be
                                case_to_dict(_with_lane(_dp_case("down"), {lane1: ["circuit"]}, {lane1: "02:15:40"})))
     assert delta["newly_failed_services"][0]["detail"].endswith(f"; on fiu-data-sw {lane1}, last flapped 02:15:40 ago")
 
+    # A lane with no state change on record has no flap to date.
+    delta = compute_case_delta(case_to_dict(before),
+                               case_to_dict(_with_lane(_dp_case("down"), {lane1: ["circuit"]}, {lane1: "never"})))
+    assert delta["newly_failed_services"][0]["detail"].endswith(f"; on fiu-data-sw {lane1}, never came up")
+
     # Not explained by a port investigation: unchanged.
     delta = compute_case_delta(case_to_dict(_dp_case()), case_to_dict(_dp_case("down")))
     assert "last flapped" not in delta["newly_failed_services"][0]["detail"]

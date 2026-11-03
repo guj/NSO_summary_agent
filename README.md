@@ -686,7 +686,7 @@ were cleared in between, or when a counter went back. A read that fails leaves t
 without a reading and is not a fault. The first scan after enabling this has nothing to
 subtract.
 
-A link seen before says how long and how often, for example "gaining errors in every scan since
+A link seen before says how long and how often, for example "listed in every scan since
 27 Oct or earlier (28)". The same clause follows an IS-IS adjacency that changed state between
 scans and a BGP session or IS-IS adjacency that is down. It is counted from what earlier scans
 saved: a scan that did not read the item counts neither way, "or earlier" means the oldest scan

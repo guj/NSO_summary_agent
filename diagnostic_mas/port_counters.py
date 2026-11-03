@@ -296,11 +296,12 @@ def gain_line(row: dict[str, Any]) -> str:
 def gain_lines(rows: list[dict[str, Any]], history: dict[str, dict[str, Any]] | None = None) -> list[str]:
     """One line per link, worst first: the two ends of an IS-IS link together when both are listed.
 
-    With ``history``, a link seen before says how long and how often it has gained errors.
+    With ``history``, a link seen before says how long and how often it has been listed here,
+    for errors or for state changes.
     """
     from diagnostic_mas.item_history import clause_for, link_key
 
-    age = lambda row: clause_for(history, link_key(row["device"], row["port"]), "gaining errors")
+    age = lambda row: clause_for(history, link_key(row["device"], row["port"]), "listed")
     listed = {(row["device"], row["port"]): row for row in rows}
     done: set[tuple[str, str]] = set()
     lines = []

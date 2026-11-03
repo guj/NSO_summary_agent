@@ -14,9 +14,13 @@ Find the link or links that should carry its IS-IS adjacencies, from the
 device's own IS-IS and interface output, then read for each:
 - interface state: shut down by configuration or not, line protocol, time
   of the last state change, number of state transitions, input errors;
-- optics or controller state ("controllers <port>"): transmit and receive
-  power per lane, alarms, and the reason the device gives for the link
-  being down.
+- optics state: receive and transmit power per lane and alarms, with
+  "controllers optics <location>" for the physical port (0/0/0/5 for
+  HundredGigE0/0/0/5/1), and the reason the device gives for the link
+  being down. A bundle (Bundle-Ether...) has no optics of its own: read its
+  members with "bundle <name>", then each member's optics; a reading on one
+  member says nothing about the others, and members cannot be paired across
+  the link.
 For a far end named in the Issue, read the same for its interface, then
 compare each direction lane by lane: one end's transmit power with the
 other end's receive power. A receive level inside the alarm thresholds is

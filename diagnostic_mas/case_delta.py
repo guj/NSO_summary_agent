@@ -477,6 +477,7 @@ def _lane_note(name: str, now: dict[str, tuple[str, str, Any, Any]], down_before
     device, lane, age, flapped_at = now[name]
     # An age counts from the investigation's read, not from when the report is read.
     when = (f", last flapped {_utc_minute(flapped_at)}" if flapped_at
+            else ", never came up" if age == "never"
             else f", last flapped {age} ago" if age else "")
     return (f"on {device} {lane}" + when
             + ("; that lane was down in the previous run too" if (device, lane) in down_before else ""))

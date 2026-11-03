@@ -122,3 +122,78 @@ async def test_nothing_is_read_without_an_adjacency_down_or_with_an_unknown_far_
 
     assert asked == [(NEWY, "controllers HundredGigE0/0/0/19")]    # only the end whose interface is known
     assert not any(ev.get("kind") == KIND for ev in quiet.evidence)   # nothing down: nothing stored
+
+
+ATLA, WASH = "atla-data-sw", "wash-data-sw"
+BUNDLE_EDGE = isis_edge_id(ATLA, "Bundle-Ether100.3000", WASH, "Bundle-Ether101.3000")
+
+
+def _bundle(name: str, members: list[str], active: int = 0) -> str:
+    """``show bundle <name>`` as IOS-XR printed it on 3 Nov 2026 (atla↔wash), trimmed; MAC neutral."""
+    rows = "\r\n".join(f"  {port:<20}  Local            Configured   0x8000, 0x000{6 - n}   400000000\r\n"
+                       "      Link is down" for n, port in enumerate(members))
+    return (f"\r\n\rTue Nov  3 07:44:09.578 UTC\r\n\r\n{name}\r\n"
+            "  Status:                                    Down\r\n"
+            f"  Local links <active/standby/configured>:   {active} / 0 / {len(members)}\r\n"
+            "  Local bandwidth <effective/available>:     0 (0) kbps\r\n"
+            "  MAC address (source):                      0000.0000.0001 (Chassis pool)\r\n"
+            "  LACP:                                      Operational\r\n\r\n"
+            "  Port                  Device           State        Port ID         B/W, kbps\r\n"
+            "  --------------------  ---------------  -----------  --------------  ----------\r\n"
+            f"{rows}\r\nRP/0/RP0/CPU0:router#")
+
+
+def test_a_bundles_members_are_read_from_show_bundle():
+    from diagnostic_mas.link_optics import parse_bundle
+
+    reading = parse_bundle(_bundle("Bundle-Ether100", ["FH0/0/0/27", "FH0/0/0/28", "FH0/0/0/29"]))
+
+    assert reading == {"active": 0, "configured": 3, "members": [
+        {"port": f"FourHundredGigE0/0/0/{n}", "state": "Configured", "note": "Link is down"} for n in (27, 28, 29)]}
+    assert parse_bundle("% Invalid input detected") is None
+
+
+BUNDLE_OUTPUTS = {
+    (ATLA, "bundle Bundle-Ether100"): _bundle("Bundle-Ether100", ["FH0/0/0/27", "FH0/0/0/28", "FH0/0/0/29"]),
+    (WASH, "bundle Bundle-Ether101"): _bundle("Bundle-Ether101", ["FH0/0/0/40", "FH0/0/0/48", "FH0/0/0/52"]),
+}
+MEMBERS = (f"{ATLA} Bundle-Ether100, 0 of 3 members active: "
+           + ", ".join(f"FourHundredGigE0/0/0/{n} (Configured, Link is down)" for n in (27, 28, 29)) + "; "
+           f"{WASH} Bundle-Ether101, 0 of 3 members active: "
+           + ", ".join(f"FourHundredGigE0/0/0/{n} (Configured, Link is down)" for n in (40, 48, 52)) + ".")
+
+
+@pytest.mark.asyncio
+async def test_a_bundle_end_lists_its_members_and_their_state_for_the_report_and_the_drill():
+    from diagnostic_mas.drill import prior_exploration_for_issue
+
+    case, asked = _case(BUNDLE_EDGE), []
+    await record_link_optics(None, case, call=_call(BUNDLE_OUTPUTS, asked))
+
+    # A bundle has no optics of its own; its members' optics are left to the investigation.
+    assert asked == [(ATLA, "bundle Bundle-Ether100"), (WASH, "bundle Bundle-Ether101")]
+    line = optics_line(case, BUNDLE_EDGE)
+    assert line == f"Bundle members, each end on its own: {MEMBERS} Member optics not read."
+    assert line in "\n".join(format_devices_operator(case))
+    assert line in prior_exploration_for_issue(case, case.issues[0])["link_facts"]["readings"]
+    assert "**Optics reads:** 0 of 0 ports at the ends of IS-IS adjacencies down; 2 bundles read for their members" \
+        in "\n".join(format_run_details(case))
+
+
+@pytest.mark.asyncio
+async def test_bundle_reads_share_the_ceiling():
+    case, asked = _case(BUNDLE_EDGE), []
+    await record_link_optics(None, case, ceiling=1, call=_call(BUNDLE_OUTPUTS, asked))
+
+    assert asked == [(ATLA, "bundle Bundle-Ether100")]
+    assert optics_line(case, BUNDLE_EDGE).endswith(f"; {WASH} Bundle-Ether101: members not read. Member optics not read.")
+
+
+@pytest.mark.asyncio
+async def test_a_bundle_that_cannot_be_read_says_so():
+    case = _case(BUNDLE_EDGE)
+    await record_link_optics(None, case, call=_call({}, []))
+
+    assert optics_line(case, BUNDLE_EDGE) == (
+        f"Bundle members, each end on its own: {ATLA} Bundle-Ether100: members not read; "
+        f"{WASH} Bundle-Ether101: members not read. Member optics not read.")

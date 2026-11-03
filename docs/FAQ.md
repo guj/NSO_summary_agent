@@ -167,6 +167,11 @@ direction's fibre, connectors or optics, even while the receive level is still i
 numbers are readings only; the report draws no conclusion from them. "Not read" means that end's output could not
 be read or parsed (for example a platform without that output).
 
+A bundle (Bundle-Ether…) has no optics of its own. When an end is one, the line says "Bundle members, each end on
+its own: …" instead: each end's members and their state from `show bundle <name>`, as many active as configured,
+with "Member optics not read". Members cannot be matched across the link, so nothing is set against the other end.
+An LLM investigation of the adjacency gets that list and reads each member's optics itself.
+
 "Packets since the previous scan (11 h 20 min): A → B: N sent, M received; B → A: …" subtracts the last published
 scan's packet counters from this scan's at both ends, so what one end sent is set against what the other received
 over the same time. The counts are for the whole port, every VLAN on it. When both scans counted bytes, "(bytes: X
@@ -220,10 +225,11 @@ one could expose session state, and the agent would then use the server's per-ne
   listed it and, for a down link, how long the device says it has been down. With
   `NOTIFICATION_DIGEST=1`, the Slack and email digest starts with the same changes.
 - A device whose automated live queries timed out or failed. Further live queries to it are skipped
-  for the rest of the run. NSO configuration may still be present and manual access may still work,
-  so this is not proof that the device is down. A single read that ran out of time while the
-  device was still printing its answer does not count: only that read fails, and later reads
-  still go to the device. If NSO itself stopped answering, the scan stops
+  for the rest of the run, and a service whose devices are all skipped gets no LLM investigation:
+  the Unknown breakdown lists it as not investigated. NSO configuration may still be present and
+  manual access may still work, so this is not proof that the device is down. A single read that
+  ran out of time while the device was still printing its answer does not count: only that read
+  fails, and later reads still go to the device. If NSO itself stopped answering, the scan stops
   instead and produces no report; see
   [When NSO stops answering during a scan](DIAGNOSTIC_RUNNER.md#when-nso-stops-answering-during-a-scan).
 

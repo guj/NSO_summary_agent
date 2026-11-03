@@ -280,7 +280,7 @@ def test_changes_section_puts_age_on_link_and_adjacency_lines():
 
     assert ("- `toky-data-sw` TenGigE0/0/0/18/0 (IS-IS link to `seat-data-sw` HundredGigE0/0/0/19.1491): +8290 CRC, "
             "+8290 input errors in 2 h 21 min; 32 services on this device; "
-            "gaining errors in every scan since 27 Oct or earlier (28)") in text
+            "listed in every scan since 27 Oct or earlier (28)") in text
     assert ("- IS-IS `seat-data-sw` HundredGigE0/0/0/19.1491 ↔ `toky-data-sw` TenGigE0/0/0/18/0.2175 — "
             "last changed 3 Nov 04:11 UTC; changed state in every scan since 29 Oct or earlier (16)") in text
 
@@ -315,7 +315,7 @@ def test_digest_and_summary_input_carry_the_age():
 
     issue = {"code": "unidirectional_adjacency", "edge_id": SALT_SEAT, "layer": "underlay", "status": "open"}
     delta = _changes_delta(item_history=HISTORY, persistent=[issue])
-    clause = "gaining errors in every scan since 27 Oct or earlier (28)"
+    clause = "listed in every scan since 27 Oct or earlier (28)"
 
     assert any(line.endswith(clause) for line in digest_changes(delta, "20261102T234904Z", []))
     summary_input = compact_delta_for_llm(delta)
@@ -372,3 +372,15 @@ def test_a_change_first_seen_after_a_scan_with_no_change_time_is_not_exact():
 
     assert first(_scan("20261029T161520Z", isis={ISIS: UP})) is False
     assert first(_scan("20261029T161520Z", isis={ISIS: UP}, changed={ISIS: "2026-10-28T00:00:00+00:00"})) is True
+
+
+
+def test_a_link_that_only_changed_state_is_not_said_to_gain_errors():
+    from diagnostic_mas.port_counters import gain_lines
+
+    flapping = _gain_row() | {"gained": {}, "state_changes": 9}
+
+    line = gain_lines([flapping], HISTORY)[0]
+
+    assert "9 state changes" in line and "gaining errors" not in line
+    assert line.endswith("; listed in every scan since 27 Oct or earlier (28)")
