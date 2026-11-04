@@ -474,7 +474,8 @@ to zero; these older mechanisms are separate from dataplane digs and issue drill
 ## Reports and topology
 
 Saved reports live under `state/diagnostic_mas/runs/<run-id>/` by default:
-`case.json`, `report.md`, and self-contained `report.html`. The HTML attachment
+`case.json`, `report.md`, self-contained `report.html`, and `mcp_calls.txt`, one line per MCP
+call (the terminal shows only the totals and per-stage counts). The HTML attachment
 contains a collapsible circular routing topology with IS-IS/BGP toggles, curved
 parallel links, device selection and endpoint evidence. No extra queries or
 external assets are needed. Open HTML in a browser; mail clients may disable its

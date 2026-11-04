@@ -267,6 +267,15 @@ def test_old_saved_scans_are_removed_and_the_rest_kept(tmp_path: Path, capsys):
     assert "Removed 2 saved scans older than 30 days" in capsys.readouterr().err
 
 
+def test_an_old_scans_call_list_goes_with_it(tmp_path: Path):
+    from diagnostic_mas.state_paths import prune_saved_runs
+
+    old = _saved_run(tmp_path / "runs", "20261001T000000Z", "mcp_calls.txt")
+
+    assert prune_saved_runs(tmp_path, run_id="20261103T041450Z", keep_days=30) == 1
+    assert not old.exists()
+
+
 def test_keep_days_zero_removes_nothing_and_a_failure_does_not_stop_the_scan(tmp_path: Path, monkeypatch, capsys):
     from diagnostic_mas.state_paths import prune_saved_runs
 

@@ -460,7 +460,8 @@ Launchd does **not** require a crontab entry. `.env` in the project directory is
 1. Collects inventory and endpoint sync from NSO through MCP, then runs the deterministic operational checks
 2. Investigates eligible services with the LLM (skipped with `--skip-llm`)
 3. Compares the result with the last published case
-4. Saves `case.json`, `report.md` and `report.html` under `state/diagnostic_mas/runs/<run-id>/`
+4. Saves `case.json`, `report.md`, `report.html` and `mcp_calls.txt` (one line per MCP call; the terminal
+   shows only the totals) under `state/diagnostic_mas/runs/<run-id>/`
 5. Sends the digest to email and/or Slack if configured
 
 ## Service health status
@@ -623,7 +624,7 @@ docs/
   DIAGNOSTIC_RUNNER.md  # install, configure, run, read the report
   DOCKER.md             # run the agent from the image on a server
   FAQ.md                # operator FAQ
-state/            # gitignored; diagnostic_mas/runs/<run-id>/ holds case.json, report.md, report.html
+state/            # gitignored; diagnostic_mas/runs/<run-id>/ holds case.json, report.md, report.html, mcp_calls.txt
 deploy/
   agent/                        # building the image (README.md), compose file, pinned versions
   com.esnet.nso-summary.plist   # example launchd schedule
@@ -770,7 +771,7 @@ Saved scans under `runs/` (about 24 MB each, mostly `case.json`) are kept unless
 `RUNS_KEEP_DAYS` is set. Then a scan that saves its own results removes saved scans whose run
 ID is more than that many days before its own. It never removes the scan `latest.json` names,
 which the next scan compares with. Only folders named exactly like a run ID are candidates,
-and only the three files a scan writes in them (`case.json`, `report.md`, `report.html`): a
+and only the four files a scan writes in them (`case.json`, `report.md`, `report.html`, `mcp_calls.txt`): a
 folder you rename, or anything you add to one, stays. Dry runs remove nothing. History the
 report shows (first-seen dates, how often an item was seen) is carried from scan to scan, so
 removing old scans loses none of it. Report links into `runs/` (see

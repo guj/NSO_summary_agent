@@ -3,7 +3,7 @@
 The case behind both: services on a device whose show commands the fixed checks
 cannot use came out Up in one scan and Unknown in the next on the same readings.
 """
-from diagnostic_mas.case_delta import compute_case_delta, format_changes_since_previous
+from diagnostic_mas.case_delta import compact_delta_for_llm, compute_case_delta, format_changes_since_previous
 from diagnostic_mas.dataplane_verify import accept_dataplane_conclusion
 from diagnostic_mas.open_faults import digest_changes
 from test_diagnostic_case_delta import _scan
@@ -100,6 +100,19 @@ def test_status_that_changes_on_identical_fixed_checks_is_listed():
     text = "\n".join(format_changes_since_previous(delta, previous_run_id="r1"))
     assert "**Status changed while the fixed checks read the same:**\n- `l3rt/svc` — OpUp → Unknown\n" in text
     assert "- Status changed on unchanged checks: 1 — `l3rt/svc` OpUp → Unknown" in digest_changes(delta, "r1", [])
+
+
+def test_the_summary_llm_is_given_the_status_changes_the_report_lists():
+    """test38's summary said no service status changed while its Changes section listed two."""
+    second = _judged(llm_up=False)
+    second["diagnoses"] = [{"kind": "dataplane", "source": "llm", "status": "unknown", "complete": False,
+                            "subject": {"name": "svc", "service_type": "l3rt"}}]
+    moved = compact_delta_for_llm(compute_case_delta(_judged(llm_up=True), second))[
+        "status_changed_on_unchanged_checks"]
+
+    assert (moved["count"], moved["services"]) == (1, ["l3rt/svc — OpUp → Unknown"])
+    quiet = compute_case_delta(_judged(llm_up=True), _judged(llm_up=True))
+    assert "status_changed_on_unchanged_checks" not in compact_delta_for_llm(quiet)
 
 
 def test_scan_that_did_not_investigate_the_service_is_not_a_change_of_verdict():

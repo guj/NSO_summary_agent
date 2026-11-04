@@ -51,6 +51,21 @@ def _entry(**changed) -> dict:
             "seen": 28, "read": 28, "scans": 28, "recent": SEEN * 20} | changed
 
 
+def test_a_routing_faults_clause_comes_from_its_record_and_is_worded_by_its_code():
+    from diagnostic_mas.item_history import routing_fault_clause
+
+    history = {routing_key(BGP): _entry(), routing_key(OUTSIDE): _entry()}
+
+    assert routing_fault_clause(_issue("session_down", BGP), history) == (
+        "down in every scan since 27 Oct or earlier (28)")
+    assert routing_fault_clause(_issue("outside_bgp_session_not_established", OUTSIDE), history) == (
+        "not established in every scan since 27 Oct or earlier (28)")
+    assert routing_fault_clause(_issue("session_down", BGP), history, dated=False) == "down in every scan (28)"
+    assert routing_fault_clause(_issue("collection_error", BGP), history) is None
+    assert routing_fault_clause(_issue("session_down", ""), history) is None
+    assert routing_fault_clause(_issue("session_down", BGP), None) is None
+
+
 def test_clause_wording():
     every = _entry()
     assert recurrence_clause(every, "gaining errors") == "gaining errors in every scan since 27 Oct or earlier (28)"

@@ -2,6 +2,8 @@
 
 from io import StringIO
 
+import pytest
+
 from nso_facts.mcp_accounting import (
     classify_mcp_tool,
     current_mcp_stats,
@@ -126,3 +128,56 @@ def test_record_kept_with_the_scan_counts_the_calls_made_during_llm_investigatio
     stats = stop_mcp_accounting()
 
     assert mcp_call_record(stats) == {"total": 5, "wire": 4, "cache_hits": 1, "during_llm": 2}
+
+
+def _one_call():
+    start_mcp_accounting()
+    set_mcp_stage("spines")
+    record_mcp_call("exec_show", {"device_name": "pe1", "input_command": "route 192.0.2.1"})
+    return stop_mcp_accounting()
+
+
+def test_the_call_list_goes_to_the_scans_folder_and_only_the_totals_are_printed(tmp_path):
+    buf = StringIO()
+    print_mcp_accounting(_one_call(), file=buf, calls_dir=tmp_path, mask=lambda text: text.replace("192", "xxx"))
+
+    calls = tmp_path / "mcp_calls.txt"
+    assert calls.read_text() == "[mcp] 1 spines device exec_show device=pe1 route xxx.0.2.1\n"
+    assert buf.getvalue().splitlines() == [
+        "[mcp] total=1 wire=1 cache_hits=0 wired_nso=0 wired_device=1 nso=0 device=1 other=0",
+        "[mcp] stage spines=1",
+        f"[mcp] each call: {calls}",
+    ]
+
+
+def test_the_call_list_is_printed_as_before_when_the_scan_saved_no_folder(tmp_path):
+    for calls_dir in (None, tmp_path / "not-saved"):
+        buf = StringIO()
+        print_mcp_accounting(_one_call(), file=buf, calls_dir=calls_dir)
+
+        assert "[mcp] 1 spines device exec_show device=pe1 route 192.0.2.1" in buf.getvalue()
+    assert not (tmp_path / "not-saved").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_saved_scan_keeps_its_call_list_in_its_folder_with_the_nso_address_masked(
+    nso_env, llm_requests, tmp_path, monkeypatch, capsys
+):
+    from diagnostic_mas import run as run_mod
+    from test_diagnostic_skip_llm import _args, _run_offline
+
+    stats = _one_call()
+    monkeypatch.setattr(run_mod, "stop_mcp_accounting", lambda: stats)
+    # Saved but sent nowhere: no channel or Pushgateway, whatever a checkout's .env holds.
+    for name in ("SLACK_WEBHOOK_URL", "SLACK_BOT_TOKEN", "SLACK_CHANNEL_ID", "EMAIL_TO", "EMAIL_FROM",
+                 "SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "PROMETHEUS_PUSHGATEWAY_URL"):
+        monkeypatch.delenv(name, raising=False)
+    args = _args(skip_llm=True)
+    args.dry_run, args.publish = False, True
+
+    assert await _run_offline(args) == 0
+
+    [calls] = (tmp_path / "diagnostic_mas" / "runs").glob("*/mcp_calls.txt")
+    assert calls.read_text() == "[mcp] 1 spines device exec_show device=pe1 route xxx.x.x.1\n"
+    err = capsys.readouterr().err
+    assert "[mcp] total=1 " in err and f"[mcp] each call: {calls}" in err and "[mcp] 1 spines" not in err

@@ -198,3 +198,12 @@ def recurrence_clause(entry: dict[str, Any] | None, lead: str, *, dated: bool = 
 def clause_for(history: dict[str, dict[str, Any]] | None, key: str, lead: str, *,
                dated: bool = True) -> str | None:
     return recurrence_clause((history or {}).get(key), lead, dated=dated)
+
+
+def routing_fault_clause(issue: dict[str, Any], history: dict[str, dict[str, Any]] | None, *,
+                         dated: bool = True) -> str | None:
+    """How long a routing fault has been seen, from the carried record; None for anything else."""
+    code, edge = str(issue.get("code") or ""), issue.get("edge_id")
+    if code not in ROUTING_FAULT_CODES or not isinstance(edge, str) or not edge:
+        return None
+    return clause_for(history, routing_key(edge), routing_lead(code), dated=dated)

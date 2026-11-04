@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 # Live / southbound — typically hits the device (via NSO NED / live-status).
@@ -239,8 +241,7 @@ def _format_stage_summary(stats: McpCallStats) -> str | None:
     return "[mcp] stage " + " ".join(ordered)
 
 
-def format_mcp_accounting(stats: McpCallStats) -> list[str]:
-    """Human-readable summary + per-call lines for stderr."""
+def _summary_lines(stats: McpCallStats) -> list[str]:
     lines = [
         f"[mcp] total={stats.total} "
         f"wire={stats.wire} "
@@ -254,6 +255,11 @@ def format_mcp_accounting(stats: McpCallStats) -> list[str]:
     stage_line = _format_stage_summary(stats)
     if stage_line:
         lines.append(stage_line)
+    return lines
+
+
+def _call_lines(stats: McpCallStats) -> list[str]:
+    lines: list[str] = []
     for r in stats.records:
         bits = [f"[mcp] {r.seq}"]
         if r.stage:
@@ -269,7 +275,30 @@ def format_mcp_accounting(stats: McpCallStats) -> list[str]:
     return lines
 
 
-def print_mcp_accounting(stats: McpCallStats, *, file: Any = None) -> None:
+def format_mcp_accounting(stats: McpCallStats) -> list[str]:
+    """Human-readable summary + per-call lines for stderr."""
+    return _summary_lines(stats) + _call_lines(stats)
+
+
+CALLS_FILE = "mcp_calls.txt"
+
+
+def print_mcp_accounting(stats: McpCallStats, *, file: Any = None, calls_dir: Path | None = None,
+                         mask: Callable[[str], str] | None = None) -> None:
+    """Print the totals and per-stage counts; the per-call list goes to ``calls_dir`` when it exists.
+
+    ``calls_dir`` is the folder the scan saved its report in; ``mask`` is applied to the saved
+    list. A scan that saved no folder prints the per-call list as well, so it is never lost.
+    """
     out = file if file is not None else sys.stderr
-    for line in format_mcp_accounting(stats):
+    lines = _summary_lines(stats)
+    calls = _call_lines(stats)
+    if calls_dir is not None and Path(calls_dir).is_dir():
+        path = Path(calls_dir) / CALLS_FILE
+        text = "".join(f"{line}\n" for line in calls)
+        path.write_text(mask(text) if mask else text, encoding="utf-8")
+        lines.append(f"[mcp] each call: {path}")
+    else:
+        lines.extend(calls)
+    for line in lines:
         print(line, file=out)

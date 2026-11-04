@@ -12,6 +12,7 @@ from typing import Any
 
 from agent.config import Settings
 from diagnostic_mas.case import CaseFile
+from nso_facts.mcp_accounting import CALLS_FILE
 
 
 def diagnostic_mas_state_dir(settings: Settings) -> Path:
@@ -43,6 +44,11 @@ def case_to_dict(case: CaseFile) -> dict[str, Any]:
     }
 
 
+def run_folder(state_dir: Path, run_id: str) -> Path:
+    """The folder a saved scan keeps its case and reports in."""
+    return Path(state_dir) / "runs" / str(run_id).replace(":", "-")
+
+
 def persist_case(
     state_dir: Path,
     *,
@@ -52,7 +58,7 @@ def persist_case(
     nso_address: str | None = None,
 ) -> Path:
     state_dir = Path(state_dir)
-    run_dir = state_dir / "runs" / str(run_id).replace(":", "-")
+    run_dir = run_folder(state_dir, run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
     path = run_dir / "case.json"
     path.write_text(
@@ -81,9 +87,10 @@ def persist_case(
     return path
 
 
-# A saved scan's folder is named by its run id and holds what ``persist_case`` writes.
+# A saved scan's folder is named by its run id and holds what ``persist_case`` writes, and the
+# scan's list of MCP calls.
 _RUN_FOLDER = re.compile(r"\d{8}T\d{6}Z")
-_RUN_FILES = ("case.json", "report.md", "report.html")
+_RUN_FILES = ("case.json", "report.md", "report.html", CALLS_FILE)
 
 
 def _run_time(name: str) -> datetime | None:

@@ -617,18 +617,9 @@ def _routing_findings(case: CaseFile) -> list[tuple[str, tuple[str, str], dict[s
     return list(out.values())
 
 
-def _routing_age(case: CaseFile, issue: dict[str, Any], *, dated: bool = True) -> str | None:
-    """How long this routing fault has been seen, from the record carried across scans."""
-    from diagnostic_mas.item_history import ROUTING_FAULT_CODES, clause_for, routing_key, routing_lead
-
-    code, edge = str(issue.get("code") or ""), str(issue.get("edge_id") or "")
-    if code not in ROUTING_FAULT_CODES or not edge:
-        return None
-    return clause_for(case.item_history, routing_key(edge), routing_lead(code), dated=dated)
-
-
 def _routing_finding_lines(case: CaseFile, device: str) -> list[str]:
     from diagnostic_mas.case_delta import is_problem
+    from diagnostic_mas.item_history import routing_fault_clause
     from diagnostic_mas.open_faults import run_day
     from diagnostic_mas.port_investigation import brief, short_cause
 
@@ -638,7 +629,7 @@ def _routing_finding_lines(case: CaseFile, device: str) -> list[str]:
         if device not in (a, b):
             continue
         what = "IS-IS adjacency" if edge.startswith("isis:") else "BGP session"
-        age = _routing_age(case, open_faults[edge]) if edge in open_faults else None
+        age = routing_fault_clause(open_faults[edge], case.item_history) if edge in open_faults else None
         when, rechecked = "", ""
         if finding.get("earlier"):
             when = f" on {run_day(finding['run_id'])}" if finding.get("run_id") else " in an earlier scan"
@@ -1137,6 +1128,8 @@ def _device_rows(case: CaseFile) -> list[dict[str, Any]]:
 
 def format_devices_operator(case: CaseFile) -> list[str]:
     """Per-device operator sections."""
+    from diagnostic_mas.item_history import routing_fault_clause
+
     rows = _device_rows(case)
     if not rows:
         return ["(none — no device names or spine data)"]
@@ -1181,7 +1174,7 @@ def format_devices_operator(case: CaseFile) -> list[str]:
                                 optics_line(case, str(issue.get("edge_id") or "")),
                                 traffic_line(case, str(issue.get("edge_id") or ""))):
                     mapped = f"{mapped} {reading}" if reading else mapped
-                age = _routing_age(case, issue, dated="missing since" not in mapped)
+                age = routing_fault_clause(issue, case.item_history, dated="missing since" not in mapped)
                 mapped = f"{mapped} {age[0].upper()}{age[1:]}." if age else mapped
             if mapped:
                 attention.append(mapped)

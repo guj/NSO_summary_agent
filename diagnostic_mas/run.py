@@ -332,7 +332,13 @@ async def _run(args: argparse.Namespace) -> int:
                 report_failed_attempt("nso_unreachable")
             return code
         finally:
-            print_mcp_accounting(stop_mcp_accounting())
+            from agent.publish import mask_nso_address
+            from diagnostic_mas.state_paths import run_folder
+
+            # A saved scan keeps the per-call list beside its report, so the terminal ends on the result.
+            print_mcp_accounting(stop_mcp_accounting(),
+                                 calls_dir=run_folder(diagnostic_mas_state_dir(settings), run_id),
+                                 mask=lambda text: mask_nso_address(text, os.environ.get("NSO_ADDRESS")))
 
 
 # Exit status when the scan was abandoned because NSO stopped answering.

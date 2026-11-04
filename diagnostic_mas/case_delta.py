@@ -586,16 +586,6 @@ def _adjacency_change_line(row: dict[str, str], history: dict[str, dict[str, Any
     return f"{_session_label(row)} — last changed {_utc_minute(row['changed_at'])}" + (f"; {clause}" if clause else "")
 
 
-def _routing_age(issue: dict[str, Any], history: dict[str, dict[str, Any]] | None) -> str | None:
-    """How long a routing fault has been seen, from the carried record; None for anything else."""
-    from diagnostic_mas.item_history import ROUTING_FAULT_CODES, clause_for, routing_key, routing_lead
-
-    code, edge = str(issue.get("code") or ""), issue.get("edge_id")
-    if code not in ROUTING_FAULT_CODES or not isinstance(edge, str) or not edge:
-        return None
-    return clause_for(history, routing_key(edge), routing_lead(code))
-
-
 def _utc_minute(stamp: str) -> str:
     """An ISO time as the report gives it: ``29 Oct 22:47 UTC``."""
     when = datetime.fromisoformat(stamp).astimezone(timezone.utc)
@@ -1370,6 +1360,8 @@ def format_changes_since_previous(
     Emphasizes new failures, recovered devices, newly missing evidence, and
     persistent problems — not unchanged PE-side observations.
     """
+    from diagnostic_mas.item_history import routing_fault_clause
+
     lines = ["## Changes since previous run", ""]
     if delta is None:
         lines.append(
@@ -1547,7 +1539,7 @@ def format_changes_since_previous(
         lines.append("- None")
     else:
         for issue in persistent[:persistent_limit]:
-            age = _routing_age(issue, history)
+            age = routing_fault_clause(issue, history)
             lines.append(f"- {_issue_line(issue)}" + (f"; {age}" if age else ""))
         extra = len(persistent) - persistent_limit
         if extra > 0:
@@ -1565,6 +1557,8 @@ def format_changes_since_previous(
 
 def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None:
     """Small delta payload for the summary LLM (no full issue dumps)."""
+    from diagnostic_mas.item_history import routing_fault_clause
+
     if delta is None:
         return None
     history = delta.get("item_history")
@@ -1582,7 +1576,7 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
                     "devices": issue.get("devices"),
                     "message": str(issue.get("message") or "")[:160],
                     "status": issue.get("status"),
-                    **({"recurrence": age} if (age := _routing_age(issue, history)) else {}),
+                    **({"recurrence": age} if (age := routing_fault_clause(issue, history)) else {}),
                 }
             )
         return out
@@ -1597,6 +1591,8 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
     interfaces = list(delta.get("interfaces_lost") or [])
     cleared = [f"{row['service']} (was {row['was']})" if row.get("was") else row["service"]
                for row in delta.get("service_faults_cleared") or []]
+    moved = [_status_change_line(row).replace("`", "")
+             for row in delta.get("status_changed_on_unchanged_checks") or []]
     new = list(delta.get("new_problems") or [])
     from diagnostic_mas.open_faults import format_open_faults
 
@@ -1614,6 +1610,14 @@ def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None
             "note": ("Down or degraded in an earlier run; they pass this run's checks. "
                      "PE-side readiness only; customer delivery was not tested."),
         }} if cleared else {}),
+        **({"status_changed_on_unchanged_checks": {
+            "count": len(moved),
+            "services": moved[:20],
+            "note": ("Final status differs from the previous run although each service's fixed checks "
+                     "read the same in both scans: the change comes from an LLM investigation's verdict, "
+                     "or from one that could not finish. A status change, but neither a new fault nor a "
+                     "recovery on its own."),
+        }} if moved else {}),
         **({"interfaces_lost": {
             "count": len(interfaces),
             "by_device": [line.replace("`", "") for line in _interface_lines(interfaces)][:12],
