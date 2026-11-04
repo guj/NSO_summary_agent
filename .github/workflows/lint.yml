@@ -1,0 +1,21 @@
+name: lint
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff==0.14.13
+      # F rules only (undefined names, unused imports, dead definitions);
+      # the Python version comes from requires-python in pyproject.toml.
+      - run: ruff check --select F --output-format github .

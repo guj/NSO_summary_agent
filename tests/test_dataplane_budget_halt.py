@@ -12,9 +12,6 @@ class _BudgetBoom:
     def __init__(self):
         self.n = 0
 
-    class completions:
-        pass
-
     @property
     def chat(self):
         return self

@@ -418,9 +418,9 @@ def test_result_line_timeout_quarantine_lists_operation_and_counts():
             case,
             code="device_live_unreachable",
             message=(
-                f"exec_show (isis adjacency): "
-                f"HTTPSConnectionPool(host='192.0.2.2', port=443): "
-                f"Read timed out. (read timeout=10)"
+                "exec_show (isis adjacency): "
+                "HTTPSConnectionPool(host='192.0.2.2', port=443): "
+                "Read timed out. (read timeout=10)"
             ),
             evidence_ids=[],
             devices=[dev],

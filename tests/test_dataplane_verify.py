@@ -3471,6 +3471,62 @@ async def test_empty_tool_turn_nudge_then_conclude(monkeypatch, capsys):
 
 
 @pytest.mark.asyncio
+async def test_a_refused_conclude_dataplane_is_logged_with_the_unusable_fields(capsys):
+    from diagnostic_mas import dataplane_verify as dv
+
+    def reply(arguments):
+        call = type("Call", (), {"id": "c", "function": type(
+            "Fn", (), {"name": "conclude_dataplane", "arguments": arguments})()})()
+        message = type("Msg", (), {"content": None, "tool_calls": [call]})()
+        choice = type("Choice", (), {"message": message, "finish_reason": "tool_calls"})()
+        return type("Resp", (), {"choices": [choice]})()
+
+    replies = [
+        reply('{"dataplane_status": "partial", "observed": "AC up on amst-data-sw"}'),
+        reply('{"dataplane_status": "up", "observed": "AC up on amst-data-sw",'
+              ' "cause": "PE-side ready; traffic delivery unverified"}'),
+    ]
+
+    class FakeOAI:
+        def __init__(self):
+            self.chat = self
+            self.completions = self
+
+        def create(self, **kwargs):
+            return replies.pop(0)
+
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    rec = {
+        "name": "svc-refused",
+        "service_type": "l3rt",
+        "system_status": "up",
+        "dataplane_status": "not_checked",
+        "devices": ["amst-data-sw"],
+    }
+
+    class S:
+        fabric_model = "m"
+        fabric_api_key = "k"
+        fabric_api_url = "http://x"
+
+    ok = await dv.llm_dataplane_verify_one(
+        object(),
+        S(),
+        case,
+        record=rec,
+        device_names={"amst-data-sw"},
+        session=DrillSession(max_tools=20),
+        openai_client=FakeOAI(),
+    )
+    assert ok is True
+    refused = [line for line in capsys.readouterr().err.splitlines() if "rejected" in line]
+    assert len(refused) == 1
+    assert refused[0].startswith(
+        "[dataplane] rejected conclude_dataplane: no usable dataplane_status, cause;")
+    assert '"dataplane_status": "partial"' in refused[0]
+
+
+@pytest.mark.asyncio
 async def test_empty_tool_turn_nudge_then_still_empty(monkeypatch, capsys):
     """Two prose-only turns → incomplete no_conclusion after nudge."""
     from diagnostic_mas import dataplane_verify as dv

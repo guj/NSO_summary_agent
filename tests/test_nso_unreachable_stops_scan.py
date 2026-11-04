@@ -17,7 +17,7 @@ from nso_facts.mcp_client import (
     start_mcp_cache,
     stop_mcp_cache,
 )
-from test_diagnostic_skip_llm import _Session, _args, llm_requests, nso_env  # noqa: F401
+from test_diagnostic_skip_llm import _Session, _args
 
 TIMEOUT = "Request timed out after 30s: https://192.0.2.1:443/restconf/data/tailf-ncs:devices"
 EXEC_SHOW = {"device_name": "pe1", "input_command": "version"}

@@ -9,7 +9,7 @@ import pytest
 
 from agent.publish import publish_all
 from test_diagnostic_mas_publish import _settings
-from test_diagnostic_skip_llm import _args, _run_offline, llm_requests, nso_env  # noqa: F401
+from test_diagnostic_skip_llm import _args, _run_offline
 
 SLACK_REFUSAL = "Slack files.completeUploadExternal failed: not_in_channel"
 

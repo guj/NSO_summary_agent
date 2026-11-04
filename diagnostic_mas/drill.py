@@ -996,6 +996,52 @@ def _log_drill(msg: str) -> None:
     print(f"[drill] {msg}", file=sys.stderr)
 
 
+def _snip_llm_content_for_log(content: Any, *, limit: int = 240) -> str:
+    """Single-line preview of LLM output for stderr diagnostics."""
+    if content is None:
+        return ""
+    text = str(content).replace("\r", " ").replace("\n", "\\n")
+    text = re.sub(r"[ \t]{2,}", " ", text).strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def conclusion_rejection(
+    args: Any,
+    *,
+    bad_json: bool,
+    required: tuple[str, ...],
+    choices: Mapping[str, frozenset[str]] | None = None,
+) -> str:
+    """Why a conclude call's arguments were refused, in words for the log."""
+    if bad_json:
+        return "arguments are not valid JSON"
+    if not isinstance(args, dict):
+        return "arguments are not a JSON object"
+    unusable = []
+    for key in required:
+        value = args.get(key)
+        usable = isinstance(value, str) and bool(value.strip())
+        if usable and choices and key in choices:
+            usable = value.strip().lower() in choices[key]
+        if not usable:
+            unusable.append(key)
+    return f"no usable {', '.join(unusable)}" if unusable else "arguments refused"
+
+
+def rejected_call_log_line(
+    fn_name: str, raw_args: Any, why: str, *, finish_reason: Any = None, limit: int = 160,
+) -> str:
+    """One stderr line for an LLM tool call the loop refused without running it."""
+    text = raw_args if isinstance(raw_args, str) else json.dumps(raw_args, default=str)
+    bits = [f"rejected {fn_name or '<no name>'}: {why}"]
+    if finish_reason is not None and str(finish_reason).strip():
+        bits.append(f"finish_reason={finish_reason!s}")
+    bits.append(f"args ({len(text)} chars)={_snip_llm_content_for_log(text, limit=limit)!r}")
+    return "; ".join(bits)
+
+
 async def execute_drill_plans(
     client: Any,
     case: CaseFile,
@@ -1237,6 +1283,7 @@ async def llm_drill_tool_loop(
             _log_drill(f"LLM error [{llm_error_category(exc)}]: {exc}")
             break
         message = response.choices[0].message
+        finish_reason = getattr(response.choices[0], "finish_reason", None)
         tool_calls = getattr(message, "tool_calls", None) or []
         if not tool_calls:
             finding = parse_drill_finding(message.content or "")
@@ -1253,12 +1300,14 @@ async def llm_drill_tool_loop(
             fn = call.function
             fn_name = getattr(fn, "name", "") or ""
             raw_args = getattr(fn, "arguments", "") or "{}"
+            bad_json = False
             try:
                 args = (
                     json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
                 )
             except json.JSONDecodeError:
                 args = {}
+                bad_json = True
 
             if fn_name == "conclude_investigation":
                 finding = parse_drill_finding(args)
@@ -1274,6 +1323,12 @@ async def llm_drill_tool_loop(
                     _log_drill(f"conclude: {finding.get('cause', '')[:100]}")
                     concluded = True
                 else:
+                    _log_drill(rejected_call_log_line(
+                        fn_name, raw_args,
+                        conclusion_rejection(
+                            args, bad_json=bad_json, required=("observed", "cause")),
+                        finish_reason=finish_reason,
+                    ))
                     messages.append(
                         {
                             "role": "tool",
@@ -1287,6 +1342,8 @@ async def llm_drill_tool_loop(
                 continue
 
             if fn_name != "mcp_call":
+                _log_drill(rejected_call_log_line(
+                    fn_name, raw_args, "unknown function", finish_reason=finish_reason))
                 messages.append(
                     {
                         "role": "tool",

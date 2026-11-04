@@ -21,7 +21,10 @@ from diagnostic_mas.deep_checks import DATAPLANE_ALLOWLIST
 from diagnostic_mas.drill import (
     _message_to_dict,
     _quarantined_device_map,
+    _snip_llm_content_for_log,
+    conclusion_rejection,
     execute_one_drill_call,
+    rejected_call_log_line,
 )
 from diagnostic_mas.tool_context import BatchProgress, result_error, tool_catalog
 from diagnostic_mas.focus import counts_from_services
@@ -30,6 +33,7 @@ from nso_facts.health import apply_dataplane_status, combine_service_status
 
 _PROMPTS = Path(__file__).resolve().parent / "prompts"
 _JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
+_DATAPLANE_STATUSES = frozenset({"up", "down", "degraded", "unknown"})
 
 # Keep LLM context small — full device configs blow Fabric's chat timeout.
 _DATAPLANE_RESULT_CLIP = 8_000
@@ -204,17 +208,6 @@ def _system_prompt(service_type: str | None = None) -> str:
 
 def _log(msg: str) -> None:
     print(f"[dataplane] {msg}", file=sys.stderr)
-
-
-def _snip_llm_content_for_log(content: Any, *, limit: int = 240) -> str:
-    """Single-line preview of assistant content for empty-tool-turn diagnostics."""
-    if content is None:
-        return ""
-    text = str(content).replace("\r", " ").replace("\n", "\\n")
-    text = re.sub(r"[ \t]{2,}", " ", text).strip()
-    if len(text) <= limit:
-        return text
-    return text[: max(0, limit - 3)].rstrip() + "..."
 
 
 def _empty_tool_turn_log_line(
@@ -2038,7 +2031,7 @@ def parse_dataplane_conclusion(data: Any) -> dict[str, Any] | None:
     if not isinstance(data, dict):
         return None
     dp = str(data.get("dataplane_status") or "").lower()
-    if dp not in {"up", "down", "degraded", "unknown"}:
+    if dp not in _DATAPLANE_STATUSES:
         return None
     observed = data.get("observed")
     cause = data.get("cause")
@@ -2533,12 +2526,14 @@ async def _llm_dataplane_verify_one(
             fn = call.function
             fn_name = getattr(fn, "name", "") or ""
             raw_args = getattr(fn, "arguments", "") or "{}"
+            bad_json = False
             try:
                 args = (
                     json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
                 )
             except json.JSONDecodeError:
                 args = {}
+                bad_json = True
 
             if fn_name == "conclude_dataplane":
                 finding = parse_dataplane_conclusion(args)
@@ -2573,6 +2568,15 @@ async def _llm_dataplane_verify_one(
                     )
                     concluded = True
                 else:
+                    _log(rejected_call_log_line(
+                        fn_name, raw_args,
+                        conclusion_rejection(
+                            args, bad_json=bad_json,
+                            required=("dataplane_status", "observed", "cause"),
+                            choices={"dataplane_status": _DATAPLANE_STATUSES},
+                        ),
+                        finish_reason=finish_reason,
+                    ))
                     messages.append(
                         {
                             "role": "tool",
@@ -2586,6 +2590,8 @@ async def _llm_dataplane_verify_one(
                 continue
 
             if fn_name != "mcp_call":
+                _log(rejected_call_log_line(
+                    fn_name, raw_args, "unknown function", finish_reason=finish_reason))
                 messages.append(
                     {
                         "role": "tool",

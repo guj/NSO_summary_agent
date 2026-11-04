@@ -480,6 +480,75 @@ async def test_llm_drill_concludes_after_batch(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_refused_drill_call_is_logged_with_its_reason_and_arguments(capsys):
+    from diagnostic_mas.case import DrillSession
+    from diagnostic_mas.drill import llm_drill_tool_loop
+
+    case = CaseFile(
+        budget=Budget(
+            max_deep_checks=0, max_handoffs=0, max_drill_issues=1, max_tools_per_drill=5
+        )
+    )
+    open_issue(
+        case,
+        code="service_degraded",
+        message="degraded",
+        evidence_ids=[],
+        layer="services",
+        edge_id="x",
+        devices=["star-data-sw"],
+    )
+    issue = case.issues[0]
+    session = DrillSession(max_tools=5, issue_id=issue["id"])
+
+    def reply(name, arguments, finish_reason):
+        call = type("Call", (), {
+            "id": name, "function": type("Fn", (), {"name": name, "arguments": arguments})()})()
+        message = type("Msg", (), {"content": None, "tool_calls": [call]})()
+        choice = type("Choice", (), {"message": message, "finish_reason": finish_reason})()
+        return type("Resp", (), {"choices": [choice]})()
+
+    replies = [
+        reply("conclude_investigation", '{"observed": "cape LSP absent"}', "tool_calls"),
+        reply("exec_show", '{"device_name": "star-data-sw"}', "tool_calls"),
+        reply("conclude_investigation", '{"observed": "cape LSP absent", "cau', "length"),
+        reply("conclude_investigation",
+              json.dumps({"observed": "cape LSP absent", "cause": "no IGP route"}), "tool_calls"),
+    ]
+
+    class FakeOAI:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kwargs):
+                    return replies.pop(0)
+
+    class S:
+        fabric_api_key = "k"
+        fabric_model = "m"
+
+    _, concluded = await llm_drill_tool_loop(
+        object(),
+        S(),
+        case,
+        device_names={"star-data-sw"},
+        focus_issue=issue,
+        session=session,
+        openai_client=FakeOAI(),
+    )
+    assert concluded is True
+    refused = [line for line in capsys.readouterr().err.splitlines() if "rejected" in line]
+    assert len(refused) == 3
+    assert refused[0].startswith("[drill] rejected conclude_investigation: no usable cause;")
+    assert "finish_reason=tool_calls" in refused[0]
+    assert '"observed": "cape LSP absent"' in refused[0]
+    assert refused[1].startswith("[drill] rejected exec_show: unknown function;")
+    assert refused[2].startswith(
+        "[drill] rejected conclude_investigation: arguments are not valid JSON;")
+    assert "finish_reason=length" in refused[2]
+
+
+@pytest.mark.asyncio
 async def test_llm_drill_final_turn_after_last_tool(monkeypatch):
     """Last mcp_call may exhaust tools; still allow one conclude_investigation round."""
     from diagnostic_mas.case import DrillSession
