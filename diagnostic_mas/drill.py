@@ -561,37 +561,6 @@ def compact_drill_context(
     return out
 
 
-def parse_drill_plans(text: str) -> list[dict[str, Any]]:
-    """Parse legacy JSON plan lists (heuristics / tests)."""
-    raw = (text or "").strip()
-    if not raw:
-        return []
-    data: Any = None
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        obj = _JSON_OBJECT_RE.search(raw)
-        if obj:
-            try:
-                data = json.loads(obj.group(0))
-            except json.JSONDecodeError:
-                data = None
-        if data is None:
-            arr = _JSON_ARRAY_RE.search(raw)
-            if arr:
-                try:
-                    data = json.loads(arr.group(0))
-                except json.JSONDecodeError:
-                    return []
-    if isinstance(data, list):
-        return [x for x in data if isinstance(x, dict)]
-    if isinstance(data, dict):
-        plans = data.get("plans")
-        if isinstance(plans, list):
-            return [x for x in plans if isinstance(x, dict)]
-    return []
-
-
 def heuristic_live_l2_drill_plans(
     case: CaseFile,
     *,

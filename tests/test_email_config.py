@@ -1,12 +1,10 @@
 """Tests for email configuration validation."""
 
-from email.message import EmailMessage
 from pathlib import Path
 
 import pytest
 
 from agent.config import Settings, validate_email_settings
-from agent.publish import send_test_email
 
 
 def _settings(**overrides) -> Settings:
@@ -75,46 +73,6 @@ def test_validate_email_settings_warns_on_user_without_password():
 def test_validate_email_settings_rejects_password_without_user():
     with pytest.raises(ValueError, match="SMTP_PASSWORD"):
         validate_email_settings(_settings(smtp_user=None, smtp_password="secret"))
-
-
-def test_send_test_email_sends_message(monkeypatch):
-    sent: list[EmailMessage] = []
-
-    class FakeSMTP:
-        def __init__(self, host, port, timeout=30):
-            self.host = host
-            self.port = port
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def ehlo(self):
-            return None
-
-        def starttls(self, context=None):
-            return None
-
-        def login(self, user, password):
-            assert user == "relay@example.com"
-            assert password == "secret"
-
-        def send_message(self, msg):
-            sent.append(msg)
-
-    monkeypatch.setattr("agent.publish.smtplib.SMTP", FakeSMTP)
-
-    send_test_email(
-        _settings(
-            smtp_user="relay@example.com",
-            smtp_password="secret",
-        )
-    )
-    assert len(sent) == 1
-    assert sent[0]["To"] == "ops@example.com"
-    assert "email configuration test" in sent[0].get_content()
 
 
 def test_recipients_may_be_separated_by_commas_or_semicolons():

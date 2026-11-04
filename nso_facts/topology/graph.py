@@ -62,11 +62,6 @@ def ordered_isis_endpoints(
     return end_b, end_a
 
 
-def summarize_static_physical(edges: list[dict[str, Any]]) -> dict[str, Any]:
-    by_device = _count_edges_by_device(edges)
-    return {"total": len(edges), "by_device": by_device}
-
-
 def summarize_operational_physical(edges: list[dict[str, Any]]) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "total": len(edges),
@@ -126,15 +121,6 @@ def device_from_edge_id(edge_id: str) -> str | None:
     if len(parts) >= 2 and parts[1]:
         return parts[1]
     return None
-
-
-def _count_edges_by_device(edges: list[dict[str, Any]]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for edge in edges:
-        device = device_from_physical_edge(edge)
-        if device:
-            counts[device] = counts.get(device, 0) + 1
-    return dict(sorted(counts.items()))
 
 
 def summarize_static_underlay(edges: list[dict[str, Any]]) -> dict[str, Any]:

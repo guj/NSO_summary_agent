@@ -225,33 +225,3 @@ def plan_turn_for_issue(
         "handoffs": list(raw.get("handoffs") or []),
         "hypotheses": list(raw.get("hypotheses") or []),
     }
-
-
-# Back-compat for older tests / callers
-def plan_and_gate_for_issue(
-    settings: Settings,
-    case: CaseFile,
-    issue: dict[str, Any],
-    *,
-    device_names: set[str],
-    llm_plan_fn: Any | None = None,
-) -> tuple[str | None, list[dict[str, Any]]]:
-    """Return (role, gated plan list). Wraps plan_turn_for_issue."""
-
-    def _wrap(settings: Settings, **kwargs: Any) -> dict[str, Any]:
-        if llm_plan_fn is not None:
-            plans = llm_plan_fn(settings, **kwargs)
-            if isinstance(plans, list):
-                return {"plans": plans, "handoffs": [], "hypotheses": []}
-            if isinstance(plans, dict):
-                return parse_planner_response(json.dumps(plans))
-        return llm_turn_raw(settings, **kwargs)
-
-    role, turn = plan_turn_for_issue(
-        settings,
-        case,
-        issue,
-        device_names=device_names,
-        llm_turn_fn=_wrap if llm_plan_fn is not None else None,
-    )
-    return role, list(turn.get("plans") or [])

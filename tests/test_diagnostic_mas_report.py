@@ -1,18 +1,12 @@
 from __future__ import annotations
 
-import re
-
 from diagnostic_mas.case import Budget, CaseFile, add_diagnosis, add_evidence, open_issue
 from diagnostic_mas.operator_report import (
     format_duration,
     format_followup_operator,
     format_result_line,
 )
-from diagnostic_mas.report import (
-    dedupe_evidence,
-    format_services_table,
-    render_report,
-)
+from diagnostic_mas.report import render_report
 from diagnostic_mas.roles.summary import scrub_internal_ids
 from diagnostic_mas.state_paths import diagnostic_mas_state_dir
 
@@ -963,45 +957,6 @@ def test_report_hides_hypotheses_when_drill_concluded():
     assert "10.148.0.1 mapping failure" in text
 
 
-def test_report_dedupes_identical_evidence():
-    case = CaseFile(budget=Budget(max_deep_checks=5, max_handoffs=5))
-    payload = {
-        "operational_summary": {"up": 1, "down": 0},
-        "static_summary": {"n": 1},
-    }
-    add_evidence(
-        case,
-        {"kind": "spine", "role": "isis", "layer": "underlay", "payload": payload},
-    )
-    add_evidence(
-        case,
-        {
-            "kind": "spine",
-            "role": "isis",
-            "layer": "underlay",
-            "payload": dict(payload),
-        },
-    )
-    assert len(dedupe_evidence(case.evidence)) == 1
-    text = render_report(case)
-    assert "Evidence records:" in text
-    assert "spine role=" not in text
-
-
-def test_services_table_helper_still_works():
-    counts = {
-        "l2ptp": {"up": 2, "down": 0, "degraded": 1, "unknown": 0},
-        "l3rt": {"up": 1, "down": 1, "degraded": 0, "unknown": 0},
-    }
-    table = "\n".join(format_services_table(counts))
-    assert "Sync In" in table
-    assert "Total" in table
-    assert "| up |" not in table
-    assert "l2ptp" in table and "l3rt" in table
-    # l2ptp: 2+0+1+0 = 3
-    assert re.search(r"\|\s*l2ptp\s*\|\s*3\s*\|", table)
-
-
 def test_dataplane_dig_line_counts():
     from diagnostic_mas.report import format_dataplane_dig_line
 
@@ -1644,36 +1599,6 @@ def test_summary_heading_is_owned_by_renderer():
         text = render_report(case, summary=prefix + body)
         assert text.count("## Summary\n") == 1
         assert body in text
-
-
-def test_service_layers_keep_sync_independent_and_require_dig_evidence():
-    from diagnostic_mas.report import service_layer_counts
-    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
-    services = {}
-    for i in range(7):
-        services[f'l2ptp/s{i}'] = dict(service_type='l2ptp', name=f's{i}',
-            devices=['a', 'b'], device_sync={'a': 'in-sync', 'b': 'in-sync'},
-            status='down' if i < 3 else 'up', dataplane_status='up')
-        case.diagnoses.append(dict(kind='dataplane', subject={'name': f's{i}'},
-                                   status='down' if i < 3 else 'up', complete=True))
-    services['l2sts/unexamined'] = dict(service_type='l2sts', name='unexamined',
-        devices=['a', 'b'], device_sync={'a': 'in-sync'}, dataplane_status='up')
-    services['l2sts/incomplete'] = dict(service_type='l2sts', name='incomplete',
-        devices=['a', 'b'], device_sync={'a': 'out-of-sync', 'b': 'unknown'})
-    case.diagnoses.append(dict(kind='dataplane', subject={'name': 'incomplete'},
-                               status='up', complete=False))
-    case.evidence.append(dict(kind='spine', role='service', payload={'extra': {'services': services}}))
-    counts = service_layer_counts(case)
-    assert counts['l2ptp']['sync_in'] == 7
-    assert counts['l2ptp']['dp_up'] == 4
-    assert counts['l2ptp']['dp_down'] == 3
-    assert counts['l2sts']['sync_out'] == 1
-    assert counts['l2sts']['sync_unknown'] == 1
-    assert counts['l2sts']['dp_unknown'] == 1
-    assert counts['l2sts']['dp_not_checked'] == 1
-    for b in counts.values():
-        assert sum(b[k] for k in ('sync_in', 'sync_out', 'sync_unknown')) == b['total']
-        assert sum(b[k] for k in ('dp_up', 'dp_down', 'dp_degraded', 'dp_unknown', 'dp_not_checked')) == b['total']
 
 
 def test_scrub_internal_ids_keeps_sub_bullet_indentation():

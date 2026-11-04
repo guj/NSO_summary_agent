@@ -5,17 +5,17 @@ from __future__ import annotations
 import pytest
 
 from multi_agent.deep_checks import (
+    _device_name_only,
     _normalize_exec_show_args,
-    _with_device_name,
     run_deep_checks,
 )
 
 
-def test_with_device_name_promotes_device_key():
-    assert _with_device_name({"device": "lbnl-data-sw"}) == {
+def test_device_name_only_promotes_device_key():
+    assert _device_name_only({"device": "lbnl-data-sw"}) == {
         "device_name": "lbnl-data-sw"
     }
-    assert _with_device_name({"device_name": "a", "device": "b"}) == {
+    assert _device_name_only({"device_name": "a", "device": "b"}) == {
         "device_name": "a"
     }
 

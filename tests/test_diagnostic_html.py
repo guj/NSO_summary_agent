@@ -84,8 +84,9 @@ def test_slack_upload_flow(tmp_path):
 
 
 def test_grouped_service_headers():
-    from diagnostic_mas.report import format_services_table
-    table = '\n'.join(format_services_table({'l2ptp': dict(total=7, sync_in=7, dp_up=4, dp_down=3)}))
+    table = ('| service | Total | Sync In | Sync Out | Sync Unknown | DP Up | DP Down | DP Degraded | DP Unknown '
+             '| DP Not checked |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n'
+             '| l2ptp | 7 | 7 | 0 | 0 | 4 | 3 | 0 | 0 | 0 |')
     doc = render_html_report('## Services\n' + table + '\n', 'test')
     assert 'colspan="3" scope="colgroup">Configuration sync' in doc
     assert 'colspan="5" scope="colgroup">Dataplane (PE readiness)' in doc

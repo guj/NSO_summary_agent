@@ -3214,22 +3214,9 @@ def test_clip_dataplane_marks_truncation_clearly():
     assert "of " in out
 
 
-def test_deep_checks_truncate_does_not_str_dict_envelope():
-    from multi_agent.deep_checks import _truncate
-
-    cli = "A\n" * 3000
-    result = {"status": "success", "data": {"result": cli}}
-    out = _truncate(result, limit=500)
-    assert isinstance(out, str)
-    assert '"truncated"' not in out
-    assert "preview" not in out or "[truncated" in out
-    assert "\n" in out
-    assert "[truncated:" in out
-
-
 def test_deep_checks_evidence_stores_full_body():
-    """Stored dig evidence keeps full MCP body; clip helpers are separate."""
-    from multi_agent.deep_checks import _evidence_result, _truncate
+    """Stored dig evidence keeps the full MCP body."""
+    from multi_agent.deep_checks import _evidence_result
 
     cli = "route-target import 398900:9001\n" + ("line\n" * 5000)
     result = {"status": "success", "data": {"result": cli}}
@@ -3238,10 +3225,6 @@ def test_deep_checks_evidence_stores_full_body():
     assert "route-target import 398900:9001" in stored
     assert "[truncated" not in stored
     assert len(stored) >= len(cli)
-
-    clipped = _truncate(result, limit=400)
-    assert "[truncated:" in clipped
-    assert len(clipped) < len(stored)
 
 
 @pytest.mark.asyncio

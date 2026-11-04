@@ -32,46 +32,6 @@ def mask_nso_address(text: str, address: str | None) -> str:
     return re.sub(pattern, masked, text, flags=re.IGNORECASE)
 
 
-def save_run_artifacts(
-    snapshot: dict[str, Any],
-    delta: dict[str, Any],
-    report_text: str,
-    settings: Settings | None = None,
-) -> Path:
-    s = settings or load_settings()
-    s.state_dir.mkdir(parents=True, exist_ok=True)
-    runs = s.state_dir / "runs"
-    runs.mkdir(exist_ok=True)
-
-    run_id = snapshot.get("run_id", "unknown")
-    safe_id = run_id.replace(":", "-")
-    run_dir = runs / safe_id
-    run_dir.mkdir(exist_ok=True)
-
-    (run_dir / "snapshot.json").write_text(
-        json.dumps(snapshot, indent=2, default=str), encoding="utf-8"
-    )
-    (run_dir / "delta.json").write_text(
-        json.dumps(delta, indent=2, default=str), encoding="utf-8"
-    )
-    (run_dir / "report.md").write_text(report_text, encoding="utf-8")
-
-    latest = s.state_dir / "latest.json"
-    latest.write_text(json.dumps(snapshot, indent=2, default=str), encoding="utf-8")
-    meta = {
-        "run_id": run_id,
-        "report_path": str(run_dir / "report.md"),
-    }
-    (s.state_dir / "latest.meta.json").write_text(
-        json.dumps(meta, indent=2), encoding="utf-8"
-    )
-    return run_dir
-
-
-def publish_stdout(report_text: str) -> None:
-    print(report_text)
-
-
 def publish_slack(report_text: str, settings: Settings | None = None) -> None:
     """Post to Slack Incoming Webhook.
 
@@ -126,22 +86,6 @@ def publish_email(
     if attachment_path is not None:
         msg.add_attachment(attachment_path.read_bytes(), maintype="text", subtype="html",
                            filename=attachment_path.name)
-    _send_via_smtp(s, msg)
-
-
-def send_test_email(settings: Settings | None = None) -> None:
-    """Connect to SMTP and send a short test message to EMAIL_TO recipients."""
-    s = settings or load_settings()
-    validate_email_settings(s)
-
-    msg = EmailMessage()
-    msg["Subject"] = f"{s.email_subject_prefix} — email test"
-    msg["From"] = s.email_from
-    msg["To"] = ", ".join(s.email_to)
-    msg.set_content(
-        "NSO Summary Agent email configuration test.\n\n"
-        "If you received this message, SMTP settings in .env are working."
-    )
     _send_via_smtp(s, msg)
 
 

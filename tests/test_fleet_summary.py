@@ -4,10 +4,7 @@ from nso_facts.fleet_summary_thresholds import (
     FleetSummaryThresholds,
     load_fleet_summary_thresholds,
 )
-from nso_facts.fleet_rollups import (
-    fleet_infra_alert_counts,
-    fleet_service_instance_counts,
-)
+from nso_facts.fleet_rollups import fleet_infra_alert_counts
 
 
 def test_thresholds_defaults_when_missing(tmp_path: Path):
@@ -22,17 +19,6 @@ def test_thresholds_from_yaml(tmp_path: Path):
     thr = load_fleet_summary_thresholds(path)
     assert thr.cpu_five_min_pct == 50
     assert thr.memory_used_pct == 70
-
-
-def test_service_instance_counts():
-    operational, degraded = fleet_service_instance_counts(
-        {
-            "l2ptp": {"total": 2, "up": 1, "down": 1, "degraded": 0, "unknown": 0},
-            "l3rt": {"total": 1, "up": 1, "down": 0, "degraded": 0, "unknown": 0},
-        }
-    )
-    assert operational == 2
-    assert degraded == 1
 
 
 def test_infra_alerts_use_thresholds():

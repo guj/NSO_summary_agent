@@ -235,7 +235,7 @@ async def build_fact_pack(
 ) -> dict[str, Any]:
     """Compose the shared non-LLM fact pack used by production and multi-agent.
 
-    Does **not** build full topology (callers use multi-agent ``assemble_topology``).
+    Does **not** build the full topology.
     Does **not** open an MCP session.
     """
     pack = await collect_services_fact_slice(

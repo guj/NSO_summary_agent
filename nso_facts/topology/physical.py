@@ -6,11 +6,7 @@ import re
 from typing import Any
 
 from nso_facts.mcp_client import call_mcp, unwrap_mcp_data
-from nso_facts.topology.graph import (
-    interface_edge_id,
-    summarize_operational_physical,
-    summarize_static_physical,
-)
+from nso_facts.topology.graph import interface_edge_id, summarize_operational_physical
 from nso_facts.topology.iface_equiv import (
     EquivalenceMap,
     compact_box_list,
@@ -19,10 +15,6 @@ from nso_facts.topology.iface_equiv import (
 )
 from nso_facts.topology.interfaces import interfaces_match
 
-_INTERFACE_SUMMARY_LINE = re.compile(
-    r"^\s*(\S+)\s+(up|down|admin-down)\s+(up|down|admin-down)",
-    re.IGNORECASE,
-)
 # `show interfaces brief`: Name, Intf State, LineP State, then Encap…
 _INTERFACE_BRIEF_LINE = re.compile(
     r"^\s*(\S+)\s+(up|down|admin-down)\s+(up|down|admin-down)\b",
@@ -142,10 +134,6 @@ async def collect_operational_physical(
     return operational_edges, issues, coverage
 
 
-def build_static_physical_layer(edges: list[dict[str, Any]]) -> dict[str, Any]:
-    return {"edges": edges, "summary": summarize_static_physical(edges)}
-
-
 def build_operational_physical_layer(
     edges: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -189,82 +177,6 @@ async def _static_interfaces_for_device(
             return [_static_interface_edge(device, name) for name in names]
 
     return []
-
-
-async def probe_static_interface_discovery(
-    client: Any,
-    device: str,
-) -> dict[str, Any]:
-    """Return per-path probe results for debugging empty physical edges."""
-    config_path = f"tailf-ncs:devices/device={device}/config"
-    suffixes = await _interface_config_suffixes(client, device)
-    attempts: list[dict[str, Any]] = []
-
-    for suffix in suffixes:
-        path = f"{config_path}/{suffix}"
-        for depth in (3, 2):
-            result = await call_mcp(
-                client, "explore_nso_path", {"path": path, "depth": depth}
-            )
-            names = parse_configured_interface_names(result)
-            attempts.append(
-                {
-                    "tool": "explore_nso_path",
-                    "path": path,
-                    "depth": depth,
-                    "interface_count": len(names),
-                    "sample_interfaces": names[:5],
-                    "error": _mcp_error(result),
-                }
-            )
-            if names:
-                return {
-                    "device": device,
-                    "discovered_suffixes": suffixes,
-                    "selected": attempts[-1],
-                    "attempts": attempts,
-                }
-
-    for depth in (3, 2):
-        result = await call_mcp(
-            client, "explore_nso_path", {"path": config_path, "depth": depth}
-        )
-        names = parse_configured_interface_names(result)
-        attempts.append(
-            {
-                "tool": "explore_nso_path",
-                "path": config_path,
-                "depth": depth,
-                "interface_count": len(names),
-                "sample_interfaces": names[:5],
-                "error": _mcp_error(result),
-            }
-        )
-        if names:
-            return {
-                "device": device,
-                "discovered_suffixes": suffixes,
-                "selected": attempts[-1],
-                "attempts": attempts,
-            }
-
-    result = await call_mcp(client, "get_device_config", {"device_name": device})
-    names = parse_configured_interface_names(result)
-    attempts.append(
-        {
-            "tool": "get_device_config",
-            "path": config_path,
-            "interface_count": len(names),
-            "sample_interfaces": names[:5],
-            "error": _mcp_error(result),
-        }
-    )
-    return {
-        "device": device,
-        "discovered_suffixes": suffixes,
-        "selected": attempts[-1] if attempts else None,
-        "attempts": attempts,
-    }
 
 
 async def _interface_config_suffixes(client: Any, device: str) -> list[str]:
@@ -577,21 +489,6 @@ def parse_configured_interface_names(explore_result: Any) -> list[str]:
     return sorted(set(names))
 
 
-def parse_interfaces_summary(text: str) -> dict[str, dict[str, str]]:
-    """Parse legacy per-row `show interfaces summary` text into {iface: {admin, oper}}."""
-    live: dict[str, dict[str, str]] = {}
-    if not text:
-        return live
-
-    for line in text.splitlines():
-        match = _INTERFACE_SUMMARY_LINE.match(line)
-        if not match:
-            continue
-        iface, admin, oper = match.group(1), match.group(2), match.group(3)
-        live[iface] = {"admin": admin.lower(), "oper": oper.lower()}
-    return live
-
-
 def parse_interfaces_brief(text: str) -> dict[str, dict[str, str]]:
     """Parse `show interfaces brief` into {iface: {admin, oper}}."""
     live: dict[str, dict[str, str]] = {}
@@ -679,16 +576,6 @@ def _classify_interface_status(admin: str, oper: str, has_errors: bool) -> str:
     if oper != "up" or admin == "down":
         return "down"
     return "degraded"
-
-
-def _interfaces_with_errors(error_lines: list[Any]) -> set[str]:
-    names: set[str] = set()
-    for line in error_lines:
-        text = str(line).strip()
-        if not text:
-            continue
-        names.add(text.split()[0])
-    return names
 
 
 def _walk_for_interface_names(obj: Any, names: list[str]) -> None:

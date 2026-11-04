@@ -4,7 +4,7 @@ import pytest
 
 from diagnostic_mas.case import Budget, CaseFile, add_evidence, open_issue
 from diagnostic_mas.coordinator import run_autonomous_loop
-from diagnostic_mas.planner import parse_planner_response, plan_and_gate_for_issue
+from diagnostic_mas.planner import parse_planner_response, plan_turn_for_issue
 from diagnostic_mas.report import render_report
 from diagnostic_mas.roles.summary import summary_narrative
 
@@ -51,28 +51,26 @@ def test_gate_drops_invented_device_no_evidence_from_model():
     _seed_underlay_issue(case)
     issue = case.issues[0]
 
-    def fake_llm(_settings, **_kwargs):
-        return [
-            {
-                "check": "exec_show",
-                "args": {"device": "totally-fake-sw", "command": "isis neighbors"},
-                "reason": "invented",
-            }
-        ]
+    def fake_turn(_settings, **_kwargs):
+        return {"plans": [{
+            "check": "exec_show",
+            "args": {"device": "totally-fake-sw", "command": "isis neighbors"},
+            "reason": "invented",
+        }]}
 
     class S:
         fabric_model = "x"
         fabric_api_key = "k"
 
-    role, gated = plan_and_gate_for_issue(
+    role, turn = plan_turn_for_issue(
         S(),  # type: ignore[arg-type]
         case,
         issue,
         device_names={"renc-data-sw", "lbnl-data-sw"},
-        llm_plan_fn=fake_llm,
+        llm_turn_fn=fake_turn,
     )
     assert role == "isis"
-    assert gated == []
+    assert turn["plans"] == []
     assert all(e.get("kind") != "deep_check" for e in case.evidence)
 
 

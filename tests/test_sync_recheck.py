@@ -24,7 +24,7 @@ async def test_one_retry_and_explicit_results_only():
 async def test_recheck_updates_service_counts_and_audit(monkeypatch):
     from nso_facts.fact_pack import collect_services_fact_slice
     from diagnostic_mas.case import CaseFile,Budget,add_evidence
-    from diagnostic_mas.report import service_layer_counts,render_report
+    from diagnostic_mas.report import render_report
     calls=[]
     async def call(client,tool,params=None):
         calls.append(tool)
@@ -43,7 +43,6 @@ async def test_recheck_updates_service_counts_and_audit(monkeypatch):
     assert next(iter(pack['services'].values()))['device_sync']['a']=='in-sync'
     case=CaseFile(budget=Budget(0,0))
     add_evidence(case,{'kind':'spine','role':'service','payload':{'extra':pack}})
-    assert service_layer_counts(case)['l3rt']['sync_in']==1
     assert 'fleet `error` → retry in-sync' in render_report(case)
 
 

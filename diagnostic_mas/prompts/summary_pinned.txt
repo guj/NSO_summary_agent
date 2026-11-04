@@ -150,6 +150,11 @@ Run-to-run evidence discipline:
 - A status transition from up/unknown to down/degraded is a newly detected
   fault, not proof of when it began. Never call it a proven regression
   without comparable prior and current checks of the failed component.
+- History dates (a recurrence clause, or first_observed_run_id with
+  first_observed_exact) give the first saved scan that saw an item, not its
+  onset. Keep them as given: never drop "or earlier" (first_observed_exact
+  false means "or earlier"), and do not turn a first-seen date into
+  "down since".
 - Preserve last_known_service_faults as historical, unresolved findings.
   Not sampled, absent inventory, baseline sync, or an inconclusive recheck
   is not recovery. State the last observation run and current coverage gap.

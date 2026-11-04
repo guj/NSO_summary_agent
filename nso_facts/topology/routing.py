@@ -531,67 +531,6 @@ def resolve_neighbor_device(
     return None
 
 
-async def probe_static_bgp_discovery(
-    client: Any,
-    device: str,
-) -> dict[str, Any]:
-    """Debug BGP config discovery for one device."""
-    attempts: list[dict[str, Any]] = []
-
-    result = await call_mcp(client, "get_device_config", {"device_name": device})
-    neighbors, router_id = parse_configured_bgp(result, device=device)
-    attempts.append(
-        {
-            "tool": "get_device_config",
-            "neighbor_count": len(neighbors),
-            "router_id": router_id,
-            "sample_neighbors": [n.neighbor_address for n in neighbors[:5]],
-            "error": _mcp_error(result),
-        }
-    )
-    if neighbors or router_id:
-        return {
-            "device": device,
-            "selected": attempts[-1],
-            "attempts": attempts,
-        }
-
-    suffixes = await _bgp_config_suffixes(client, device)
-    config_path = f"tailf-ncs:devices/device={device}/config"
-    for suffix in suffixes:
-        path = f"{config_path}/{suffix}"
-        for depth in (3, 2):
-            result = await call_mcp(
-                client, "explore_nso_path", {"path": path, "depth": depth}
-            )
-            neighbors, router_id = parse_configured_bgp(result, device=device)
-            attempts.append(
-                {
-                    "tool": "explore_nso_path",
-                    "path": path,
-                    "depth": depth,
-                    "neighbor_count": len(neighbors),
-                    "router_id": router_id,
-                    "sample_neighbors": [n.neighbor_address for n in neighbors[:5]],
-                    "error": _mcp_error(result),
-                }
-            )
-            if neighbors or router_id:
-                return {
-                    "device": device,
-                    "discovered_suffixes": suffixes,
-                    "selected": attempts[-1],
-                    "attempts": attempts,
-                }
-
-    return {
-        "device": device,
-        "discovered_suffixes": suffixes,
-        "selected": attempts[-1] if attempts else None,
-        "attempts": attempts,
-    }
-
-
 def parse_router_id_from_summary(text: str) -> str | None:
     match = _BGP_ROUTER_ID.search(text)
     if match:

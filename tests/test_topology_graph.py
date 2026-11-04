@@ -1,26 +1,10 @@
 """Tests for topology graph helpers."""
 
-from nso_facts.topology.graph import (
-    interface_edge_id,
-    summarize_operational_physical,
-    summarize_static_physical,
-)
+from nso_facts.topology.graph import interface_edge_id, summarize_operational_physical
 
 
 def test_interface_edge_id():
     assert interface_edge_id("pe-den1", "Gi0/0/1") == "if:pe-den1:Gi0/0/1"
-
-
-def test_summarize_static_physical():
-    edges = [
-        {"id": "if:a:Lo0", "local": {"device": "a", "interface": "Lo0"}},
-        {"id": "if:a:Gi0", "local": {"device": "a", "interface": "Gi0"}},
-        {"id": "if:b:Lo0", "local": {"device": "b", "interface": "Lo0"}},
-    ]
-    assert summarize_static_physical(edges) == {
-        "total": 3,
-        "by_device": {"a": 2, "b": 1},
-    }
 
 
 def test_summarize_operational_physical():

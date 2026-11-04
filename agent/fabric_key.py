@@ -113,12 +113,6 @@ class FabricKeyLifetime:
         return line
 
 
-def print_fabric_api_key_lifetime(settings: Settings) -> FabricKeyLifetime:
-    """Print key expiry to stderr; return parsed lifetime info."""
-    lifetime, _ = prepare_fabric_llm(settings)
-    return lifetime
-
-
 def prepare_fabric_llm(settings: Settings) -> tuple[FabricKeyLifetime, bool]:
     """Print lifetime / resolved model / warnings.
 

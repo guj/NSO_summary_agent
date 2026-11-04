@@ -133,27 +133,6 @@ def test_compact_drill_context_includes_live_l2():
     assert ctx["issues"][0]["live_l2"]["endpoints"][1]["st"] == "DN"
 
 
-def test_parse_drill_plans_object_and_array():
-    from diagnostic_mas.drill import parse_drill_plans
-
-    assert (
-        len(
-            parse_drill_plans(
-                '{"plans":[{"check":"exec_show","args":{"device_name":"a","input_command":"isis neighbors"},"reason":"x"}]}'
-            )
-        )
-        == 1
-    )
-    assert (
-        len(
-            parse_drill_plans(
-                '[{"check":"exec_show","args":{"device_name":"a","input_command":"isis neighbors"},"reason":"x"}]'
-            )
-        )
-        == 1
-    )
-
-
 @pytest.mark.asyncio
 async def test_run_drill_phase_skip_when_max_zero(monkeypatch):
     from diagnostic_mas.drill import run_drill_phase
@@ -1436,7 +1415,6 @@ def test_prior_exploration_lists_dataplane_probes_and_filters_plans():
     kept = _filter_plans_already_run(case, plans, focus_issue=issue)
     assert len(kept) == 1
     assert kept[0]["args"]["device_name"] == "sunn-data-sw"
-
 
 
 def test_drill_finding_keeps_a_valid_session_state_only():

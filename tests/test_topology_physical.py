@@ -9,7 +9,6 @@ import pytest
 from nso_facts.topology.physical import (
     parse_configured_interface_names,
     parse_interfaces_brief,
-    parse_interfaces_summary,
     collect_operational_physical,
     collect_static_physical,
     _classify_interface_status,
@@ -97,12 +96,6 @@ def test_parse_configured_interface_names_openconfig():
         },
     }
     assert parse_configured_interface_names(payload) == ["eth0", "eth1"]
-
-
-def test_parse_interfaces_summary():
-    live = parse_interfaces_summary(SUMMARY_TEXT)
-    assert live["Loopback0"] == {"admin": "up", "oper": "up"}
-    assert live["HundredGigE0/0/0/2"]["oper"] == "down"
 
 
 def test_parse_interfaces_brief():

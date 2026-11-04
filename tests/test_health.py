@@ -3,7 +3,7 @@
 from nso_facts.health import (
     build_device_sync_map,
     build_instance_record,
-    classify_instance,
+    classify_system_status,
     derive_counts,
     extract_devices,
     parse_in_sync,
@@ -13,23 +13,23 @@ from nso_facts.health import (
 
 def test_classify_up_when_service_and_device_in_sync():
     sync = {"status": "success", "data": {"in_sync": True}}
-    assert classify_instance(sync, ["in-sync"]) == "up"
+    assert classify_system_status(sync, ["in-sync"]) == "up"
 
 
 def test_classify_degraded_when_service_out_of_sync():
     sync = {"status": "success", "data": {"in_sync": False}}
-    assert classify_instance(sync, ["in-sync"]) == "degraded"
+    assert classify_system_status(sync, ["in-sync"]) == "degraded"
 
 
 def test_classify_degraded_when_device_out_of_sync():
     sync = {"status": "success", "data": {"in_sync": True}}
-    assert classify_instance(sync, ["out-of-sync"]) == "degraded"
+    assert classify_system_status(sync, ["out-of-sync"]) == "degraded"
 
 
 def test_classify_unknown_when_device_unreachable():
     """NED/device unreachable on sync check is a query failure → unknown, not down."""
     sync = {"status": "success", "data": {"in_sync": True}}
-    assert classify_instance(sync, ["error: device unreachable"]) == "unknown"
+    assert classify_system_status(sync, ["error: device unreachable"]) == "unknown"
 
 
 def test_classify_unknown_when_device_sync_timed_out():
@@ -39,14 +39,14 @@ def test_classify_unknown_when_device_sync_timed_out():
         "error: HTTPSConnectionPool(host='192.0.2.2', port=443): "
         "Read timed out. (read timeout=10)"
     )
-    assert classify_instance(sync, ["in-sync", timeout, "in-sync"]) == "unknown"
-    assert classify_instance(sync, [timeout]) == "unknown"
+    assert classify_system_status(sync, ["in-sync", timeout, "in-sync"]) == "unknown"
+    assert classify_system_status(sync, [timeout]) == "unknown"
 
 
 def test_classify_unknown_when_device_sync_api_error():
     sync = {"status": "success", "data": {"in_sync": None}}
     assert (
-        classify_instance(sync, ["error: RESTCONF 500 at https://nso/restconf"])
+        classify_system_status(sync, ["error: RESTCONF 500 at https://nso/restconf"])
         == "unknown"
     )
 
@@ -56,16 +56,16 @@ def test_classify_unknown_when_sync_result_times_out():
         "status": "error",
         "error_message": "Read timed out. (read timeout=10)",
     }
-    assert classify_instance(sync, ["in-sync"]) == "unknown"
+    assert classify_system_status(sync, ["in-sync"]) == "unknown"
 
 
 def test_classify_unknown_when_in_sync_none_and_no_device_results():
     sync = {"status": "success", "data": {"in_sync": None}}
-    assert classify_instance(sync, []) == "unknown"
+    assert classify_system_status(sync, []) == "unknown"
 
 
 def test_classify_unknown_when_sync_missing():
-    assert classify_instance(None, []) == "unknown"
+    assert classify_system_status(None, []) == "unknown"
 
 
 def test_parse_in_sync_from_result_string():
@@ -79,7 +79,7 @@ def test_parse_in_sync_from_result_string():
 def test_parse_in_sync_from_sync_state():
     sync = {"status": "success", "data": {"sync_state": "in-sync"}}
     assert parse_in_sync(sync) is True
-    assert classify_instance(sync, []) == "up"
+    assert classify_system_status(sync, []) == "up"
 
 
 def test_classify_up_from_result_string_when_devices_in_sync():
@@ -87,36 +87,11 @@ def test_classify_up_from_result_string_when_devices_in_sync():
         "status": "success",
         "data": {"in_sync": None, "details": {"result": "in-sync"}},
     }
-    assert classify_instance(sync, ["in-sync"]) == "up"
+    assert classify_system_status(sync, ["in-sync"]) == "up"
 
 
 def test_classify_up_from_device_sync_when_service_sync_missing():
-    assert classify_instance(None, ["in-sync", "in-sync"]) == "up"
-
-
-def test_classify_degraded_when_live_l2_asymmetric():
-    # live_l2 no longer affects hardcoded overall status
-    assert (
-        classify_instance(None, ["in-sync", "in-sync"], live_l2_summary="degraded")
-        == "up"
-    )
-
-
-def test_classify_down_when_live_l2_down():
-    assert (
-        classify_instance(
-            {"status": "success", "data": {"in_sync": True}},
-            ["in-sync"],
-            live_l2_summary="down",
-        )
-        == "up"
-    )
-
-
-def test_classify_keeps_sync_up_when_live_l2_up():
-    assert (
-        classify_instance(None, ["in-sync", "in-sync"], live_l2_summary="up") == "up"
-    )
+    assert classify_system_status(None, ["in-sync", "in-sync"]) == "up"
 
 
 def test_layered_status_collector_leaves_dataplane_not_checked():
@@ -150,9 +125,8 @@ def test_layered_status_collector_leaves_dataplane_not_checked():
 
 
 def test_dataplane_not_checked_does_not_override_system_up():
-    from nso_facts.health import combine_service_status, classify_dataplane_status
+    from nso_facts.health import combine_service_status
 
-    assert classify_dataplane_status(None) == "not_checked"
     assert combine_service_status("up", "not_checked") == "up"
 
 

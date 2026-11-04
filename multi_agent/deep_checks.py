@@ -125,11 +125,6 @@ def _device_and_interface(args: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _with_device_name(args: dict[str, Any]) -> dict[str, Any]:
-    """Deprecated alias for callers/tests; prefer :func:`_device_name_only`."""
-    return _device_name_only(args)
-
-
 def _normalize_service_pair_args(args: dict[str, Any]) -> dict[str, Any]:
     st = args.get("service_type") or args.get("type")
     sn = (
@@ -185,23 +180,3 @@ def _evidence_result(result: Any) -> Any:
         if len(raw) <= 2000 and len(body) <= 2000:
             return result
     return body
-
-
-def _truncate(result: Any, limit: int = 4000) -> Any:
-    """Clip tool payload for display / LLM helpers (not for stored evidence)."""
-    import json
-
-    from nso_facts.mcp_client import unwrap_mcp_result_text
-
-    body = unwrap_mcp_result_text(result)
-    if len(body) <= limit:
-        if isinstance(result, (dict, list)):
-            raw = json.dumps(result, default=str)
-            if len(raw) <= limit:
-                return result
-        return body
-    keep = max(0, limit - 72)
-    return (
-        body[:keep].rstrip()
-        + f"\n\n[truncated: showing {keep} of {len(body)} chars]"
-    )

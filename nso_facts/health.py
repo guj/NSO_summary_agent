@@ -186,15 +186,6 @@ def classify_system_status(
     return "unknown"
 
 
-def classify_dataplane_status(live_l2: dict[str, Any] | None) -> str:
-    """Collector never sets dataplane from live_l2 — always not_checked.
-
-    Use ``apply_dataplane_status`` after the LLM verify phase.
-    """
-    del live_l2
-    return "not_checked"
-
-
 _STATUS_RANK = {
     "up": 0,
     "not_checked": 0,  # ignored when combining; kept for completeness
@@ -216,20 +207,6 @@ def combine_service_status(system_status: str, dataplane_status: str) -> str:
     if not layers:
         return "unknown"
     return max(layers, key=lambda s: _STATUS_RANK.get(s, 1))
-
-
-def classify_instance(
-    sync_result: dict[str, Any] | None,
-    device_results: list[str | None],
-    *,
-    live_l2_summary: str | None = None,
-) -> str:
-    """Overall status from system/sync only (dataplane is LLM, not hardcode).
-
-    ``live_l2_summary`` is ignored for status (kept for call-compat).
-    """
-    del live_l2_summary  # dataplane not hardcoded into overall status
-    return classify_system_status(sync_result, device_results)
 
 
 def apply_dataplane_status(record: dict[str, Any], dataplane_status: str) -> None:
@@ -352,21 +329,3 @@ def _is_verification_gap(result: str | None) -> bool:
             "connection refused",
         )
     )
-
-
-def _is_confirmed_unreachable(message: str | None) -> bool:
-    """Device/NED unreachability wording (still a query failure for services)."""
-    if not message:
-        return False
-    lowered = message.lower()
-    return "unreachable" in lowered or "connection refused" in lowered
-
-
-def _is_device_down(result: str | None) -> bool:
-    """Deprecated alias — sync-layer 'device down' is a verification gap."""
-    return _is_verification_gap(result)
-
-
-def _looks_unreachable(message: str) -> bool:
-    """True for timeout/API/unreachable query failures."""
-    return _is_verification_gap(message)

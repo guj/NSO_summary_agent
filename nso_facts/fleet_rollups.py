@@ -169,22 +169,6 @@ def devices_in_topology(topology: Any) -> set[str]:
     )
 
 
-def fleet_device_sync_counts(
-    fleet_sync: Any,
-    topology: Any,
-) -> tuple[str | int, str | int, str | int]:
-    """Return (total, in_sync, out_of_sync) — ints or ``—`` when sync unknown.
-
-    ``out_of_sync`` here includes sync ``error`` devices (Fleet Summary style).
-    """
-    total, in_sync, out_of_sync, error = fleet_device_sync_breakdown(
-        fleet_sync, topology
-    )
-    if in_sync == "—":
-        return total, in_sync, "—"
-    return total, in_sync, int(out_of_sync) + int(error)
-
-
 def fleet_device_sync_breakdown(
     fleet_sync: Any,
     topology: Any,
@@ -305,20 +289,6 @@ def fleet_inventory_review_count(topology: Any, fleet_sync: Any = None) -> int:
     return sum(
         1 for d in devices if device_needs_inventory_review(d, phys, mismatch)
     )
-
-def fleet_service_instance_counts(counts: dict[str, Any]) -> tuple[int, int]:
-    operational = 0
-    degraded = 0
-    for bucket in (counts or {}).values():
-        if not isinstance(bucket, dict):
-            continue
-        operational += _intish(bucket.get("up"))
-        degraded += (
-            _intish(bucket.get("down"))
-            + _intish(bucket.get("degraded"))
-            + _intish(bucket.get("unknown"))
-        )
-    return operational, degraded
 
 
 def fleet_routing_totals(topology: Any) -> tuple[int, int, int, int]:

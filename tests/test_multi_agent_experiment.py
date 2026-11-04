@@ -1,9 +1,7 @@
 """Unit tests for multi-agent experiment helpers."""
 
 from multi_agent.base import (
-    AgentResult,
     dedupe_issues,
-    format_domain_section,
     gate_plan,
     parse_plan_json,
 )
@@ -150,15 +148,6 @@ def test_parse_plan_json_from_fenced_noise():
     assert tasks[0]["check"] == "exec_show"
 
 
-def test_no_issues_message():
-    empty = AgentResult(
-        name="isis",
-        layer="underlay",
-        operational_summary={"total": 0, "up": 0, "down": 0, "unidirectional": 0},
-    )
-    assert "No bidirectional issues detected" in format_domain_section(empty)
-
-
 def test_gate_plan_force_device_rewrites():
     tasks = [
         {
@@ -176,77 +165,3 @@ def test_gate_plan_force_device_rewrites():
     assert len(out) == 2
     assert out[0]["args"]["device"] == "lbnl-data-sw"
     assert out[1]["args"]["device_name"] == "lbnl-data-sw"
-
-
-def test_isis_evidence_summary_skips_timestamps():
-    from multi_agent.base import format_evidence_preview
-
-    show = (
-        "Tue Aug 11 21:49:40.200 UTC\n\n"
-        "IS-IS fabric-net neighbors:\n"
-        "System Id      Interface        SNPA           State Holdtime Type IETF-NSF\n"
-        "star-data-sw   Hu0/0/0/23.856   *PtoP*         Up    28       L2   Capable\n"
-        "lbnl-data-sw   Hu0/0/0/23.851   *PtoP*         Up    28       L2   Capable\n"
-    )
-    text = "\n".join(
-        format_evidence_preview(
-            [
-                {
-                    "check": "exec_show",
-                    "args": {
-                        "device_name": "uky-data-sw",
-                        "input_command": "isis neighbors",
-                    },
-                    "result": {
-                        "device": "uky-data-sw",
-                        "command": "show isis neighbors",
-                        "result": show,
-                    },
-                }
-            ]
-        )
-    )
-    assert "Tue@" not in text
-    assert "star-data-sw@Hu0/0/0/23.856=Up" in text
-    assert "lbnl-data-sw@Hu0/0/0/23.851=Up" in text
-
-
-def test_evidence_preview_in_report():
-    from multi_agent.base import format_evidence_preview
-
-    lines = format_evidence_preview(
-        [
-            {
-                "check": "exec_show",
-                "args": {
-                    "device_name": "lbnl-data-sw",
-                    "input_command": "bgp summary",
-                },
-                "reason": "verify BGP neighbor mapping",
-                "result": {
-                    "device": "lbnl-data-sw",
-                    "command": "show bgp summary",
-                    "result": (
-                        "BGP router identifier 10.129.0.1, local AS number 398900\n"
-                        "Neighbor        Spk    AS MsgRcvd MsgSent   TblVer  InQ OutQ  Up/Down  St/PfxRcd\n"
-                        "10.128.0.1        0 398900   17231   17225  5752936    0    0     1w4d          0\n"
-                        "10.148.0.1        0 398900       0   45374        0    0    0 00:00:00 Idle\n"
-                    ),
-                },
-            },
-            {
-                "check": "verify_bgp_peer_reachability",
-                "args": {"device_name": "lbnl-data-sw"},
-                "error": "Missing required parameter: device_name",
-            },
-        ]
-    )
-    text = "\n".join(lines)
-    assert "Deep-check evidence (2): ok=1 err=1" in text
-    assert "ok  lbnl-data-sw  exec_show 'bgp summary'" in text
-    assert "peers:" in text
-    assert "10.148.0.1=Idle" in text
-    assert "10.128.0.1=Est/0" in text
-    assert "err  lbnl-data-sw  verify_bgp_peer_reachability" in text
-    assert "Missing required parameter" in text
-    assert "result: {" not in text
