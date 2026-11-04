@@ -13,11 +13,17 @@ from nso_facts.fleet_summary_thresholds import (
 _OK = frozenset({"up"})
 
 _UNMAPPED_ISIS = re.compile(
-    r"^(?P<device>\S+)\s+\S+:\s+unmapped IS-IS system id ['\"]?(?P<label>[^'\"]+)['\"]?\s*$"
+    r"^(?P<device>\S+)\s+(?P<interface>\S+):\s+unmapped IS-IS system id ['\"]?(?P<label>[^'\"]+)['\"]?\s*$"
 )
 _UNMAPPED_BGP = re.compile(
     r"^(?P<device>\S+)\s+(?P<label>\S+):\s+could not map neighbor address"
 )
+
+
+def unmapped_isis_neighbor_in(message: str) -> tuple[str, str, str] | None:
+    """(device, interface, neighbor system id) named by an ``unknown_neighbor_system_id`` message."""
+    match = _UNMAPPED_ISIS.match(message or "")
+    return (match["device"], match["interface"], match["label"]) if match else None
 
 
 def _intish(value: Any, default: int = 0) -> int:

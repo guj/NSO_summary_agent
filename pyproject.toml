@@ -1,6 +1,6 @@
 [project]
-name = "nso-summary-agent"
-version = "0.1.0"
+name = "nso-diagnostic-agent"
+version = "0.2.0"
 description = "NSO service diagnostic agent (MCP collection, operational checks, optional LLM investigation)"
 readme = "README.md"
 requires-python = ">=3.12"

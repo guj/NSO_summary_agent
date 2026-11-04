@@ -2437,10 +2437,18 @@ def _outside_network_followups(case: CaseFile) -> list[str]:
         )
     unmatched_isis = coded("unknown_neighbor_system_id")
     if unmatched_isis:
+        from nso_facts.fleet_rollups import unmapped_isis_neighbor_in
+
+        found_isis = [unmapped_isis_neighbor_in(str(issue.get("message") or ""))
+                      for issue in unmatched_isis[:3]]
+        named = [f"`{device}` {interface} (system id `{system_id}`)"
+                 for device, interface, system_id in filter(None, found_isis)]
         n = len(unmatched_isis)
+        more = f" and {n - len(named)} more" if named and n > len(named) else ""
         items.append(
             f"Identify the device behind {n} IS-IS neighbor{'s' if n != 1 else ''} that "
-            f"match{'es' if n == 1 else ''} no NSO device."
+            f"match{'es' if n == 1 else ''} no NSO device"
+            + (": " + ", ".join(named) + more if named else "") + "."
         )
     return items
 

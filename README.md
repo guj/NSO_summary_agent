@@ -274,46 +274,11 @@ screen, `report.md`, `report.html` and the digest) shows `NSO_ADDRESS` masked ex
 two characters, for example `192.0.2.146` as `xxx.x.x.x46`. The local `case.json` keeps the messages as
 collected, so the next scan can compare them.
 
-### Slack (incoming webhook)
+### Slack
 
-1. In Slack: **Apps → Incoming Webhooks → Add to channel**
-2. Copy the webhook URL into `.env`:
-
-```bash
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T.../B.../...
-```
-
-1. Test the webhook (see below).
-2. Run on a schedule — see [Scheduled reports](#scheduled-reports-3-daily) below.
-
-**Test the webhook** — no NSO collect, no LLM:
-
-```bash
-cd /path/to/checkout
-set -a && source .env && set +a
-
-curl -sS -X POST -H 'Content-type: application/json' \
-  --data '{"text":"NSO Summary Agent — Slack webhook test"}' \
-  "$SLACK_WEBHOOK_URL"
-```
-
-
-| Result                                    | Meaning                                              |
-| ----------------------------------------- | ---------------------------------------------------- |
-| Response body `ok` and message in channel | Webhook works                                        |
-| `invalid_token` or HTTP error             | Wrong or revoked URL — create a new Incoming Webhook |
-| Empty `SLACK_WEBHOOK_URL`                 | `.env` not loaded; run `source .env` first           |
-
-
-Or publish a real run (also posts to Slack):
-
-```bash
-nso-diagnostic-run --publish
-```
-
-Dry-run skips Slack. On success, stderr lists the channels after `Published to:`.
-
-Treat the webhook URL like a password; anyone with it can post to that channel.
+[docs/SLACK.md](docs/SLACK.md) sets up either way: a bot that uploads the HTML report, or an
+incoming webhook that posts the one line without it. It also covers what to ask a workspace
+admin for, how to check the setup, and the usual errors.
 
 ### Email (SMTP)
 
@@ -624,6 +589,7 @@ docs/
   DIAGNOSTIC_RUNNER.md  # install, configure, run, read the report
   DOCKER.md             # run the agent from the image on a server
   FAQ.md                # operator FAQ
+  SLACK.md              # set up Slack delivery
 state/            # gitignored; diagnostic_mas/runs/<run-id>/ holds case.json, report.md, report.html, mcp_calls.txt
 deploy/
   agent/                        # building the image (README.md), compose file, pinned versions
@@ -799,12 +765,9 @@ that went down, routing sessions lost) and the faults still open with their age.
 The priority follow-up items come after that. The rest of the Result line and the
 investigation-coverage sentence are in the full report only.
 
-Slack file attachments require `SLACK_BOT_TOKEN` with `files:write` and
-`SLACK_CHANNEL_ID`. The bot must be a member of that channel: invite it with
-`/invite @your-app-name`. The upload uses Slack's
-getUploadURLExternal → upload → completeUploadExternal flow. If the upload fails with
-`not_in_channel`, the bot has not been invited to that channel. Existing webhook-only
-setups receive the one line (or the digest), but cannot attach the HTML. Optionally set
+Slack attaches the HTML report only through a bot (`SLACK_BOT_TOKEN` and
+`SLACK_CHANNEL_ID`, set up as in [docs/SLACK.md](docs/SLACK.md)); a webhook posts the one
+line (or the digest) without it. Optionally set
 `DIAGNOSTIC_REPORT_BASE_URL` to an existing internal HTTPS location serving the
 contents of the diagnostic `runs/` directory; webhook posts will link to
 `<base>/<run-id>/report.html`. The runner does not deploy or host those files. With

@@ -47,7 +47,10 @@ It then:
   `fabric-testbed/fabric-nso-mcp-server` (a classic token needs the `repo` scope):
   `GITHUB_TOKEN=<token> python3 install.py`. The token is used for that download only and
   is not saved;
-- creates `.venv` and installs the MCP server and the agent into it;
+- creates `.venv` and installs the MCP server and the agent into it, with the package versions
+  in `deploy/agent/constraints.txt` (the ones the Docker image and live scans use);
+- in a `.venv` from before November 2026, first uninstalls the agent's old package name,
+  `nso-summary-agent`, and with it the commands of runners since removed;
 - copies `.env.example` to `.env`, only if `.env` does not exist yet;
 - asks for your settings and writes them into `.env` (step 3).
 
@@ -114,8 +117,8 @@ first line, installed as in [step 2](#2-install). From the checkout root:
 ```sh
 python3 -m venv .venv
 git clone https://github.com/fabric-testbed/fabric-nso-mcp-server.git ../fabric-nso-mcp-server
-.venv/bin/python -m pip install ../fabric-nso-mcp-server
-.venv/bin/python -m pip install -e .
+.venv/bin/python -m pip install -c deploy/agent/constraints.txt ../fabric-nso-mcp-server
+.venv/bin/python -m pip install -c deploy/agent/constraints.txt -e .
 .venv/bin/nso-diagnostic-run --configure
 .venv/bin/nso-diagnostic-run --check-connection
 ```
@@ -127,7 +130,10 @@ later works. To match the version `install.py` installs, run
 `git -C ../fabric-nso-mcp-server checkout <commit>` before installing it, with the commit
 named `MCP_REF` in `install.py`. Clone it outside this checkout: `mcp-server/` belongs to
 `install.py`. To update it later, `git -C ../fabric-nso-mcp-server pull` and run its
-`pip install` line again.
+`pip install` line again. Without `-c deploy/agent/constraints.txt`, pip takes the newest
+version of every package, which may differ from the ones the agent was tested with.
+A `.venv` from before November 2026 has the agent under its old package name: run
+`.venv/bin/python -m pip uninstall --yes nso-summary-agent` before the agent's line.
 
 Installed into the same `.venv`, the MCP server is found without `MCP_SERVER_CMD`. Its
 own README installs it with `uv` into its own environment instead; that also works, with
@@ -168,7 +174,7 @@ Activate the environment used for your scans, then check it:
 ```sh
 command -v nso-diagnostic-run
 python -m pip list --editable
-python -m pip show nso-summary-agent
+python -m pip show nso-diagnostic-agent
 ```
 
 An editable installation appears in the first pip command with its source path;
@@ -236,22 +242,10 @@ Edit `.env` before a live run. Do not commit it.
 
 ### Slack: choose notification or HTML attachment
 
-`SLACK_WEBHOOK_URL` sends a short notification. It cannot upload the HTML file.
-
-To upload the HTML report to Slack, use a bot instead:
-
-1. Create a Slack app for your workspace, give it the bot scope `files:write`, install it,
-   and copy its bot token (it starts with `xoxb-`) into `SLACK_BOT_TOKEN`. Optionally add
-   `channels:read` (`groups:read` for a private channel) so that `--check-connection` can
-   confirm the bot is in the channel.
-2. Put the destination channel's ID (for example `C0123ABCD`, not the channel name) into
-   `SLACK_CHANNEL_ID`.
-3. Invite the bot to that channel with `/invite @your-app-name`. **The bot must be a member
-   of the channel**; otherwise the upload fails with `not_in_channel`.
-
-Both settings are required. When both are set they take precedence over the webhook for
-reports with attachments; with only one of them, the webhook is used. `DIAGNOSTIC_REPORT_BASE_URL` optionally adds a hosted
-report link; it does not upload or host files itself.
+`SLACK_WEBHOOK_URL` posts a short notice without the HTML report. A bot (`SLACK_BOT_TOKEN`
+with `SLACK_CHANNEL_ID`) uploads the report to the channel, and must be invited to it.
+[SLACK.md](SLACK.md) has the setup steps for both, what to ask a workspace admin for when
+you cannot create channels or install apps, and how to check that it works.
 
 ### Email: SMTP host is required
 
@@ -501,7 +495,7 @@ The tests need the optional `dev` extra (pytest). It is not required to run the
 agent. Keep the quotes; zsh otherwise treats the brackets as a pattern.
 
 ```sh
-python -m pip install -e '.[dev]'
+python -m pip install -c deploy/agent/constraints.txt -e '.[dev]'
 python -m pytest tests/test_topology_report.py tests/test_bgp_partial_evidence.py tests/test_spine_concurrency.py tests/test_dataplane_scheduler.py
 python -m pytest
 ```

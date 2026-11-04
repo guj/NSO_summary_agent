@@ -207,14 +207,34 @@ def test_both_projects_go_into_one_environment(tmp_path):
 
     steps = install.install_commands("/usr/bin/python3.12", venv, tmp_path / "mcp-server", tmp_path)
 
+    pinned = ["-c", str(tmp_path / "deploy" / "agent" / "constraints.txt")]   # the versions the image installs
     assert steps == [
         ["/usr/bin/python3.12", "-m", "venv", str(venv)],
-        [python, "-m", "pip", "install", "--upgrade", str(tmp_path / "mcp-server")],
-        [python, "-m", "pip", "install", "-e", str(tmp_path)],
+        [python, "-m", "pip", "install", "--upgrade", *pinned, str(tmp_path / "mcp-server")],
+        [python, "-m", "pip", "install", *pinned, "-e", str(tmp_path)],
     ]
     (venv / "bin").mkdir(parents=True)
     (venv / "bin" / "python").write_text("")
     assert install.install_commands("/usr/bin/python3.12", venv, tmp_path / "mcp-server", tmp_path)[0][0] == python
+
+
+def test_an_environment_with_the_old_package_name_drops_it_before_installing(tmp_path):
+    install = _install()
+    venv = tmp_path / ".venv"
+    python = str(venv / "bin" / "python")
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("")
+    # An environment installed before the rename, with the removed runners' commands.
+    (venv / "lib" / "python3.14" / "site-packages" / "nso_summary_agent-0.1.0.dist-info").mkdir(parents=True)
+
+    steps = install.install_commands("/usr/bin/python3.12", venv, tmp_path / "mcp-server", tmp_path)
+
+    pinned = ["-c", str(tmp_path / "deploy" / "agent" / "constraints.txt")]
+    assert steps == [
+        [python, "-m", "pip", "install", "--upgrade", *pinned, str(tmp_path / "mcp-server")],
+        [python, "-m", "pip", "uninstall", "--yes", "nso-summary-agent"],
+        [python, "-m", "pip", "install", *pinned, "-e", str(tmp_path)],
+    ]
 
 
 def test_the_agent_uses_the_mcp_server_next_to_its_own_python(tmp_path):

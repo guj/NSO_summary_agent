@@ -6,7 +6,7 @@ For whoever prepares the image that [docs/DOCKER.md](../../docs/DOCKER.md) runs.
 | ---- | ---------- |
 | `build_image.sh` | Builds the image and, with `--save`, the file to hand over. |
 | `docker-compose.yml` | Goes into the image; users copy it out in step 2 of docs/DOCKER.md. |
-| `constraints.txt` | The package versions the image installs. |
+| `constraints.txt` | The package versions the image installs, and `install.py` too. |
 
 ## Build
 
@@ -60,9 +60,11 @@ docker push registry.example.com/nso-diagnostic-agent:2026.10.24
 ## Package versions
 
 The image uses Python 3.14 and the versions in `constraints.txt`, the ones live scans ran
-with, so a later build installs the same. To move to newer versions, upgrade the `.venv` you
-scan from, run a scan, then write the file again. A package not in the file is resolved when
-the image is built.
+with, so a later build installs the same. `install.py` and the manual installation in
+docs/DIAGNOSTIC_RUNNER.md install the same versions, so an install without Docker matches the
+image instead of taking whatever is newest. To move to newer versions, upgrade the `.venv` you
+scan from (`pip install --upgrade` without `-c`), run a scan, then write the file again. A
+package not in the file is resolved when the image is built.
 
 ```bash
 .venv/bin/python -m pip freeze --exclude-editable | grep -v ' @ ' > deploy/agent/constraints.txt

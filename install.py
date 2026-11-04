@@ -206,14 +206,31 @@ def venv_python(venv):
     return venv / "Scripts" / "python.exe" if os.name == "nt" else venv / "bin" / "python"
 
 
+# The agent's package name until November 2026. An environment installed under it keeps it beside
+# the new name, with the removed runners' commands; uninstalling it later would also remove
+# nso-diagnostic-run, which both names install.
+OLD_PACKAGE = "nso-summary-agent"
+
+
+def _has_old_package(venv):
+    venv = Path(venv)
+    pattern = OLD_PACKAGE.replace("-", "_") + "-*.dist-info"
+    return any(venv.glob("lib/python*/site-packages/" + pattern)) or any(
+        venv.glob("Lib/site-packages/" + pattern))
+
+
 def install_commands(python, venv, mcp_dir, repo):
     """The commands that create the environment and install both projects into it."""
     target = venv_python(venv)
+    # The versions live scans ran with, as the image installs them; without it pip takes the newest.
+    pinned = ["-c", str(Path(repo) / "deploy" / "agent" / "constraints.txt")]
     steps = []
     if not target.exists():
         steps.append([python, "-m", "venv", str(venv)])
-    steps.append([str(target), "-m", "pip", "install", "--upgrade", str(mcp_dir)])
-    steps.append([str(target), "-m", "pip", "install", "-e", str(repo)])
+    steps.append([str(target), "-m", "pip", "install", "--upgrade", *pinned, str(mcp_dir)])
+    if _has_old_package(venv):
+        steps.append([str(target), "-m", "pip", "uninstall", "--yes", OLD_PACKAGE])
+    steps.append([str(target), "-m", "pip", "install", *pinned, "-e", str(repo)])
     return steps
 
 

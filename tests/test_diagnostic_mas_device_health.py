@@ -670,6 +670,38 @@ def test_result_and_follow_up_separate_outside_sessions_from_neighbors_to_identi
         assert old not in result + followup
 
 
+def _unmapped_isis(case, device, interface, system_id):
+    from diagnostic_mas.case import open_issue
+
+    open_issue(case, code="unknown_neighbor_system_id", layer="underlay", evidence_ids=[],
+               message=f"{device} {interface}: unmapped IS-IS system id {system_id!r}")
+
+
+def test_the_follow_up_names_the_is_is_neighbor_to_identify():
+    from diagnostic_mas.operator_report import format_followup_operator
+
+    case = _outside_case()
+    _unmapped_isis(case, "star-data-sw", "Hu0/0/0/21.856", "uky-data-sw")
+
+    assert ("Identify the device behind 1 IS-IS neighbor that matches no NSO device: "
+            "`star-data-sw` Hu0/0/0/21.856 (system id `uky-data-sw`).") in "\n".join(
+                format_followup_operator(case))
+
+
+def test_the_follow_up_names_three_is_is_neighbors_and_counts_the_rest():
+    from diagnostic_mas.operator_report import format_followup_operator
+
+    case = _outside_case()
+    for n in range(4):
+        _unmapped_isis(case, "star-data-sw", f"Hu0/0/0/21.85{n}", f"site{n}-sw")
+
+    assert ("Identify the device behind 4 IS-IS neighbors that match no NSO device: "
+            "`star-data-sw` Hu0/0/0/21.850 (system id `site0-sw`), "
+            "`star-data-sw` Hu0/0/0/21.851 (system id `site1-sw`), "
+            "`star-data-sw` Hu0/0/0/21.852 (system id `site2-sw`) and 1 more.") in "\n".join(
+                format_followup_operator(case))
+
+
 def test_routing_lines_show_what_each_end_read():
     from diagnostic_mas.operator_report import format_devices_operator
 
