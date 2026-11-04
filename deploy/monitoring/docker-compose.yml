@@ -10,6 +10,11 @@ services:
     restart: unless-stopped
     ports:
       - "9091:9091"
+    # Keep the pushed values in a volume, so a restart does not empty the dashboard.
+    volumes:
+      - pushgateway-data:/pushgateway
+    command:
+      - --persistence.file=/pushgateway/metrics.db
 
   prometheus:
     image: prom/prometheus:v3.2.1
@@ -46,5 +51,6 @@ services:
       - prometheus
 
 volumes:
+  pushgateway-data:
   prometheus-data:
   grafana-data:

@@ -47,6 +47,8 @@ Diagnoses with source ``port_investigation`` or ``device_investigation``: the
 service is Down on this scan's own evidence and the cause was investigated
 once, for its port or for its cut-off device. Report them together under that
 port or device; do not describe them as individually investigated.
+``dataplane_tally.investigated`` lists each such port or device with its
+services: name every entry, and count ports or devices from that list.
 
 Incomplete dataplane verifies (complete=false / dataplane=unknown unresolved):
 - Preserve Diagnosis stop reasons (timeout / budget / no conclude_dataplane);

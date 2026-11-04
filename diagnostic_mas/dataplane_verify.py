@@ -11,12 +11,13 @@ import os
 import re
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from agent.config import Settings
 from agent.summarize import FABRIC_CHAT_TIMEOUT_SEC, llm_timeout_seconds, llm_error_category
-from diagnostic_mas.case import Budget, CaseFile, DrillSession, add_evidence
+from diagnostic_mas.case import Budget, CaseFile, DrillSession, add_evidence, evidence_ids_after
 from diagnostic_mas.deep_checks import DATAPLANE_ALLOWLIST
 from diagnostic_mas.drill import (
     _message_to_dict,
@@ -2182,6 +2183,115 @@ async def llm_dataplane_verify_one(
                     payload["verification_gap"] = fallback_gap(metrics)
 
 
+# What the dig tells the model when it has to steer it.
+_BUDGET_EXHAUSTED = (
+    "Tool budget is exhausted. Call conclude_dataplane now "
+    "using the evidence already returned (unknown if unsure)."
+)
+_NO_TOOLS_NUDGE = (
+    "Your last reply had neither mcp_call nor "
+    "conclude_dataplane. Call conclude_dataplane now "
+    "using the evidence already returned (unknown if "
+    "unsure). Do not answer in prose only."
+)
+_RT_PATH_UNAVAILABLE = (
+    "The RT/config path via 'run evpn' is unavailable. "
+    "get_device_config and bgp l2vpn evpn checks already "
+    "returned — that does NOT mean they supplied "
+    "sufficient evidence for this service (successful "
+    "tool return ≠ numeric/effective RT, bidirectional "
+    "MAC/EVPN install, or PE-side readiness proof). "
+    "Call conclude_dataplane now. Prefer "
+    "dataplane_status=unknown when service-specific "
+    "proof is still missing; name the missing check "
+    "explicitly (e.g. numeric/effective RT text, "
+    "unverified MAC/EVPN direction). Do not claim up "
+    "from config/BGP return alone. Do not retry run "
+    "evpn / show evpn / evpn evi, and do not fish with "
+    "AC interface shows for RT proof."
+)
+_SOFT_BLOCK_ONLY = (
+    "Rejected/forbidden shows do not count as investigation "
+    "progress and do not exhaust the tool budget. If "
+    "get_device_config / 'bgp l2vpn evpn summary|rd' / BD "
+    "forwarding are not done yet, do those next (at most "
+    "once each). If they already returned and "
+    "service-specific proof (numeric/effective RT, "
+    "bidirectional MAC/EVPN install) is still missing, "
+    "call conclude_dataplane with dataplane_status="
+    "unknown and name that missing check — a successful "
+    "tool return is not sufficient evidence by itself. "
+    "Do not keep retrying rejected paths."
+)
+_NO_PROGRESS = (
+    "Two consecutive batches produced only errors, empty, "
+    "or repeated output. Call conclude_dataplane now. "
+    "Preserve supported observations; report unknown or "
+    "unresolved cause where evidence is insufficient."
+)
+_NEARLY_EXHAUSTED = (
+    "Budget nearly exhausted. Call conclude_dataplane now "
+    "for THIS service only (unknown if unsure)."
+)
+
+
+@dataclass
+class _Dig:
+    """One service's investigation: what it works with, and what carries from round to round.
+
+    The tool-call handling and the after-batch checks both read and write the flags, so
+    they share this object rather than passing flags back and forth.
+    """
+
+    client: Any
+    settings: Settings
+    case: CaseFile
+    record: dict[str, Any]
+    device_names: set[str]
+    session: DrillSession
+    investigation: Investigation
+    oai: Any
+    messages: list[dict[str, Any]]
+    max_rounds: int
+    ev_watermark: int
+    progress: BatchProgress = field(default_factory=BatchProgress)
+    concluded: bool = False
+    # Only conclude_dataplane is offered: after the empty-reply nudge or a no-progress stop.
+    conclude_only: bool = False
+    # The next request names conclude_dataplane as its tool_choice.
+    force_conclude_choice: bool = False
+    empty_turn_nudge_used: bool = False
+    # After the last mcp_call spends the budget, one more round lets
+    # conclude_dataplane weigh that result.
+    await_conclusion: bool = False
+    stop_reason: str = "investigation ended without a conclusion"
+    partial_results: list[dict[str, Any]] = field(default_factory=list)
+    # The current batch only: reset when each reply arrives.
+    batch_responses: list[tuple[str, str]] = field(default_factory=list)
+    batch_message_start: int = 0
+    blocked_unavailable_rt_path: bool = False
+
+    @property
+    def name(self) -> Any:
+        return self.record.get("name") or "?"
+
+    @property
+    def service_name(self) -> str:
+        return str(self.record.get("name") or "")
+
+    @property
+    def remaining(self) -> int:
+        return self.session.max_tools - self.session.tools_used
+
+    def new_batch(self) -> None:
+        self.batch_responses = []
+        self.batch_message_start = len(self.messages)
+        self.blocked_unavailable_rt_path = False
+
+    def tool_reply(self, call: Any, content: str) -> None:
+        self.messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
+
+
 async def _llm_dataplane_verify_one(
     client: Any,
     settings: Settings,
@@ -2195,24 +2305,61 @@ async def _llm_dataplane_verify_one(
 ) -> bool:
     """Returns True if a dataplane_status was recorded (LLM or fallback)."""
     from agent.summarize import fabric_openai_client
-    from diagnostic_mas.dataplane_scheduler import llm_request, parent_halted
-    from diagnostic_mas.case import evidence_ids_after
+    from diagnostic_mas.dataplane_scheduler import parent_halted
+    from diagnostic_mas.service_presence import gone_before_investigation
 
-    before = session.tools_used
     remaining = session.max_tools - session.tools_used
     if remaining <= 0:
         return False
-
     name = record.get("name") or "?"
-    from diagnostic_mas.service_presence import gone_before_investigation
-
     if await gone_before_investigation(client, case, record):
         _log(f"skip service={name}: no longer listed in NSO")
         investigation.stop_reason = "service_gone"
         return True
     _log(f"start service={name} tools_budget={remaining}")
     ev_watermark = case._evidence_seq
+    max_rounds = min(remaining + 2, _DATAPLANE_MAX_ROUNDS_CAP)
+    messages = await _opening_messages(client, record, remaining=remaining, max_rounds=max_rounds)
+    dig = _Dig(
+        client=client, settings=settings, case=case, record=record, device_names=device_names,
+        session=session, investigation=investigation,
+        oai=openai_client or fabric_openai_client(settings, timeout=llm_timeout_seconds(settings)),
+        messages=messages, max_rounds=max_rounds, ev_watermark=ev_watermark,
+    )
+    investigation.round_limit = max_rounds
 
+    for round_i in range(max_rounds):
+        if parent_halted():
+            dig.stop_reason = "provider budget halted this run"
+            break
+        if (dig.remaining <= 0 and not dig.await_conclusion) or dig.concluded:
+            break
+        tools_payload, tool_choice = _start_round(dig, round_i)
+        response = await _request_round(dig, round_i, tools_payload, tool_choice)
+        if response is None:
+            break
+        dig.new_batch()
+        choice0 = response.choices[0]
+        message = choice0.message
+        finish_reason = getattr(choice0, "finish_reason", None)
+        tool_calls = getattr(message, "tool_calls", None) or []
+        if not tool_calls:
+            if await _text_reply(dig, message, finish_reason):
+                continue
+            break
+        dig.messages.append(_message_to_dict(message))
+        for call in tool_calls:
+            await _handle_call(dig, call, finish_reason)
+        if not _after_batch(dig, round_i):
+            break
+
+    if not dig.concluded:
+        _record_unfinished(dig)
+    return True
+
+
+def _service_brief(record: dict[str, Any]) -> dict[str, Any]:
+    """The service as the model first sees it, with its quarantined endpoints named."""
     brief = {
         "service_type": record.get("service_type"),
         "name": record.get("name"),
@@ -2239,13 +2386,18 @@ async def _llm_dataplane_verify_one(
             brief["available_devices"] = sorted(d for d in endpoints if d not in q)
     except Exception:  # noqa: BLE001
         pass
+    return brief
 
-    max_rounds_hint = min(remaining + 2, _DATAPLANE_MAX_ROUNDS_CAP)
 
+async def _opening_messages(
+    client: Any, record: dict[str, Any], *, remaining: int, max_rounds: int,
+) -> list[dict[str, Any]]:
+    """The system prompt with the tool catalog, and the request naming the service and its limits."""
+    brief = _service_brief(record)
     user_bits = [
         f"Check the dataplane status of this "
         f"{record.get('service_type') or 'NSO'} service.",
-        f"At most {remaining} mcp_call tools; conclude by round {max_rounds_hint}.",
+        f"At most {remaining} mcp_call tools; conclude by round {max_rounds}.",
         *(["Do not call MCP on unavailable_devices; prefer available_devices."]
           if "unavailable_devices" in brief else []),
         "check_service_sync needs service_type + service_name; "
@@ -2253,600 +2405,366 @@ async def _llm_dataplane_verify_one(
         "",
         json.dumps(brief, indent=2, default=str),
     ]
-
     messages: list[dict[str, Any]] = [
-        {
-            "role": "system",
-            "content": dataplane_system_prompt(record.get("service_type")),
-        },
+        {"role": "system", "content": dataplane_system_prompt(record.get("service_type"))},
         {"role": "user", "content": "\n".join(user_bits)},
     ]
     try:
         catalog = await tool_catalog(client, DATAPLANE_ALLOWLIST)
         # Fabric/Qwen: only one system message, and it must be first.
-        messages[0]["content"] = (
-            str(messages[0]["content"]).rstrip() + "\n\n" + catalog
-        )
+        messages[0]["content"] = str(messages[0]["content"]).rstrip() + "\n\n" + catalog
         _log(f"tool schemas supplied ({len(catalog)} chars)")
     except Exception as exc:  # discovery failure must be visible
         _log(f"tool schema discovery unavailable: {type(exc).__name__}")
-    progress = BatchProgress()
-    conclude_only = False
-    force_conclude_choice = False
-    empty_turn_nudge_used = False
-    stop_reason = "investigation ended without a conclusion"
-    partial_results: list[dict[str, Any]] = []
-    oai = openai_client or fabric_openai_client(
-        settings, timeout=llm_timeout_seconds(settings)
+    return messages
+
+
+def _start_round(dig: _Dig, round_i: int) -> tuple[list[dict[str, Any]], Any]:
+    """Log the round, tell the model when the budget is spent, and choose the tools to offer."""
+    remaining = dig.remaining
+    _log(
+        f"LLM round {round_i + 1}/{dig.max_rounds} "
+        f"(tools_left={remaining}"
+        f"{', conclude_only' if dig.conclude_only or remaining <= 0 else ''})"
     )
-    concluded = False
-    max_rounds = max_rounds_hint
-    investigation.round_limit = max_rounds
-    service_name = str(record.get("name") or "")
-    # After the last mcp_call depletes the budget, allow one more LLM turn so
-    # conclude_dataplane can evaluate that result (do not break on remaining==0).
-    await_conclusion = False
+    if remaining <= 0:
+        dig.messages.append({"role": "user", "content": _BUDGET_EXHAUSTED})
+    dig.await_conclusion = False
+    dig.investigation.rounds = round_i + 1
+    tools_payload = [CONCLUDE_DATAPLANE_TOOL] if dig.conclude_only else DATAPLANE_TOOLS
+    tool_choice: Any = "auto"
+    if dig.force_conclude_choice:
+        tool_choice = {"type": "function", "function": {"name": "conclude_dataplane"}}
+        dig.force_conclude_choice = False
+    msg_chars = _messages_chars(dig.messages)
+    tools_chars = len(json.dumps(tools_payload, default=str))
+    _log(
+        f"LLM request round={round_i + 1} "
+        f"messages={msg_chars} chars tools={tools_chars} chars "
+        f"total≈{msg_chars + tools_chars} chars"
+    )
+    return tools_payload, tool_choice
 
-    for round_i in range(max_rounds):
-        if parent_halted():
-            stop_reason = "provider budget halted this run"
-            break
-        remaining = session.max_tools - session.tools_used
-        if remaining <= 0 and not await_conclusion:
-            break
-        if concluded:
-            break
-        _log(
-            f"LLM round {round_i + 1}/{max_rounds} "
-            f"(tools_left={remaining}"
-            f"{', conclude_only' if conclude_only or remaining <= 0 else ''})"
+
+async def _request_round(
+    dig: _Dig, round_i: int, tools_payload: list[dict[str, Any]], tool_choice: Any,
+) -> Any | None:
+    """This round's chat reply; None when the request failed and the dig stops.
+
+    A forced conclude_dataplane that the provider rejects is asked once more with
+    tool_choice=auto. A provider spend-budget error halts the run.
+    """
+    from diagnostic_mas.dataplane_scheduler import llm_request
+
+    started = time.monotonic()
+
+    def ask(choice: Any) -> Any:
+        return llm_request(
+            dig.investigation, dig.oai.chat.completions.create,
+            model=dig.settings.fabric_model,
+            messages=dig.messages,
+            tools=tools_payload,
+            tool_choice=choice,
+            **llm_temperature_kwargs(dig.settings),
         )
-        if remaining <= 0:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "Tool budget is exhausted. Call conclude_dataplane now "
-                        "using the evidence already returned (unknown if unsure)."
-                    ),
-                }
-            )
-        await_conclusion = False
-        investigation.rounds = round_i + 1
-        llm_started = time.monotonic()
-        tools_payload = (
-            [CONCLUDE_DATAPLANE_TOOL] if conclude_only else DATAPLANE_TOOLS
-        )
-        tool_choice: Any = "auto"
-        if force_conclude_choice:
-            tool_choice = {
-                "type": "function",
-                "function": {"name": "conclude_dataplane"},
-            }
-            force_conclude_choice = False
-        msg_chars = _messages_chars(messages)
-        tools_chars = len(json.dumps(tools_payload, default=str))
-        _log(
-            f"LLM request round={round_i + 1} "
-            f"messages={msg_chars} chars tools={tools_chars} chars "
-            f"total≈{msg_chars + tools_chars} chars"
-        )
+
+    try:
+        response = await ask(tool_choice)
+    except Exception as exc:  # noqa: BLE001
+        elapsed = time.monotonic() - started
+        _halt_on_provider_budget(dig, exc, elapsed, round_i, tools_payload)
+        if tool_choice == "auto":
+            _request_failed(dig, exc, elapsed, round_i, tools_payload)
+            return None
+        # Some Fabric models reject forced function tool_choice; retry once
+        # with auto when we were only forcing conclude_dataplane.
+        _log(f"forced tool_choice rejected ({type(exc).__name__}); retrying with tool_choice=auto")
         try:
-            response = await llm_request(investigation, oai.chat.completions.create,
-                model=settings.fabric_model,
-                messages=messages,
-                tools=tools_payload,
-                tool_choice=tool_choice,
-                **llm_temperature_kwargs(settings),
-            )
-        except Exception as exc:  # noqa: BLE001
-            from agent.llm_budget import (
-                ProviderBudgetExceeded,
-                is_provider_budget_exceeded,
-                mark_case_llm_halt,
-                provider_budget_message,
-            )
+            response = await ask("auto")
+        except Exception as exc2:  # noqa: BLE001
+            elapsed = time.monotonic() - started
+            _halt_on_provider_budget(dig, exc2, elapsed, round_i, tools_payload)
+            _request_failed(dig, exc2, elapsed, round_i, tools_payload)
+            return None
+    _log(f"LLM round completed in {time.monotonic() - started:.2f}s")
+    return response
 
-            elapsed = time.monotonic() - llm_started
-            if is_provider_budget_exceeded(exc):
-                msg = provider_budget_message(exc)
-                mark_case_llm_halt(
-                    case, f"provider budget_exceeded: {msg}"
-                )
-                stop_reason = f"provider LLM budget exceeded: {msg}"
-                _log(
-                    f"LLM budget exceeded after {elapsed:.2f}s — "
-                    f"stopping further LLM requests: {exc}"
-                )
-                dump_path = _dump_failed_dataplane_llm_request(
-                    service_name=service_name,
-                    round_i=round_i + 1,
-                    model=str(settings.fabric_model),
-                    messages=messages,
-                    tools=tools_payload,
-                    error=exc,
-                    elapsed_s=elapsed,
-                    timeout_sec=llm_timeout_seconds(settings),
-                )
-                if dump_path is not None:
-                    _log(f"dumped failed LLM request to {dump_path}")
-                if not concluded:
-                    finding = _incomplete_verify_finding(
-                        record, stop_reason=stop_reason
-                    )
-                    finding["partial_tool_results"] = partial_results
-                    _record_incomplete_dataplane_verify(
-                        case,
-                        record,
-                        finding,
-                        evidence_ids=evidence_ids_after(case, ev_watermark),
-                        source="llm",
-                    )
-                    _log(f"incomplete: unknown for {name} (provider budget)")
-                raise ProviderBudgetExceeded(
-                    case.llm_halt_reason or msg
-                ) from exc
-            # Some Fabric models reject forced function tool_choice; retry once
-            # with auto when we were only forcing conclude_dataplane.
-            if tool_choice != "auto":
-                _log(
-                    f"forced tool_choice rejected ({type(exc).__name__}); "
-                    "retrying with tool_choice=auto"
-                )
-                try:
-                    response = await llm_request(investigation, oai.chat.completions.create,
-                        model=settings.fabric_model,
-                        messages=messages,
-                        tools=tools_payload,
-                        tool_choice="auto",
-                        **llm_temperature_kwargs(settings),
-                    )
-                except Exception as exc2:  # noqa: BLE001
-                    elapsed = time.monotonic() - llm_started
-                    if is_provider_budget_exceeded(exc2):
-                        msg = provider_budget_message(exc2)
-                        mark_case_llm_halt(
-                            case, f"provider budget_exceeded: {msg}"
-                        )
-                        stop_reason = f"provider LLM budget exceeded: {msg}"
-                        _log(
-                            f"LLM budget exceeded after {elapsed:.2f}s — "
-                            f"stopping further LLM requests: {exc2}"
-                        )
-                        if not concluded:
-                            finding = _incomplete_verify_finding(
-                                record, stop_reason=stop_reason
-                            )
-                            finding["partial_tool_results"] = partial_results
-                            _record_incomplete_dataplane_verify(
-                                case,
-                                record,
-                                finding,
-                                evidence_ids=evidence_ids_after(
-                                    case, ev_watermark
-                                ),
-                                source="llm",
-                            )
-                        raise ProviderBudgetExceeded(
-                            case.llm_halt_reason or msg
-                        ) from exc2
-                    stop_reason = f"LLM request failed: {type(exc2).__name__}"
-                    _log(f"LLM error after {elapsed:.2f}s [{llm_error_category(exc2)}]: {exc2}")
-                    dump_path = _dump_failed_dataplane_llm_request(
-                        service_name=service_name,
-                        round_i=round_i + 1,
-                        model=str(settings.fabric_model),
-                        messages=messages,
-                        tools=tools_payload,
-                        error=exc2,
-                        elapsed_s=elapsed,
-                    timeout_sec=llm_timeout_seconds(settings),
-                    )
-                    if dump_path is not None:
-                        _log(f"dumped failed LLM request to {dump_path}")
-                    break
-            else:
-                stop_reason = f"LLM request failed: {type(exc).__name__}"
-                _log(f"LLM error after {elapsed:.2f}s [{llm_error_category(exc)}]: {exc}")
-                dump_path = _dump_failed_dataplane_llm_request(
-                    service_name=service_name,
-                    round_i=round_i + 1,
-                    model=str(settings.fabric_model),
-                    messages=messages,
-                    tools=tools_payload,
-                    error=exc,
-                    elapsed_s=elapsed,
-                    timeout_sec=llm_timeout_seconds(settings),
-                )
-                if dump_path is not None:
-                    _log(f"dumped failed LLM request to {dump_path}")
-                break
-        _log(f"LLM round completed in {time.monotonic() - llm_started:.2f}s")
-        batch_responses: list[tuple[str, str]] = []
-        batch_message_start = len(messages)
-        blocked_unavailable_rt_path = False
-        choice0 = response.choices[0]
-        message = choice0.message
-        finish_reason = getattr(choice0, "finish_reason", None)
-        tool_calls = getattr(message, "tool_calls", None) or []
-        if not tool_calls:
-            finding = parse_dataplane_conclusion(message.content or "")
-            if finding:
-                ev_ids = evidence_ids_after(case, ev_watermark)
-                session_ev = [
-                    e for e in case.evidence if e.get("id") in set(ev_ids)
-                ]
-                from diagnostic_mas.service_presence import reconcile_presence
-                finding = await reconcile_presence(client, case, record, finding)
-                finding = accept_dataplane_conclusion(
-                    record, finding, session_evidence=session_ev
-                )
-                investigation.concluded(finding)
-                _commit_dataplane_conclusion(
-                    case,
-                    record,
-                    finding,
-                    source="llm",
-                    evidence_ids=ev_ids,
-                )
-                _log(
-                    f"conclude: {record.get('dataplane_status')} "
-                    f"{finding.get('cause', '')[:80]}"
-                )
-                concluded = True
-                break
-            turn_diag = _empty_tool_turn_log_line(
-                message, finish_reason=finish_reason
-            )
-            _log(f"LLM returned no tools / no conclusion — {turn_diag}")
-            if not empty_turn_nudge_used:
-                empty_turn_nudge_used = True
-                messages.append(_message_to_dict(message))
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "Your last reply had neither mcp_call nor "
-                            "conclude_dataplane. Call conclude_dataplane now "
-                            "using the evidence already returned (unknown if "
-                            "unsure). Do not answer in prose only."
-                        ),
-                    }
-                )
-                conclude_only = True
-                force_conclude_choice = True
-                _log("nudging once: force conclude_dataplane")
-                continue
-            stop_reason = "LLM returned no tools / no conclusion"
-            _log("LLM returned no tools / no conclusion — stop (after nudge)")
-            break
 
-        messages.append(_message_to_dict(message))
-        for call in tool_calls:
-            fn = call.function
-            fn_name = getattr(fn, "name", "") or ""
-            raw_args = getattr(fn, "arguments", "") or "{}"
-            bad_json = False
-            try:
-                args = (
-                    json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
-                )
-            except json.JSONDecodeError:
-                args = {}
-                bad_json = True
+def _halt_on_provider_budget(
+    dig: _Dig, exc: BaseException, elapsed: float, round_i: int, tools_payload: list[dict[str, Any]],
+) -> None:
+    """On a provider spend-budget error: halt the run, record the service unknown, and raise."""
+    from agent.llm_budget import (
+        ProviderBudgetExceeded,
+        is_provider_budget_exceeded,
+        mark_case_llm_halt,
+        provider_budget_message,
+    )
 
-            if fn_name == "conclude_dataplane":
-                finding = parse_dataplane_conclusion(args)
-                if finding:
-                    ev_ids = evidence_ids_after(case, ev_watermark)
-                    session_ev = [
-                        e for e in case.evidence if e.get("id") in set(ev_ids)
-                    ]
-                    from diagnostic_mas.service_presence import reconcile_presence
-                    finding = await reconcile_presence(client, case, record, finding)
-                    finding = accept_dataplane_conclusion(
-                        record, finding, session_evidence=session_ev
-                    )
-                    investigation.concluded(finding)
-                    _commit_dataplane_conclusion(
-                        case,
-                        record,
-                        finding,
-                        source="llm",
-                        evidence_ids=ev_ids,
-                    )
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": call.id,
-                            "content": json.dumps({"ok": True, "recorded": True}),
-                        }
-                    )
-                    _log(
-                        f"conclude: {record.get('dataplane_status')} "
-                        f"{finding.get('cause', '')[:100]}"
-                    )
-                    concluded = True
-                else:
-                    _log(rejected_call_log_line(
-                        fn_name, raw_args,
-                        conclusion_rejection(
-                            args, bad_json=bad_json,
-                            required=("dataplane_status", "observed", "cause"),
-                            choices={"dataplane_status": _DATAPLANE_STATUSES},
-                        ),
-                        finish_reason=finish_reason,
-                    ))
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": call.id,
-                            "content": (
-                                "ERROR: conclude_dataplane needs "
-                                "dataplane_status + observed + cause"
-                            ),
-                        }
-                    )
-                continue
-
-            if fn_name != "mcp_call":
-                _log(rejected_call_log_line(
-                    fn_name, raw_args, "unknown function", finish_reason=finish_reason))
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call.id,
-                        "content": (
-                            f"ERROR: unknown function {fn_name!r}; "
-                            "use mcp_call or conclude_dataplane"
-                        ),
-                    }
-                )
-                continue
-
-            if conclude_only:
-                messages.append({"role": "tool", "tool_call_id": call.id,
-                                 "content": "ERROR: no-progress stop; conclude only"})
-                continue
-            remaining = session.max_tools - session.tools_used
-            if remaining <= 0:
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call.id,
-                        "content": "ERROR: tool budget exhausted — call conclude_dataplane now",
-                    }
-                )
-                await_conclusion = True
-                continue
-
-            tool_name = str(args.get("tool_name") or "")
-            params = (
-                args.get("params") if isinstance(args.get("params"), dict) else {}
-            )
-            reason = args.get("reason")
-            tool_name, params, coerce_note = coerce_dataplane_mcp_call(
-                tool_name, params
-            )
-            if coerce_note:
-                _log(f"mcp_call coerce: {coerce_note}")
-            if not tool_name:
-                _log(
-                    "blocked empty tool_name "
-                    f"{json.dumps(params, default=str)[:120]}"
-                )
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call.id,
-                        "content": empty_mcp_tool_name_error(params),
-                    }
-                )
-                continue
-            _log(f"mcp_call {tool_name} {json.dumps(params, default=str)[:120]}")
-            # Soft-block bare show evpn … before debiting MCP budget.
-            if tool_name.strip() == "exec_show":
-                show_cmd = str(
-                    params.get("input_command")
-                    or params.get("command")
-                    or ""
-                )
-                blocked = disallowed_dataplane_show_command(show_cmd)
-                if blocked:
-                    _log(f"blocked exec_show {show_cmd!r}")
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": call.id,
-                            "content": f"ERROR: {blocked}",
-                        }
-                    )
-                    show_norm = re.sub(
-                        r"(?i)^show\s+", "", (show_cmd or "").strip()
-                    )
-                    if re.match(r"(?i)^run\s+evpn\b", show_norm):
-                        blocked_unavailable_rt_path = True
-                    continue
-            if tool_name.strip() == "explore_nso_path":
-                explore_path = str(params.get("path") or "")
-                blocked_path = disallowed_explore_nso_path(explore_path)
-                if blocked_path:
-                    _log(f"blocked explore_nso_path {explore_path!r}")
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": call.id,
-                            "content": f"ERROR: {blocked_path}",
-                        }
-                    )
-                    continue
-            mcp_started = time.monotonic()
-            result_text = await investigation.mcp(execute_one_drill_call,
-                client,
-                case,
-                tool_name=tool_name,
-                params=params,
-                reason=str(reason) if reason else None,
-                device_names=device_names,
-                session=session,
-                allowlist=DATAPLANE_ALLOWLIST,
-                account="dataplane",
-            )
-            elapsed = time.monotonic() - mcp_started
-            failed = result_error(result_text)
-            investigation.query_errors += int(bool(failed))
-            _log(f"MCP {tool_name} device={params.get('device_name', params.get('device', '-'))} "
-                 f"elapsed={elapsed:.2f}s outcome={'error' if failed else 'returned'}")
-            if failed:
-                result_text = "ERROR: tool execution/CLI failed; not service-health evidence.\n" + result_text
-            batch_responses.append((tool_name, result_text))
-            partial_results.append({"tool": tool_name, "params": params,
-                                    "outcome": "error" if failed else "returned",
-                                    "elapsed_seconds": round(elapsed, 3),
-                                    "output_excerpt": result_text[:1500]})
-            clipped = clip_dataplane_tool_content(
-                tool_name, result_text, service_name=service_name
-            )
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": call.id,
-                    "content": clipped,
-                }
-            )
-            # Last debit may leave remaining==0 — still need an eval round.
-            if session.tools_used >= session.max_tools:
-                await_conclusion = True
-
-        if concluded:
-            break
-
-        if conclude_only:
-            stop_reason = "model did not conclude after no-progress stop"
-            break
-        # Soft-blocked / gate-rejected calls do not debit MCP and must not
-        # alone trip the two-empty-batch stop while budget remains — that
-        # prematurely ends digs (e.g. run evpn fail → blocked evpn evi)
-        # before get_device_config / bgp l2vpn evpn rd recovery.
-        batch_tool_msgs = [
-            m
-            for m in messages[batch_message_start:]
-            if m.get("role") == "tool"
-        ]
-        soft_block_only = bool(batch_tool_msgs) and not batch_responses
-        if soft_block_only and blocked_unavailable_rt_path and (
-            _partial_has_l2sts_rt_ladder(partial_results)
-        ):
-            # nso21: ladder already tried; late run evpn soft-block → conclude.
-            # Config/BGP "returned" ≠ sufficient service-specific evidence.
-            conclude_only = True
-            force_conclude_choice = True
-            stop_reason = (
-                "unavailable RT evidence path after recovery ladder "
-                "(run evpn blocked; config/BGP returned but may lack "
-                "service-specific proof)"
-            )
-            messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "The RT/config path via 'run evpn' is unavailable. "
-                        "get_device_config and bgp l2vpn evpn checks already "
-                        "returned — that does NOT mean they supplied "
-                        "sufficient evidence for this service (successful "
-                        "tool return ≠ numeric/effective RT, bidirectional "
-                        "MAC/EVPN install, or PE-side readiness proof). "
-                        "Call conclude_dataplane now. Prefer "
-                        "dataplane_status=unknown when service-specific "
-                        "proof is still missing; name the missing check "
-                        "explicitly (e.g. numeric/effective RT text, "
-                        "unverified MAC/EVPN direction). Do not claim up "
-                        "from config/BGP return alone. Do not retry run "
-                        "evpn / show evpn / evpn evi, and do not fish with "
-                        "AC interface shows for RT proof."
-                    ),
-                }
-            )
-            _log(
-                "soft-block run evpn after RT ladder — forcing conclude "
-                "(allow unknown; name missing service-specific check)"
-            )
-        elif soft_block_only:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "Rejected/forbidden shows do not count as investigation "
-                        "progress and do not exhaust the tool budget. If "
-                        "get_device_config / 'bgp l2vpn evpn summary|rd' / BD "
-                        "forwarding are not done yet, do those next (at most "
-                        "once each). If they already returned and "
-                        "service-specific proof (numeric/effective RT, "
-                        "bidirectional MAC/EVPN install) is still missing, "
-                        "call conclude_dataplane with dataplane_status="
-                        "unknown and name that missing check — a successful "
-                        "tool return is not sufficient evidence by itself. "
-                        "Do not keep retrying rejected paths."
-                    ),
-                }
-            )
-            _log(
-                "soft-block-only batch — continue (budget remains; "
-                "not counting as no-progress)"
-            )
-        elif batch_tool_msgs:
-            if progress.observe(batch_responses):
-                conclude_only = True
-                stop_reason = "two batches without new successful tool output"
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "Two consecutive batches produced only errors, empty, "
-                            "or repeated output. Call conclude_dataplane now. "
-                            "Preserve supported observations; report unknown or "
-                            "unresolved cause where evidence is insufficient."
-                        ),
-                    }
-                )
-
-        # Nudge after last productive round if still probing
-        if round_i == max_rounds - 2 and not concluded:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "Budget nearly exhausted. Call conclude_dataplane now "
-                        "for THIS service only (unknown if unsure)."
-                    ),
-                }
-            )
-
-    if not concluded:
-        if investigation.stop_reason == "no_conclusion":
-            if session.tools_used >= session.max_tools:
-                investigation.stop_reason = "tool_limit"
-            elif investigation.rounds >= max_rounds:
-                investigation.stop_reason = "round_limit"
-        finding = _incomplete_verify_finding(record, stop_reason=stop_reason)
-        finding["partial_tool_results"] = partial_results
-        if partial_results:
-            finding["observed"] = str(finding.get("observed", "")) + (
-                f" Held {len(partial_results)} tool responses in this run's "
-                "in-memory case only (partial_tool_results) — not written to "
-                "disk; observations for this report, not a completed diagnosis."
-            )
+    if not is_provider_budget_exceeded(exc):
+        return
+    msg = provider_budget_message(exc)
+    mark_case_llm_halt(dig.case, f"provider budget_exceeded: {msg}")
+    dig.stop_reason = f"provider LLM budget exceeded: {msg}"
+    _log(f"LLM budget exceeded after {elapsed:.2f}s — stopping further LLM requests: {exc}")
+    _dump_failed_request(dig, exc, elapsed, round_i, tools_payload)
+    if not dig.concluded:
+        finding = _incomplete_verify_finding(dig.record, stop_reason=dig.stop_reason)
+        finding["partial_tool_results"] = dig.partial_results
         _record_incomplete_dataplane_verify(
-            case,
-            record,
-            finding,
-            evidence_ids=evidence_ids_after(case, ev_watermark),
+            dig.case, dig.record, finding,
+            evidence_ids=evidence_ids_after(dig.case, dig.ev_watermark), source="llm",
         )
-        _log(f"incomplete: unknown for {name} (not explained)")
-        concluded = True
+        _log(f"incomplete: unknown for {dig.name} (provider budget)")
+    raise ProviderBudgetExceeded(dig.case.llm_halt_reason or msg) from exc
 
-    _ = session.tools_used - before
-    return concluded
+
+def _request_failed(
+    dig: _Dig, exc: BaseException, elapsed: float, round_i: int, tools_payload: list[dict[str, Any]],
+) -> None:
+    dig.stop_reason = f"LLM request failed: {type(exc).__name__}"
+    _log(f"LLM error after {elapsed:.2f}s [{llm_error_category(exc)}]: {exc}")
+    _dump_failed_request(dig, exc, elapsed, round_i, tools_payload)
+
+
+def _dump_failed_request(
+    dig: _Dig, exc: BaseException, elapsed: float, round_i: int, tools_payload: list[dict[str, Any]],
+) -> None:
+    dump_path = _dump_failed_dataplane_llm_request(
+        service_name=dig.service_name,
+        round_i=round_i + 1,
+        model=str(dig.settings.fabric_model),
+        messages=dig.messages,
+        tools=tools_payload,
+        error=exc,
+        elapsed_s=elapsed,
+        timeout_sec=llm_timeout_seconds(dig.settings),
+    )
+    if dump_path is not None:
+        _log(f"dumped failed LLM request to {dump_path}")
+
+
+async def _text_reply(dig: _Dig, message: Any, finish_reason: Any) -> bool:
+    """Handle a reply with no tool calls; True when the dig asks again.
+
+    A conclusion written as text is recorded. Otherwise the model is nudged once to
+    call conclude_dataplane, and the dig stops if it still does not.
+    """
+    finding = parse_dataplane_conclusion(message.content or "")
+    if finding:
+        await _conclude(dig, finding)
+        return False
+    turn_diag = _empty_tool_turn_log_line(message, finish_reason=finish_reason)
+    _log(f"LLM returned no tools / no conclusion — {turn_diag}")
+    if not dig.empty_turn_nudge_used:
+        dig.empty_turn_nudge_used = True
+        dig.messages.append(_message_to_dict(message))
+        dig.messages.append({"role": "user", "content": _NO_TOOLS_NUDGE})
+        dig.conclude_only = True
+        dig.force_conclude_choice = True
+        _log("nudging once: force conclude_dataplane")
+        return True
+    dig.stop_reason = "LLM returned no tools / no conclusion"
+    _log("LLM returned no tools / no conclusion — stop (after nudge)")
+    return False
+
+
+async def _conclude(dig: _Dig, finding: dict[str, Any]) -> None:
+    """Weigh the model's conclusion against this dig's evidence and record it."""
+    from diagnostic_mas.service_presence import reconcile_presence
+
+    ev_ids = evidence_ids_after(dig.case, dig.ev_watermark)
+    session_ev = [e for e in dig.case.evidence if e.get("id") in set(ev_ids)]
+    finding = await reconcile_presence(dig.client, dig.case, dig.record, finding)
+    finding = accept_dataplane_conclusion(dig.record, finding, session_evidence=session_ev)
+    dig.investigation.concluded(finding)
+    _commit_dataplane_conclusion(dig.case, dig.record, finding, source="llm", evidence_ids=ev_ids)
+    _log(f"conclude: {dig.record.get('dataplane_status')} {finding.get('cause', '')[:100]}")
+    dig.concluded = True
+
+
+def _call_arguments(call: Any) -> tuple[str, Any, dict[str, Any], bool]:
+    """The call's function name, its raw arguments, them parsed, and whether they were not JSON."""
+    fn = call.function
+    fn_name = getattr(fn, "name", "") or ""
+    raw_args = getattr(fn, "arguments", "") or "{}"
+    try:
+        args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
+    except json.JSONDecodeError:
+        return fn_name, raw_args, {}, True
+    return fn_name, raw_args, args, False
+
+
+async def _handle_call(dig: _Dig, call: Any, finish_reason: Any) -> None:
+    """Answer one tool call of the model's batch."""
+    fn_name, raw_args, args, bad_json = _call_arguments(call)
+    if fn_name == "conclude_dataplane":
+        finding = parse_dataplane_conclusion(args)
+        if finding:
+            await _conclude(dig, finding)
+            dig.tool_reply(call, json.dumps({"ok": True, "recorded": True}))
+            return
+        _log(rejected_call_log_line(
+            fn_name, raw_args,
+            conclusion_rejection(
+                args, bad_json=bad_json,
+                required=("dataplane_status", "observed", "cause"),
+                choices={"dataplane_status": _DATAPLANE_STATUSES},
+            ),
+            finish_reason=finish_reason,
+        ))
+        dig.tool_reply(call, "ERROR: conclude_dataplane needs dataplane_status + observed + cause")
+    elif fn_name != "mcp_call":
+        _log(rejected_call_log_line(fn_name, raw_args, "unknown function", finish_reason=finish_reason))
+        dig.tool_reply(call, f"ERROR: unknown function {fn_name!r}; use mcp_call or conclude_dataplane")
+    else:
+        await _mcp_call(dig, call, args)
+
+
+async def _mcp_call(dig: _Dig, call: Any, args: dict[str, Any]) -> None:
+    """Run the call, or refuse it: no tools may be spent now, or it is malformed or blocked."""
+    if dig.conclude_only:
+        dig.tool_reply(call, "ERROR: no-progress stop; conclude only")
+        return
+    if dig.remaining <= 0:
+        dig.tool_reply(call, "ERROR: tool budget exhausted — call conclude_dataplane now")
+        dig.await_conclusion = True
+        return
+    params = args.get("params") if isinstance(args.get("params"), dict) else {}
+    tool_name, params, coerce_note = coerce_dataplane_mcp_call(str(args.get("tool_name") or ""), params)
+    if coerce_note:
+        _log(f"mcp_call coerce: {coerce_note}")
+    if not tool_name:
+        _log(f"blocked empty tool_name {json.dumps(params, default=str)[:120]}")
+        dig.tool_reply(call, empty_mcp_tool_name_error(params))
+        return
+    _log(f"mcp_call {tool_name} {json.dumps(params, default=str)[:120]}")
+    blocked = _blocked_mcp_call(dig, tool_name, params)
+    if blocked:
+        dig.tool_reply(call, f"ERROR: {blocked}")
+        return
+    await _run_mcp_call(dig, call, tool_name, params, args.get("reason"))
+
+
+def _blocked_mcp_call(dig: _Dig, tool_name: str, params: dict[str, Any]) -> str | None:
+    """Why the call is refused before it spends a tool (a forbidden show or explore path), else None."""
+    if tool_name.strip() == "exec_show":
+        show_cmd = str(params.get("input_command") or params.get("command") or "")
+        blocked = disallowed_dataplane_show_command(show_cmd)
+        if blocked:
+            _log(f"blocked exec_show {show_cmd!r}")
+            show_norm = re.sub(r"(?i)^show\s+", "", (show_cmd or "").strip())
+            if re.match(r"(?i)^run\s+evpn\b", show_norm):
+                dig.blocked_unavailable_rt_path = True
+            return blocked
+    if tool_name.strip() == "explore_nso_path":
+        explore_path = str(params.get("path") or "")
+        blocked_path = disallowed_explore_nso_path(explore_path)
+        if blocked_path:
+            _log(f"blocked explore_nso_path {explore_path!r}")
+            return blocked_path
+    return None
+
+
+async def _run_mcp_call(
+    dig: _Dig, call: Any, tool_name: str, params: dict[str, Any], reason: Any,
+) -> None:
+    """Spend a tool on the call and give the model its (clipped) answer."""
+    mcp_started = time.monotonic()
+    result_text = await dig.investigation.mcp(
+        execute_one_drill_call,
+        dig.client,
+        dig.case,
+        tool_name=tool_name,
+        params=params,
+        reason=str(reason) if reason else None,
+        device_names=dig.device_names,
+        session=dig.session,
+        allowlist=DATAPLANE_ALLOWLIST,
+        account="dataplane",
+    )
+    elapsed = time.monotonic() - mcp_started
+    failed = result_error(result_text)
+    dig.investigation.query_errors += int(bool(failed))
+    _log(f"MCP {tool_name} device={params.get('device_name', params.get('device', '-'))} "
+         f"elapsed={elapsed:.2f}s outcome={'error' if failed else 'returned'}")
+    if failed:
+        result_text = "ERROR: tool execution/CLI failed; not service-health evidence.\n" + result_text
+    dig.batch_responses.append((tool_name, result_text))
+    dig.partial_results.append({"tool": tool_name, "params": params,
+                                "outcome": "error" if failed else "returned",
+                                "elapsed_seconds": round(elapsed, 3),
+                                "output_excerpt": result_text[:1500]})
+    dig.tool_reply(call, clip_dataplane_tool_content(tool_name, result_text, service_name=dig.service_name))
+    # Last debit may leave remaining==0 — still need an eval round.
+    if dig.session.tools_used >= dig.session.max_tools:
+        dig.await_conclusion = True
+
+
+def _after_batch(dig: _Dig, round_i: int) -> bool:
+    """Steer the model after its batch of calls; False when the dig stops here."""
+    if dig.concluded:
+        return False
+    if dig.conclude_only:
+        dig.stop_reason = "model did not conclude after no-progress stop"
+        return False
+    # Soft-blocked / gate-rejected calls do not debit MCP and must not
+    # alone trip the two-empty-batch stop while budget remains — that
+    # prematurely ends digs (e.g. run evpn fail → blocked evpn evi)
+    # before get_device_config / bgp l2vpn evpn rd recovery.
+    batch_tool_msgs = [m for m in dig.messages[dig.batch_message_start:] if m.get("role") == "tool"]
+    soft_block_only = bool(batch_tool_msgs) and not dig.batch_responses
+    if soft_block_only and dig.blocked_unavailable_rt_path and (
+        _partial_has_l2sts_rt_ladder(dig.partial_results)
+    ):
+        # nso21: ladder already tried; late run evpn soft-block → conclude.
+        # Config/BGP "returned" ≠ sufficient service-specific evidence.
+        dig.conclude_only = True
+        dig.force_conclude_choice = True
+        dig.stop_reason = (
+            "unavailable RT evidence path after recovery ladder "
+            "(run evpn blocked; config/BGP returned but may lack "
+            "service-specific proof)"
+        )
+        dig.messages.append({"role": "user", "content": _RT_PATH_UNAVAILABLE})
+        _log(
+            "soft-block run evpn after RT ladder — forcing conclude "
+            "(allow unknown; name missing service-specific check)"
+        )
+    elif soft_block_only:
+        dig.messages.append({"role": "user", "content": _SOFT_BLOCK_ONLY})
+        _log("soft-block-only batch — continue (budget remains; not counting as no-progress)")
+    elif batch_tool_msgs and dig.progress.observe(dig.batch_responses):
+        dig.conclude_only = True
+        dig.stop_reason = "two batches without new successful tool output"
+        dig.messages.append({"role": "user", "content": _NO_PROGRESS})
+    # Nudge after last productive round if still probing
+    if round_i == dig.max_rounds - 2 and not dig.concluded:
+        dig.messages.append({"role": "user", "content": _NEARLY_EXHAUSTED})
+    return True
+
+
+def _record_unfinished(dig: _Dig) -> None:
+    """Record the service unknown when the dig ended without a conclusion."""
+    investigation, session = dig.investigation, dig.session
+    if investigation.stop_reason == "no_conclusion":
+        if session.tools_used >= session.max_tools:
+            investigation.stop_reason = "tool_limit"
+        elif investigation.rounds >= dig.max_rounds:
+            investigation.stop_reason = "round_limit"
+    finding = _incomplete_verify_finding(dig.record, stop_reason=dig.stop_reason)
+    finding["partial_tool_results"] = dig.partial_results
+    if dig.partial_results:
+        finding["observed"] = str(finding.get("observed", "")) + (
+            f" Held {len(dig.partial_results)} tool responses in this run's "
+            "in-memory case only (partial_tool_results) — not written to "
+            "disk; observations for this report, not a completed diagnosis."
+        )
+    _record_incomplete_dataplane_verify(
+        dig.case, dig.record, finding,
+        evidence_ids=evidence_ids_after(dig.case, dig.ev_watermark),
+    )
+    _log(f"incomplete: unknown for {dig.name} (not explained)")
 
 
 async def run_dataplane_verify_phase(

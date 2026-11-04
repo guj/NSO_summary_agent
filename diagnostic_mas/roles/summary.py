@@ -103,7 +103,9 @@ def dataplane_tally_for_summary(case: CaseFile) -> dict[str, Any]:
 
     Incomplete / unresolved = ``complete is False`` or status in
     ``unknown`` / ``not_checked``. Names are listed per service_type so the
-    model can group without inventing a lower instance count.
+    model can group without inventing a lower instance count. ``investigated``
+    lists each port or cut-off device a finding came from, with its services,
+    so the model neither drops a port nor merges two.
     """
     rows = _dataplane_conclusion_rows(case)
     by_status: dict[str, int] = {}
@@ -133,7 +135,28 @@ def dataplane_tally_for_summary(case: CaseFile) -> dict[str, Any]:
             int(b["count"]) for b in by_type.values()
         ),
         "incomplete_or_unresolved_by_type": by_type,
+        "investigated": _investigated(case),
     }
+
+
+def _investigated(case: CaseFile) -> list[dict[str, Any]]:
+    """Each investigated port or cut-off device, with the services whose diagnosis its finding gave."""
+    from diagnostic_mas.port_investigation import DEVICE_SOURCE, SOURCE, device_findings, port_findings
+
+    source_of = {str(dx["subject"].get("name")): dx.get("source") for dx in case.diagnoses
+                 if dx.get("kind") == "dataplane" and isinstance(dx.get("subject"), dict)}
+    out: list[dict[str, Any]] = []
+    for finding in port_findings(case):
+        attached = (str(name) for names in (finding.get("links") or {}).values() for name in names)
+        names = [name for name in dict.fromkeys(attached) if source_of.get(name) == SOURCE]
+        if names:
+            out.append({"port": f"{finding.get('device')} {finding.get('port')}", "services": names})
+    for finding in device_findings(case):
+        names = [name for name in dict.fromkeys(str(n) for n in finding.get("services") or [])
+                 if source_of.get(name) == DEVICE_SOURCE]
+        if names:
+            out.append({"device": str(finding.get("device")), "services": names})
+    return out
 
 
 _SUMMARY_SNIPPET_MAX = 240

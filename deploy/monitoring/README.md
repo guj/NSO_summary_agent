@@ -58,7 +58,7 @@ docker compose -f /path/to/old/checkout/deploy/monitoring/docker-compose.yml dow
 docker compose -f /path/to/new/checkout/deploy/monitoring/docker-compose.yml up -d
 ```
 
-Prometheus history and Grafana settings are kept across the switch: they live in Docker volumes named after the compose project (`nso-monitoring`), not in the folder. The Pushgateway keeps nothing across a restart, so its values return with the next scan. Do not add `-v` to `down`; that deletes the volumes.
+Prometheus history, Grafana settings and the values last pushed to the Pushgateway are kept across the switch and across restarts: they live in Docker volumes named after the compose project (`nso-monitoring`), not in the folder. The Pushgateway saves its values every 5 minutes and when it stops, so only a crash soon after a scan loses that scan's values until the next one. Do not add `-v` to `down`; that deletes the volumes.
 
 ## Connect Grafana to Prometheus
 
@@ -255,7 +255,7 @@ Dashboard **NSO Diagnostic** (folder **NSO**, file `grafana/dashboards/nso-diagn
 
 ```bash
 docker compose down          # keep volumes
-docker compose down -v     # delete prometheus + grafana data
+docker compose down -v     # delete prometheus, grafana and pushgateway data
 ```
 
 ## Troubleshooting

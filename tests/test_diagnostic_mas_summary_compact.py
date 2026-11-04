@@ -314,3 +314,41 @@ def test_compact_case_gives_a_port_an_earlier_scan_explained_dated():
     assert "not current evidence" in earlier["note"]
     case.earlier_port_findings = {}
     assert "earlier_port_findings" not in _compact_case_for_llm(case)
+
+
+def _port_diagnosis(case, name, source="port_investigation", status="down"):
+    add_diagnosis(case, kind="dataplane", source=source, status=status,
+                  subject={"name": name, "service_type": "l2bridge"},
+                  cause="Attached link is down.", observed="Fixed check faulted.")
+
+
+def test_dataplane_tally_lists_each_investigated_port_with_its_services():
+    """test40: two ucsd ports reached the summary only as diagnosis prose, and it named one of them."""
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    add_evidence(case, {"kind": "port_investigation", "role": "port", "layer": "physical", "payload": {
+        "device": "ucsd-data-sw", "port": "HundredGigE0/0/0/24", "concluded": True,
+        "links": {"HundredGigE0/0/0/24/0": ["net1"], "HundredGigE0/0/0/24/1": ["net2", "net3"]}}})
+    add_evidence(case, {"kind": "port_investigation", "role": "port", "layer": "physical", "payload": {
+        "device": "ucsd-data-sw", "port": "HundredGigE0/0/0/25", "concluded": True,
+        "links": {"HundredGigE0/0/0/25/1": ["lan_ucsd", "own_dig"]}}})
+    add_evidence(case, {"kind": "device_investigation", "role": "port", "layer": "routing", "payload": {
+        "device": "cape-data-sw", "concluded": True, "services": ["via_cape"]}})
+    for name in ("net1", "net2", "net3", "lan_ucsd"):
+        _port_diagnosis(case, name)
+    _port_diagnosis(case, "via_cape", source="device_investigation")
+    _port_diagnosis(case, "own_dig", source="llm", status="up")
+
+    assert dataplane_tally_for_summary(case)["investigated"] == [
+        {"port": "ucsd-data-sw HundredGigE0/0/0/24", "services": ["net1", "net2", "net3"]},
+        {"port": "ucsd-data-sw HundredGigE0/0/0/25", "services": ["lan_ucsd"]},
+        {"device": "cape-data-sw", "services": ["via_cape"]},
+    ]
+
+
+def test_dataplane_tally_lists_no_investigations_when_none_explained_a_service():
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    add_evidence(case, {"kind": "port_investigation", "role": "port", "layer": "physical", "payload": {
+        "device": "mich-data-sw", "port": "HundredGigE0/0/0/24", "concluded": False,
+        "links": {"HundredGigE0/0/0/24/0": ["cs"]}}})
+
+    assert dataplane_tally_for_summary(case)["investigated"] == []
