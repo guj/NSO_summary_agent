@@ -486,8 +486,8 @@ def _compact_case_for_llm(
                  **{key: finding[key] for key in ("cause", "confidence", "fix_suggestion") if finding.get(key)}}
                 for edge, finding in earlier.items()
             ],
-            "note": ("An earlier scan's LLM investigation of an Issue still open; this scan did not "
-                     "recheck it. A dated lead, not current evidence."),
+            "note": ("This scan read each Issue as still open but did not repeat its LLM investigation: "
+                     "the cause and fix come from the dated earlier scan, a lead, not current evidence."),
         }
     kept_ports = list((getattr(case, "earlier_port_findings", None) or {}).values())
     if kept_ports:

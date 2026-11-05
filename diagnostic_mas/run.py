@@ -6,9 +6,11 @@ import argparse
 import asyncio
 import os
 from copy import copy
+from dataclasses import dataclass
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
@@ -307,23 +309,14 @@ async def _run(args: argparse.Namespace) -> int:
                 print("Pushed scan-failed signal to Pushgateway", file=sys.stderr)
 
         try:
-            code = await _stop_if_nso_unreachable(_run_after_accounting(
-                args,
-                settings=settings,
-                skip_llm=skip_llm,
-                dry_run=dry_run,
-                run_isis=run_isis,
-                run_bgp=run_bgp,
-                run_service=run_service,
-                run_device=run_device,
-                devices_arg=devices_arg,
-                service_type=service_type,
-                service_id=service_id,
-                case=case,
-                run_id=run_id,
-                t0=t0,
+            plan = _ScanPlan(
+                skip_llm=skip_llm, dry_run=dry_run, run_isis=run_isis, run_bgp=run_bgp,
+                run_service=run_service, run_device=run_device, devices_arg=devices_arg,
+                service_type=service_type, service_id=service_id, run_id=run_id, t0=t0,
                 lean_service=lean_service,
-            ))
+            )
+            code = await _stop_if_nso_unreachable(_run_after_accounting(
+                args, settings=settings, case=case, plan=plan))
         except Exception:
             report_failed_attempt("error")
             raise
@@ -374,238 +367,53 @@ async def _stop_if_nso_unreachable(scan) -> int:
         return work.result()
 
 
+@dataclass(frozen=True)
+class _ScanPlan:
+    """What this scan collects and how it ends, settled in ``_run`` before collection starts."""
+
+    skip_llm: bool
+    dry_run: bool
+    run_isis: bool
+    run_bgp: bool
+    run_service: bool
+    run_device: bool
+    devices_arg: str
+    service_type: str | None
+    service_id: str | None
+    run_id: str
+    t0: float
+    # A --service-type/--service-id focus without routing spines.
+    lean_service: bool
+
+
 async def _run_after_accounting(
-    args: argparse.Namespace,
-    *,
-    settings,
-    skip_llm: bool,
-    dry_run: bool,
-    run_isis: bool,
-    run_bgp: bool,
-    run_service: bool,
-    run_device: bool,
-    devices_arg: str,
-    service_type: str | None,
-    service_id: str | None,
-    case: CaseFile,
-    run_id: str,
-    t0: float,
-    lean_service: bool,
+    args: argparse.Namespace, *, settings, case: CaseFile, plan: _ScanPlan,
 ) -> int:
     async with mcp_session(settings) as client:
-        # lean_service already computed above (also used after MCP session)
-
         set_mcp_stage("focus")
         list_result = await call_mcp(client, "list_devices")
         if nso_unreachable_reason():
             return NSO_UNREACHABLE_EXIT
         all_names = parse_device_names(list_result)
-        if lean_service and not devices_arg:
-            # Service-type/id focus: still list devices so drill mcp_call
-            # (exec_show / health) is gated against real names. Lean collect
-            # skips HW/physical; inventory is for allowlisting only.
-            focus = []
-            spine_devices = list(all_names)
-            filter_services_to_devices = False
-            print(
-                f"[focus] lean service type={service_type!r} id={service_id!r} "
-                f"devices={len(all_names)}",
-                file=sys.stderr,
-            )
-        else:
-            focus = (
-                filter_device_names(all_names, devices_arg) if devices_arg else []
-            )
-            if devices_arg and not focus:
-                print(
-                    f"No devices matched --devices {devices_arg!r}",
-                    file=sys.stderr,
-                )
-                return 2
-
-            if focus:
-                if run_isis or run_bgp:
-                    spine_devices = await expand_spine_devices(
-                        client,
-                        focus,
-                        all_names,
-                        expand_isis=run_isis,
-                        expand_bgp=run_bgp,
-                    )
-                    print(
-                        f"[focus] seeds={focus} spine_devices={spine_devices}",
-                        file=sys.stderr,
-                    )
-                else:
-                    spine_devices = list(focus)
-                    if run_device:
-                        print(
-                            f"[focus] lean device devices={spine_devices}",
-                            file=sys.stderr,
-                        )
-                filter_services_to_devices = bool(run_service)
-            else:
-                spine_devices = all_names
-                filter_services_to_devices = False
-
+        chosen = await _choose_devices(client, plan, all_names)
+        if chosen is None:
+            return 2
+        focus, spine_devices, filter_services_to_devices = chosen
         case.focus_devices = list(focus)
-
-        # The last published scan: its IS-IS adjacencies (one both routers now omit is Down)
-        # and its routing drill findings (leads for this scan's drills, never proof).
-        from diagnostic_mas.case_delta import load_previous_case
-        from diagnostic_mas.drill import previous_findings
-
-        from diagnostic_mas.port_counters import _saved as saved_port_counters
-        from diagnostic_mas.port_investigation import previous_port_findings
-
-        previous_case = load_previous_case(diagnostic_mas_state_dir(settings))[0]
-        case.previous_findings = previous_findings(previous_case)
-        case.previous_port_findings = previous_port_findings(previous_case)
-        case.previous_port_counters = saved_port_counters(previous_case or {})
-        expected_isis_edges = None
-        if run_isis:
-            from diagnostic_mas.roles.isis import expected_adjacencies
-
-            expected_isis_edges = expected_adjacencies(previous_case)
-
-        set_mcp_stage("spines")
-        await run_mandatory_spines(
-            client,
-            settings,
-            case,
-            spine_devices,
-            run_isis=run_isis,
-            run_bgp=run_bgp,
-            run_service=run_service,
-            run_device=run_device,
-            service_type=service_type,
-            service_id=service_id,
-            filter_services_to_devices=filter_services_to_devices,
-            spine_concurrent_devices=getattr(args, "spine_concurrent_devices", 1),
-            max_port_counter_reads=max(0, getattr(args, "max_port_counter_reads", 400)),
-            expected_isis_edges=expected_isis_edges,
-        )
+        await _collect_spines(client, args, settings, case, plan, spine_devices,
+                              filter_services_to_devices=filter_services_to_devices)
         if nso_unreachable_reason():
             return NSO_UNREACHABLE_EXIT
-        if lean_service:
-            matched = services_from_case(case)
-            if not matched:
-                bits = []
-                if service_type:
-                    bits.append(f"type={service_type!r}")
-                if service_id:
-                    bits.append(f"id={service_id!r}")
-                print(
-                    "No services matched "
-                    + " and ".join(bits)
-                    + " — not falling back to a broad scan.",
-                    file=sys.stderr,
-                )
+        if plan.lean_service:
+            spine_devices = _narrow_to_matched_services(case, plan, spine_devices)
+            if spine_devices is None:
                 return 2
-            endpoints = endpoint_devices_from_services(matched)
-            case.focus_devices = list(endpoints)
-            case.device_names = list(endpoints) or list(case.device_names or [])
-            spine_devices = list(endpoints) or spine_devices
-            print(
-                f"[focus] matched_services={len(matched)} "
-                f"endpoint_devices={endpoints}",
-                file=sys.stderr,
-            )
-            from diagnostic_mas.dataplane_verify import init_service_coverage
-
-            init_service_coverage(case)
-
         if focus:
             case.device_names = list(focus)
-            if run_service and (run_isis or run_bgp):
-                _refilter_service_evidence(
-                    case, focus, service_type, service_id
-                )
+            if plan.run_service and (plan.run_isis or plan.run_bgp):
+                _refilter_service_evidence(case, focus, plan.service_type, plan.service_id)
 
-        if not skip_llm and run_service:
-            from diagnostic_mas.dataplane_verify import (
-                init_service_coverage,
-                run_dataplane_verify_phase,
-            )
-
-            if not lean_service and not case.service_coverage:
-                init_service_coverage(case)
-
-            set_mcp_stage("dataplane")
-            await run_dataplane_verify_phase(
-                client,
-                settings,
-                case,
-                device_names=set(spine_devices or all_names or case.device_names),
-                skip_llm=skip_llm,
-                suspicious_only=lean_service,
-                explicit_service=bool(service_id),
-                max_services=getattr(args, "max_dataplane_services", None),
-                max_per_category=getattr(
-                    args, "max_dataplane_per_category", None
-                ),
-                concurrent_works=getattr(args, "dataplane_concurrent_works", 1),
-                category_rotate_seed=run_id,
-            )
-
-        # Lean service focus: skip multi-minute autonomous planner; still allow
-        # budgeted drill, then optional underlay expand when evidence needs it.
-        if lean_service:
-            print(
-                "[focus] lean service: skip autonomous "
-                "(dataplane + optional drill/expand)",
-                file=sys.stderr,
-            )
-        elif (
-            not skip_llm
-            and not getattr(case, "llm_halt_reason", None)
-            and (
-                case.budget.max_deep_checks > 0 or case.budget.max_handoffs > 0
-            )
-        ):
-            set_mcp_stage("autonomous")
-            await run_autonomous_loop(
-                client,
-                settings,
-                case,
-                device_names=spine_devices or all_names,
-            )
-        elif getattr(case, "llm_halt_reason", None):
-            print(
-                "[llm] provider budget exceeded — skipping autonomous/drill/"
-                f"summary LLM ({case.llm_halt_reason})",
-                file=sys.stderr,
-            )
-
-        if (
-            not skip_llm
-            and not getattr(case, "llm_halt_reason", None)
-            and case.budget.max_drill_issues > 0
-            and case.budget.max_tools_per_drill > 0
-            and (not lean_service or any(
-                i.get("status") == "open" for i in case.issues
-            ))
-        ):
-            from diagnostic_mas.drill import run_drill_phase
-
-            set_mcp_stage("drill")
-            await run_drill_phase(
-                client,
-                settings,
-                case,
-                device_names=set(spine_devices or all_names or case.device_names),
-                skip_llm=skip_llm,
-            )
-
-        if lean_service and not skip_llm:
-            from diagnostic_mas.service_expand import (
-                maybe_expand_underlay_for_service_focus,
-            )
-
-            set_mcp_stage("expand")
-            await maybe_expand_underlay_for_service_focus(
-                client, case, physical_edges=[]
-            )
+        await _investigate(client, args, settings, case, plan, spine_devices=spine_devices, all_names=all_names)
 
         from nso_facts.mcp_client import successful_live_devices
 
@@ -619,11 +427,202 @@ async def _run_after_accounting(
     from diagnostic_mas.ingest import ingest_quarantined_devices
 
     ingest_quarantined_devices(case)
+    report_case, case_delta, previous_run_id, open_faults = _compare_with_previous(case, settings, plan)
+    report = await _render(args, settings, case, report_case, plan,
+                           case_delta=case_delta, previous_run_id=previous_run_id)
+    return _save_and_deliver(args, settings, case, plan, report,
+                             case_delta=case_delta, previous_run_id=previous_run_id, open_faults=open_faults)
 
-    # LLM writes only the top Summary; device/service body is deterministic.
-    # Compare to last published case when available (even on dry-run).
+
+async def _choose_devices(
+    client: Any, plan: _ScanPlan, all_names: list[str],
+) -> tuple[list[str], list[str], bool] | None:
+    """The --devices focus, the devices to collect from, and whether service evidence is narrowed to them.
+
+    None when --devices matches no device: the scan exits 2.
+    """
+    if plan.lean_service and not plan.devices_arg:
+        # Service-type/id focus: still list devices so drill mcp_call
+        # (exec_show / health) is gated against real names. Lean collect
+        # skips HW/physical; inventory is for allowlisting only.
+        print(
+            f"[focus] lean service type={plan.service_type!r} id={plan.service_id!r} "
+            f"devices={len(all_names)}",
+            file=sys.stderr,
+        )
+        return [], list(all_names), False
+    focus = filter_device_names(all_names, plan.devices_arg) if plan.devices_arg else []
+    if plan.devices_arg and not focus:
+        print(f"No devices matched --devices {plan.devices_arg!r}", file=sys.stderr)
+        return None
+    if not focus:
+        return focus, all_names, False
+    if plan.run_isis or plan.run_bgp:
+        spine_devices = await expand_spine_devices(
+            client, focus, all_names, expand_isis=plan.run_isis, expand_bgp=plan.run_bgp,
+        )
+        print(f"[focus] seeds={focus} spine_devices={spine_devices}", file=sys.stderr)
+    else:
+        spine_devices = list(focus)
+        if plan.run_device:
+            print(f"[focus] lean device devices={spine_devices}", file=sys.stderr)
+    return focus, spine_devices, bool(plan.run_service)
+
+
+async def _collect_spines(
+    client: Any, args: argparse.Namespace, settings, case: CaseFile, plan: _ScanPlan, spine_devices: list[str],
+    *, filter_services_to_devices: bool,
+) -> None:
+    """The fixed collection (IS-IS, BGP, services, devices), with the last published scan's leads."""
+    expected_isis_edges = _load_previous_leads(case, settings, run_isis=plan.run_isis)
+    set_mcp_stage("spines")
+    await run_mandatory_spines(
+        client,
+        settings,
+        case,
+        spine_devices,
+        run_isis=plan.run_isis,
+        run_bgp=plan.run_bgp,
+        run_service=plan.run_service,
+        run_device=plan.run_device,
+        service_type=plan.service_type,
+        service_id=plan.service_id,
+        filter_services_to_devices=filter_services_to_devices,
+        spine_concurrent_devices=getattr(args, "spine_concurrent_devices", 1),
+        max_port_counter_reads=max(0, getattr(args, "max_port_counter_reads", 400)),
+        expected_isis_edges=expected_isis_edges,
+    )
+
+
+def _load_previous_leads(case: CaseFile, settings, *, run_isis: bool) -> Any:
+    """Leads from the last published scan; with IS-IS, the adjacencies it expects.
+
+    Its IS-IS adjacencies (one both routers now omit is Down) and its routing drill
+    findings (leads for this scan's drills, never proof).
+    """
+    from diagnostic_mas.case_delta import load_previous_case
+    from diagnostic_mas.drill import previous_findings
+    from diagnostic_mas.port_counters import _saved as saved_port_counters
+    from diagnostic_mas.port_investigation import previous_port_findings
+
+    previous_case = load_previous_case(diagnostic_mas_state_dir(settings))[0]
+    case.previous_findings = previous_findings(previous_case)
+    case.previous_port_findings = previous_port_findings(previous_case)
+    case.previous_port_counters = saved_port_counters(previous_case or {})
+    if not run_isis:
+        return None
+    from diagnostic_mas.roles.isis import expected_adjacencies
+
+    return expected_adjacencies(previous_case)
+
+
+def _narrow_to_matched_services(case: CaseFile, plan: _ScanPlan, spine_devices: list[str]) -> list[str] | None:
+    """For a service focus: the matched services' endpoint devices; None when none matched (exit 2)."""
+    matched = services_from_case(case)
+    if not matched:
+        bits = []
+        if plan.service_type:
+            bits.append(f"type={plan.service_type!r}")
+        if plan.service_id:
+            bits.append(f"id={plan.service_id!r}")
+        print(
+            "No services matched "
+            + " and ".join(bits)
+            + " — not falling back to a broad scan.",
+            file=sys.stderr,
+        )
+        return None
+    endpoints = endpoint_devices_from_services(matched)
+    case.focus_devices = list(endpoints)
+    case.device_names = list(endpoints) or list(case.device_names or [])
+    print(f"[focus] matched_services={len(matched)} endpoint_devices={endpoints}", file=sys.stderr)
+    from diagnostic_mas.dataplane_verify import init_service_coverage
+
+    init_service_coverage(case)
+    return list(endpoints) or spine_devices
+
+
+async def _investigate(
+    client: Any, args: argparse.Namespace, settings, case: CaseFile, plan: _ScanPlan,
+    *, spine_devices: list[str], all_names: list[str],
+) -> None:
+    """The LLM phases: dataplane checks, the autonomous loop, drills, and a service focus's underlay expansion."""
+    if not plan.skip_llm and plan.run_service:
+        await _check_dataplane(client, args, settings, case, plan,
+                               device_names=set(spine_devices or all_names or case.device_names))
+
+    # Lean service focus: skip multi-minute autonomous planner; still allow
+    # budgeted drill, then optional underlay expand when evidence needs it.
+    if plan.lean_service:
+        print("[focus] lean service: skip autonomous (dataplane + optional drill/expand)", file=sys.stderr)
+    elif _may_run_autonomous(case, plan):
+        set_mcp_stage("autonomous")
+        await run_autonomous_loop(client, settings, case, device_names=spine_devices or all_names)
+    elif getattr(case, "llm_halt_reason", None):
+        print(
+            "[llm] provider budget exceeded — skipping autonomous/drill/"
+            f"summary LLM ({case.llm_halt_reason})",
+            file=sys.stderr,
+        )
+
+    if _may_drill(case, plan):
+        from diagnostic_mas.drill import run_drill_phase
+
+        set_mcp_stage("drill")
+        await run_drill_phase(client, settings, case,
+                              device_names=set(spine_devices or all_names or case.device_names),
+                              skip_llm=plan.skip_llm)
+
+    if plan.lean_service and not plan.skip_llm:
+        from diagnostic_mas.service_expand import maybe_expand_underlay_for_service_focus
+
+        set_mcp_stage("expand")
+        await maybe_expand_underlay_for_service_focus(client, case, physical_edges=[])
+
+
+async def _check_dataplane(
+    client: Any, args: argparse.Namespace, settings, case: CaseFile, plan: _ScanPlan, *, device_names: set[str],
+) -> None:
+    from diagnostic_mas.dataplane_verify import init_service_coverage, run_dataplane_verify_phase
+
+    if not plan.lean_service and not case.service_coverage:
+        init_service_coverage(case)
+    set_mcp_stage("dataplane")
+    await run_dataplane_verify_phase(
+        client,
+        settings,
+        case,
+        device_names=device_names,
+        skip_llm=plan.skip_llm,
+        suspicious_only=plan.lean_service,
+        explicit_service=bool(plan.service_id),
+        max_services=getattr(args, "max_dataplane_services", None),
+        max_per_category=getattr(args, "max_dataplane_per_category", None),
+        concurrent_works=getattr(args, "dataplane_concurrent_works", 1),
+        category_rotate_seed=plan.run_id,
+    )
+
+
+def _may_run_autonomous(case: CaseFile, plan: _ScanPlan) -> bool:
+    return (not plan.skip_llm and not getattr(case, "llm_halt_reason", None)
+            and (case.budget.max_deep_checks > 0 or case.budget.max_handoffs > 0))
+
+
+def _may_drill(case: CaseFile, plan: _ScanPlan) -> bool:
+    """Drills need the LLM, a drill budget, and, for a service focus, an open issue."""
+    return (not plan.skip_llm and not getattr(case, "llm_halt_reason", None)
+            and case.budget.max_drill_issues > 0 and case.budget.max_tools_per_drill > 0
+            and (not plan.lean_service or any(i.get("status") == "open" for i in case.issues)))
+
+
+def _compare_with_previous(
+    case: CaseFile, settings, plan: _ScanPlan,
+) -> tuple[CaseFile, dict[str, Any] | None, str | None, list[dict[str, Any]]]:
+    """The case the report shows, the changes since the last published scan, its run id, and the open faults.
+
+    Compared to the last published case when there is one, even on a dry run.
+    """
     from diagnostic_mas.case_delta import (
-        compact_delta_for_llm,
         compute_case_delta,
         first_seen_from_saved_scans,
         load_previous_case,
@@ -634,9 +633,9 @@ async def _run_after_accounting(
     previous_case, previous_run_id = load_previous_case(state_dir)
     case.last_known_service_faults = service_fault_history(
         previous_case or {}, case_to_dict(case),
-        previous_run_id=previous_run_id, run_id=run_id,
+        previous_run_id=previous_run_id, run_id=plan.run_id,
     )
-    first_seen_from_saved_scans(case.last_known_service_faults, Path(state_dir) / "runs", before=run_id)
+    first_seen_from_saved_scans(case.last_known_service_faults, Path(state_dir) / "runs", before=plan.run_id)
     current = case_to_dict(case)
     case_delta = None
     if previous_case is not None:
@@ -645,32 +644,82 @@ async def _run_after_accounting(
     # How long routing faults, error links and IS-IS changes have been seen: saved scans only.
     from diagnostic_mas.item_history import history_for_scan
 
-    case.item_history = history_for_scan(previous_case, current, runs_dir=Path(state_dir) / "runs", run_id=run_id)
+    case.item_history = history_for_scan(previous_case, current, runs_dir=Path(state_dir) / "runs",
+                                         run_id=plan.run_id)
     if case_delta is not None:
         case_delta["item_history"] = case.item_history
-
-    # Keep the full fault ledger for persistence; scope only its report view.
-    report_case = case
-    if service_type or service_id:
-        from diagnostic_mas.dataplane_verify import iter_service_records
-
-        names = {str(rec.get("name") or "") for _, rec in iter_service_records(case)}
-        report_case = copy(case)
-        report_case.last_known_service_faults = [
-            row for row in case.last_known_service_faults if row.get("service") in names
-        ]
-        if case_delta is not None:
-            case_delta = dict(case_delta)
-            case_delta["last_known_service_faults"] = report_case.last_known_service_faults
+    report_case, case_delta = _scoped_to_services(case, case_delta, plan)
 
     # What is still open, grouped by the port or device that explains it, with its age.
-    from diagnostic_mas.open_faults import digest_changes, open_fault_groups
+    from diagnostic_mas.open_faults import open_fault_groups
 
     open_faults = open_fault_groups(
         report_case, report_case.last_known_service_faults,
         new=[row.get("service") for row in (case_delta or {}).get("newly_failed_services") or []])
     if case_delta is not None:
         case_delta["open_faults"] = open_faults
+    return report_case, case_delta, previous_run_id, open_faults
+
+
+def _scoped_to_services(
+    case: CaseFile, case_delta: dict[str, Any] | None, plan: _ScanPlan,
+) -> tuple[CaseFile, dict[str, Any] | None]:
+    """For a service focus, the report lists only the focused services' last-known faults.
+
+    The case itself keeps the full fault ledger for persistence.
+    """
+    if not (plan.service_type or plan.service_id):
+        return case, case_delta
+    from diagnostic_mas.dataplane_verify import iter_service_records
+
+    names = {str(rec.get("name") or "") for _, rec in iter_service_records(case)}
+    report_case = copy(case)
+    report_case.last_known_service_faults = [
+        row for row in case.last_known_service_faults if row.get("service") in names
+    ]
+    if case_delta is not None:
+        case_delta = dict(case_delta)
+        case_delta["last_known_service_faults"] = report_case.last_known_service_faults
+    return report_case, case_delta
+
+
+async def _render(
+    args: argparse.Namespace, settings, case: CaseFile, report_case: CaseFile, plan: _ScanPlan,
+    *, case_delta: dict[str, Any] | None, previous_run_id: str | None,
+) -> str:
+    """The report, with the LLM's Summary on top when it ran, printed and returned with NSO's address masked."""
+    narrative, reporting_notes = await _summary(args, settings, case, report_case, plan,
+                                                case_delta=case_delta, previous_run_id=previous_run_id)
+    # The MCP calls so far; the full per-call list is still printed when the run ends.
+    case.mcp_calls = report_case.mcp_calls = mcp_call_record(current_mcp_stats())
+    report = render_report(
+        report_case,
+        summary=narrative or None,
+        services_detail=bool(
+            getattr(args, "services_detail", False) or plan.service_type or plan.service_id
+        ),
+        duration_seconds=time.monotonic() - plan.t0,
+        dry_run=plan.dry_run,
+        reporting_notes=reporting_notes or None,
+        llm_model=None if plan.skip_llm else str(settings.fabric_model or "").strip() or None,
+        case_delta=case_delta,
+        previous_run_id=previous_run_id,
+    )
+    # Error messages carry NSO's RESTCONF URLs; nothing printed or sent shows its address.
+    report = mask_nso_address(report, os.environ.get("NSO_ADDRESS"))
+    print(report)
+    return report
+
+
+async def _summary(
+    args: argparse.Namespace, settings, case: CaseFile, report_case: CaseFile, plan: _ScanPlan,
+    *, case_delta: dict[str, Any] | None, previous_run_id: str | None,
+) -> tuple[str, list[str]]:
+    """The LLM's Summary ("" without one) and the notes the report carries about it.
+
+    The LLM writes only the top Summary; the device and service body is deterministic.
+    """
+    from diagnostic_mas.case_delta import compact_delta_for_llm
 
     narrative = ""
     reporting_notes: list[str] = []
@@ -679,106 +728,36 @@ async def _run_after_accounting(
             f"Provider LLM halted: {case.llm_halt_reason}. "
             "Completed digs preserved; further LLM requests skipped."
         )
-    if not skip_llm:
-        try:
-            narrative = await summary_narrative(
-                report_case,
-                settings,
-                skip_llm=False,
-                deterministic_summary=bool(
-                    getattr(args, "deterministic_summary", False)
-                )
-                or bool(getattr(case, "llm_halt_reason", None)),
-                case_delta=compact_delta_for_llm(case_delta),
-                previous_run_id=previous_run_id,
-            )
-        except Exception as exc:  # noqa: BLE001
-            reporting_notes.append(f"Final LLM summary failed: {exc}")
-            narrative = ""
-        # After the last request: what the scan used, and its cost when the provider reports it.
-        case.llm_usage = report_case.llm_usage = end_llm_accounting(settings)
-    # The MCP calls so far; the full per-call list is still printed when the run ends.
-    case.mcp_calls = report_case.mcp_calls = mcp_call_record(current_mcp_stats())
-    duration = time.monotonic() - t0
-    report = render_report(
-        report_case,
-        summary=narrative or None,
-        services_detail=bool(
-            getattr(args, "services_detail", False) or service_type or service_id
-        ),
-        duration_seconds=duration,
-        dry_run=dry_run,
-        reporting_notes=reporting_notes or None,
-        llm_model=None if skip_llm else str(settings.fabric_model or "").strip() or None,
-        case_delta=case_delta,
-        previous_run_id=previous_run_id,
-    )
-    # Error messages carry NSO's RESTCONF URLs; nothing printed or sent shows its address.
-    nso_address = os.environ.get("NSO_ADDRESS")
-    report = mask_nso_address(report, nso_address)
-    print(report)
-
-    # A channel that cannot deliver must not stop the others, the saved report or metrics.
-    delivery_failures: list[tuple[str, str]] = []
-    if not dry_run:
-        out = persist_case(
-            state_dir,
-            run_id=run_id,
-            case=case,
-            report=report,
-            nso_address=nso_address,
-        )
-        if settings.runs_keep_days > 0:
-            from diagnostic_mas.state_paths import prune_saved_runs
-
-            prune_saved_runs(state_dir, run_id=run_id, keep_days=settings.runs_keep_days)
-        from diagnostic_mas.html_report import notification_digest, report_notice
-        from urllib.parse import quote
-
-        report_url = None
-        if settings.diagnostic_report_base_url:
-            report_url = (settings.diagnostic_report_base_url.rstrip("/") + "/"
-                          + quote(out.parent.name, safe="") + "/report.html")
-        notice = (notification_digest(report, run_id, changes=list(
-                      digest_changes(case_delta, previous_run_id, open_faults)))
-                  if settings.notification_digest else report_notice(run_id))
-        channels = publish_all(
-            mask_nso_address(notice, nso_address),
-            run_id,
+    if plan.skip_llm:
+        return narrative, reporting_notes
+    try:
+        narrative = await summary_narrative(
+            report_case,
             settings,
-            attachment_path=out.parent / "report.html",
-            report_url=report_url,
-            failures=delivery_failures,
+            skip_llm=False,
+            deterministic_summary=bool(getattr(args, "deterministic_summary", False))
+            or bool(getattr(case, "llm_halt_reason", None)),
+            case_delta=compact_delta_for_llm(case_delta),
+            previous_run_id=previous_run_id,
         )
-        print(f"\nWrote case/report under {out.parent}", file=sys.stderr)
-        if channels:
-            print(f"Published to: {', '.join(channels)}", file=sys.stderr)
-        elif not delivery_failures:
-            print(
-                "No Slack/email configured (artifacts saved only)",
-                file=sys.stderr,
-            )
-        for channel, reason in delivery_failures:
-            print(f"Delivery failed: {channel} — {reason}", file=sys.stderr)
-        if not bool(getattr(args, "skip_metrics", False)):
-            duration = time.monotonic() - t0
-            snapshot = metrics_snapshot_from_case(
-                case, run_id=run_id, report_url=report_url,
-                links_gaining_errors=(case_delta or {}).get("links_gaining_errors"))
-            if push_phase1_metrics(
-                snapshot,
-                settings,
-                success=True,
-                duration_seconds=duration,
-                pipeline="diagnostic",
-            ):
-                print(
-                    f"Pushed metrics to Pushgateway "
-                    f"(job={settings.prometheus_job}, "
-                    f"instance={settings.prometheus_instance})",
-                    file=sys.stderr,
-                )
-    else:
+    except Exception as exc:  # noqa: BLE001
+        reporting_notes.append(f"Final LLM summary failed: {exc}")
+        narrative = ""
+    # After the last request: what the scan used, and its cost when the provider reports it.
+    case.llm_usage = report_case.llm_usage = end_llm_accounting(settings)
+    return narrative, reporting_notes
+
+
+def _save_and_deliver(
+    args: argparse.Namespace, settings, case: CaseFile, plan: _ScanPlan, report: str,
+    *, case_delta: dict[str, Any] | None, previous_run_id: str | None, open_faults: list[dict[str, Any]],
+) -> int:
+    """Save the scan, send its notice and push its metrics; 1 when a channel could not deliver.
+
+    A dry run does none of that and says so. A channel that cannot deliver must not stop
+    the others, the saved report or metrics.
+    """
+    if plan.dry_run:
         print(
             "[DRY RUN] not publishing (no Slack/email) and not saving "
             "case/report state — use --publish or set DRY_RUN=0 to deliver"
@@ -786,7 +765,66 @@ async def _run_after_accounting(
                if getattr(args, "save_mcp_results", False) else ""),
             file=sys.stderr,
         )
+        return 0
+    from urllib.parse import quote
+
+    from diagnostic_mas.html_report import notification_digest, report_notice
+    from diagnostic_mas.open_faults import digest_changes
+
+    state_dir = diagnostic_mas_state_dir(settings)
+    nso_address = os.environ.get("NSO_ADDRESS")
+    delivery_failures: list[tuple[str, str]] = []
+    out = persist_case(state_dir, run_id=plan.run_id, case=case, report=report, nso_address=nso_address)
+    if settings.runs_keep_days > 0:
+        from diagnostic_mas.state_paths import prune_saved_runs
+
+        prune_saved_runs(state_dir, run_id=plan.run_id, keep_days=settings.runs_keep_days)
+    report_url = None
+    if settings.diagnostic_report_base_url:
+        report_url = (settings.diagnostic_report_base_url.rstrip("/") + "/"
+                      + quote(out.parent.name, safe="") + "/report.html")
+    notice = (notification_digest(report, plan.run_id, changes=list(
+                  digest_changes(case_delta, previous_run_id, open_faults)))
+              if settings.notification_digest else report_notice(plan.run_id))
+    channels = publish_all(
+        mask_nso_address(notice, nso_address),
+        plan.run_id,
+        settings,
+        attachment_path=out.parent / "report.html",
+        report_url=report_url,
+        failures=delivery_failures,
+    )
+    print(f"\nWrote case/report under {out.parent}", file=sys.stderr)
+    if channels:
+        print(f"Published to: {', '.join(channels)}", file=sys.stderr)
+    elif not delivery_failures:
+        print("No Slack/email configured (artifacts saved only)", file=sys.stderr)
+    for channel, reason in delivery_failures:
+        print(f"Delivery failed: {channel} — {reason}", file=sys.stderr)
+    if not bool(getattr(args, "skip_metrics", False)):
+        _push_metrics(settings, case, plan, report_url=report_url, case_delta=case_delta)
     return 1 if delivery_failures else 0
+
+
+def _push_metrics(
+    settings, case: CaseFile, plan: _ScanPlan, *, report_url: str | None, case_delta: dict[str, Any] | None,
+) -> None:
+    snapshot = metrics_snapshot_from_case(
+        case, run_id=plan.run_id, report_url=report_url,
+        links_gaining_errors=(case_delta or {}).get("links_gaining_errors"))
+    if push_phase1_metrics(
+        snapshot,
+        settings,
+        success=True,
+        duration_seconds=time.monotonic() - plan.t0,
+        pipeline="diagnostic",
+    ):
+        print(
+            f"Pushed metrics to Pushgateway "
+            f"(job={settings.prometheus_job}, "
+            f"instance={settings.prometheus_instance})",
+            file=sys.stderr,
+        )
 
 
 def _positive_worker_count(value: str) -> int:
@@ -850,8 +888,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum simultaneous device calls in service operational checks (default 1)",
     )
     parser.add_argument(
-        "--dataplane-concurrent_works", type=_positive_worker_count, default=1,
+        "--dataplane-concurrent-workers", dest="dataplane_concurrent_works", metavar="N",
+        type=_positive_worker_count, default=1,
         help="Concurrent service dataplane digs (default 1); overlapping endpoints wait",
+    )
+    # The old spelling, still accepted so existing commands and scripts keep working.
+    parser.add_argument(
+        "--dataplane-concurrent_works", dest="dataplane_concurrent_works",
+        type=_positive_worker_count, default=argparse.SUPPRESS, help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--max-dataplane-tools",
@@ -934,7 +978,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Force no Slack/email and no state write (default when DRY_RUN=1)",
+        help=("No Slack/email, saved state or metrics push (default when DRY_RUN=1). "
+              "Still reads live NSO and devices, and calls the LLM unless --skip-llm"),
     )
     parser.add_argument(
         "--services-detail",

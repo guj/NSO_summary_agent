@@ -1275,3 +1275,72 @@ def test_adjacency_change_outcomes_cover_adjacencies_up_in_both_scans_only():
     # No change time read: whether it changed is not known.
     assert adjacency_change_outcomes(older, newer) == {ISIS_EDGE: True, quiet: False}
     assert adjacency_change_outcomes(_routing_scan(isis={ISIS_EDGE: UP}), newer) == {}
+
+
+BRIDGE = "bg-circuit:bd-circuit"
+
+
+def _checked(case: dict, checks: list[tuple[str, str, str]]) -> dict:
+    """``case`` with the fixed-check results of `circuit`, whose intent names two circuits on pe1."""
+    case["evidence"].append({"kind": "spine", "role": "service", "layer": "services", "payload": {"extra": {
+        "services": {"l2sts/circuit": {"name": "circuit", "service_type": "l2sts", "devices": ["pe1"], "basic_checks": {
+            "intent": {"site-a": {"device": "pe1", "interface": [
+                {"type": "HundredGigE", "id": "0/0/0/9", "outervlan": 2094},
+                {"type": "FourHundredGigE", "id": "0/0/0/12", "outervlan": 2385}]}},
+            "checks": [{"check": check, "status": status, "device": "pe1", "observation": observation}
+                       for check, status, observation in checks]}}}}}})
+    return case
+
+
+def test_a_newly_detected_fault_shows_what_the_previous_fixed_check_passed_on_its_circuit():
+    """test41: the previous scan found FH0/0/0/12.2385 a programmed bridge member; the report said only 'onset unverified'."""
+    from diagnostic_mas.case_delta import compact_delta_for_llm, format_changes_since_previous
+
+    before = _checked(case_to_dict(_dp_case()), [
+        ("attachment", "pass", "FH0/0/0/12.2385"),
+        ("membership", "pass", f"FH0/0/0/12.2385 in {BRIDGE}"),
+        ("local_forwarding", "pass", "Programmed bridge member FH0/0/0/12.2385"),
+        ("membership", "pass", f"Hu0/0/0/9.2094 in {BRIDGE}")])
+    now = _checked(case_to_dict(_dp_case("degraded")), [
+        ("attachment", "pass", "FH0/0/0/12.2385"),
+        ("bridge_identity", "unknown", "Exact bridge identity not established for FH0/0/0/12.2385"),
+        ("membership", "pass", f"Hu0/0/0/9.2094 in {BRIDGE}")])
+
+    delta = compute_case_delta(before, now)
+
+    note = (f"; the previous scan's fixed check passed on pe1: membership (FH0/0/0/12.2385 in {BRIDGE}), "
+            "local_forwarding (Programmed bridge member FH0/0/0/12.2385)")
+    assert delta["newly_failed_services"][0]["detail"].endswith(note)
+    assert note in "\n".join(format_changes_since_previous(delta))
+    assert compact_delta_for_llm(delta)["newly_failed_services"][0]["detail"].endswith(note)
+    assert delta["newly_failed_services"][0]["regression_proven"] is False
+
+
+def test_no_earlier_check_is_shown_when_the_previous_scan_passed_nothing_on_that_circuit():
+    now_checks = [("bridge_identity", "unknown", "Exact bridge identity not established for FH0/0/0/12.2385")]
+    for why, earlier in {
+        "earlier check also unknown": [("bridge_identity", "unknown",
+                                        "Exact bridge identity not established for FH0/0/0/12.2385")],
+        "earlier pass on a longer name": [("membership", "pass", f"FH0/0/0/12.23850 in {BRIDGE}")],
+        "earlier pass on the other circuit": [("membership", "pass", f"Hu0/0/0/9.2094 in {BRIDGE}")],
+    }.items():
+        delta = compute_case_delta(_checked(case_to_dict(_dp_case()), earlier),
+                                   _checked(case_to_dict(_dp_case("degraded")), now_checks))
+        assert "previous scan's fixed check" not in delta["newly_failed_services"][0]["detail"], why
+
+    delta = compute_case_delta(case_to_dict(_dp_case()), _checked(case_to_dict(_dp_case("degraded")), now_checks))
+    assert "previous scan's fixed check" not in delta["newly_failed_services"][0]["detail"], "no earlier fixed check"
+
+
+def test_an_earlier_check_with_a_structured_observation_is_shown_as_json():
+    """test41's saved checks: effective_evpn and xconnect record a dict, not text."""
+    xconnect = {"ac": "FH0/0/0/12.2385", "st": "UP"}
+    before = _checked(case_to_dict(_dp_case()), [("xconnect", "pass", xconnect),
+                                                ("effective_evpn", "pass", {"imports": ["398900:9072"]})])
+    now = _checked(case_to_dict(_dp_case("degraded")), [
+        ("xconnect", "fault", {"ac": "FH0/0/0/12.2385", "st": "DN"}),
+        ("effective_evpn", "pass", {"imports": ["398900:9072"]})])
+
+    detail = compute_case_delta(before, now)["newly_failed_services"][0]["detail"]
+
+    assert detail.endswith('; the previous scan\'s fixed check passed on pe1: xconnect ({"ac": "FH0/0/0/12.2385", "st": "UP"})')

@@ -106,7 +106,7 @@ LLM conclusion gates are independent of these collection fixes.
 
 `--spine-concurrent-devices N` defaults to 1. Start with 4 to overlap service
 operational collection across different devices. This is separate from
-`--dataplane-concurrent_works`, which controls LLM investigations.
+`--dataplane-concurrent-workers`, which controls LLM investigations.
 
 Only service operational checks (including L2PTP xconnect and label reads) use this
 option. NSO inventory/sync and other spine phases retain their existing order.

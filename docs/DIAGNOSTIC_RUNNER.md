@@ -327,7 +327,7 @@ nso-diagnostic-run --check-connection
 # Live collection without LLM or publication
 nso-diagnostic-run --skip-llm --dry-run
 # LLM-assisted scan with conservative concurrency
-nso-diagnostic-run --spine-concurrent-devices 2 --dataplane-concurrent_works 2 --dry-run
+nso-diagnostic-run --spine-concurrent-devices 2 --dataplane-concurrent-workers 2 --dry-run
 # Investigate one service (replace with its exact ID)
 nso-diagnostic-run --service-only --service-id SERVICE_ID --dry-run
 # Save and publish with your configured channels
@@ -374,7 +374,7 @@ your environment and configuring NSO, LLM, and publication settings:
 mkdir -p log
 { time nso-diagnostic-run \
     --spine-concurrent-devices 6 \
-    --dataplane-concurrent_works 2 \
+    --dataplane-concurrent-workers 2 \
     --max-dataplane-per-category 30 \
     --max-dataplane-tools 40 \
     --max-drill-issues 2 \
@@ -383,7 +383,7 @@ mkdir -p log
 
 - `--spine-concurrent-devices 6`: up to six concurrent operational device calls,
   with per-device locking. This does not parallelize every spine stage.
-- `--dataplane-concurrent_works 2`: up to two service digs at once, subject to
+- `--dataplane-concurrent-workers 2`: up to two service digs at once, subject to
   device-conflict scheduling.
 - `--max-dataplane-per-category 30`: select up to 30 eligible services per service
   type for dataplane investigation. Operational passes still skip routine digs;
@@ -452,7 +452,8 @@ The other four never publish. A dry run still contacts NSO and the devices, and 
    its owner deleted after the scan began is reported as no longer present and is
    not investigated. During an investigation the service list is always read fresh.
 
-`--spine-concurrent-devices` and `--dataplane-concurrent_works` both default to 1.
+`--spine-concurrent-devices` and `--dataplane-concurrent-workers` both default to 1
+(the older spelling `--dataplane-concurrent_works` is still accepted).
 The former bounds concurrent operational device calls, with per-device locking
 and shared run-local collection caches; it does not parallelize every spine stage.
 The latter schedules service digs with disjoint reserved devices. CDB-only reads

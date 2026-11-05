@@ -150,6 +150,21 @@ def test_cli_default_and_validation():
     with pytest.raises(SystemExit): parser.parse_args(['--dataplane-concurrent_works','0'])
 
 
+def test_cli_accepts_the_hyphenated_workers_flag():
+    from diagnostic_mas.run import build_parser
+    parser = build_parser()
+    assert parser.parse_args(['--dataplane-concurrent-workers', '3']).dataplane_concurrent_works == 3
+    with pytest.raises(SystemExit):
+        parser.parse_args(['--dataplane-concurrent-workers', '0'])
+
+
+def test_cli_help_names_only_the_hyphenated_workers_flag():
+    from diagnostic_mas.run import build_parser
+    help_text = build_parser().format_help()
+    assert '--dataplane-concurrent-workers' in help_text
+    assert 'concurrent_works' not in help_text.lower()
+
+
 @pytest.mark.asyncio
 async def test_reservation_rejection_is_not_a_wire_call(monkeypatch):
     import nso_facts.mcp_client as mcp

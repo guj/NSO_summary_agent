@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -481,6 +482,54 @@ def _lane_note(name: str, now: dict[str, tuple[str, str, Any, Any]], down_before
             else f", last flapped {age} ago" if age else "")
     return (f"on {device} {lane}" + when
             + ("; that lane was down in the previous run too" if (device, lane) in down_before else ""))
+
+
+def _fixed_checks(case: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Each listed service's saved fixed-check results, by service name."""
+    out: dict[str, dict[str, Any]] = {}
+    for extra in _service_extras(case):
+        for key, record in (extra.get("services") or {}).items():
+            if isinstance(record, dict) and isinstance(record.get("basic_checks"), dict):
+                out[str(record.get("name") or str(key).split("/", 1)[-1]).strip()] = record["basic_checks"]
+    return out
+
+
+def _observed(check: dict[str, Any]) -> str:
+    """A check's observation as text; some checks record a dict (effective_evpn, xconnect)."""
+    observation = check.get("observation")
+    return observation if isinstance(observation, str) else json.dumps(observation, sort_keys=True, default=str)
+
+
+def _earlier_check_note(then: dict[str, Any] | None, now: dict[str, Any] | None) -> str | None:
+    """What the previous scan's fixed check passed on the circuits this scan's check does not pass.
+
+    Only results this scan does not repeat are named. It is an observation for the reader,
+    not proof of when the fault began.
+    """
+    from diagnostic_mas.operational_checks.probe import attachments
+
+    if not then or not now:
+        return None
+    checks_now = [c for c in now.get("checks") or [] if isinstance(c, dict)]
+    passing_now = {(c.get("device"), c.get("check"), _observed(c)) for c in checks_now if c.get("status") == "pass"}
+    found: dict[str, list[str]] = {}
+    for endpoint in attachments(now.get("intent") or {}):
+        device = endpoint["device"]
+        # The circuit's own name, not one it begins: FH0/0/0/12.2385 is not FH0/0/0/12.23850.
+        mentions = re.compile(rf"(?<![\w/.]){re.escape(endpoint['ac'])}(?![\w/]|\.\d)").search
+        if not any(c.get("device") == device and c.get("status") != "pass" and mentions(_observed(c))
+                   for c in checks_now):
+            continue
+        for check in then.get("checks") or []:
+            if (isinstance(check, dict) and check.get("device") == device and check.get("status") == "pass"
+                    and mentions(_observed(check))
+                    and (device, check.get("check"), _observed(check)) not in passing_now):
+                item = f"{check.get('check')} ({_observed(check)})"
+                if item not in found.setdefault(device, []):
+                    found[device].append(item)
+    parts = [f"{device}: " + ", ".join(items[:3]) + (f", and {len(items) - 3} more" if len(items) > 3 else "")
+             for device, items in found.items() if items]
+    return "the previous scan's fixed check passed on " + "; ".join(parts) if parts else None
 
 
 def _interface_states(case: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
@@ -1280,10 +1329,12 @@ def compute_case_delta(
 
     lanes_now, _ = _lanes(newer)
     _, lanes_down_before = _lanes(older)
+    checks_then, checks_now = _fixed_checks(older), _fixed_checks(newer)
     for row in newly_failed_services:
-        note = _lane_note(row["service"], lanes_now, lanes_down_before)
-        if note:
-            row["detail"] = f"{row['detail']}; {note}" if row.get("detail") else note
+        for note in (_lane_note(row["service"], lanes_now, lanes_down_before),
+                     _earlier_check_note(checks_then.get(row["service"]), checks_now.get(row["service"]))):
+            if note:
+                row["detail"] = f"{row['detail']}; {note}" if row.get("detail") else note
 
     return {
         "new_problems": new_problems,

@@ -112,7 +112,7 @@ cd /your/nso-diagnostic-dir && docker compose run --rm agent --check-connection
 cd /your/nso-diagnostic-dir && mkdir -p log
 { time docker compose run --rm -T agent \
     --spine-concurrent-devices 6 \
-    --dataplane-concurrent_works 2 \
+    --dataplane-concurrent-workers 2 \
     --max-dataplane-per-category 30 \
     --max-dataplane-tools 40 \
     --max-drill-issues 2 \
