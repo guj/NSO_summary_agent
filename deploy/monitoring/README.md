@@ -41,7 +41,7 @@ Grafana provisions the **Prometheus** datasource and loads two dashboards in fol
 
 ## Which folder the stack reads from
 
-The stack reads its configuration from the folder it was started in. `docker-compose.yml` shares `./grafana/provisioning`, `./grafana/dashboards` and `./prometheus/prometheus.yml` into the containers, read-only, and `./` is the folder that holds the compose file you started.
+The stack reads its configuration from the folder it was started in. `docker-compose.yml` shares `./grafana/provisioning/datasources`, `./grafana/provisioning/dashboards`, `./grafana/dashboards` and `./prometheus/prometheus.yml` into the containers, read-only (and `./grafana/alerting` when the [scan alert](#alert-when-scans-stop) is on), and `./` is the folder that holds the compose file you started. Docker Compose also reads an optional `.env` from that folder; only the scan alert uses it.
 
 Grafana rescans the dashboards folder about every 10 seconds, so a dashboard file added there appears without a restart. A file added to a different checkout does not appear.
 
@@ -164,6 +164,7 @@ Non-empty `"result"` → Prometheus has it; if Grafana is empty, check time rang
 deploy/monitoring/
   docker-compose.yml          # pushgateway + prometheus + grafana
   docker-compose.alerting.yml # opt-in: alert when scans stop arriving
+  .env                        # optional, not in git: turns the scan alert on
   prometheus/
     prometheus.yml            # scrape config (edit scrape jobs here)
   grafana/
@@ -262,14 +263,18 @@ the scheduled scan stopped running (cron entry gone, Docker stopped). It watches
 when scans resume. A scan that runs but fails sends its own notice to the report's Slack and
 email, so this alert is for scans that never start.
 
-Turn it on with two lines in this folder's `.env` (git ignores it; keep the webhook URL there):
+Turn it on by creating a `.env` next to `docker-compose.yml`, in the folder the stack runs from
+(see [Which folder the stack reads from](#which-folder-the-stack-reads-from)), with two lines. This file
+is only for the monitoring stack, not the agent's `.env` or a Docker scan folder's
+`nso-diagnostic.env`, and git ignores it, so the webhook URL stays out of the repository:
 
 ```bash
 COMPOSE_FILE=docker-compose.yml:docker-compose.alerting.yml
 NSO_ALERT_SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 ```
 
-then `docker compose up -d`. The webhook can be the one the scans post to. Without it, compose stops
+then run `docker compose up -d` in that folder. `COMPOSE_FILE` is Docker Compose's own setting: it makes
+a plain `docker compose` combine the two files. The webhook can be the one the scans post to. Without it, compose stops
 with a message rather than starting a Grafana that would refuse the alert. Grafana reads the
 alert file when it starts: to change the 48 hours, edit `params: [48]` in
 `grafana/alerting/nso-scan-alerts.yaml` and run `docker compose restart grafana`.
