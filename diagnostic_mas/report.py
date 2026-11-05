@@ -184,7 +184,7 @@ def render_report(
         format_devices_operator,
         format_duration,
         format_followup_operator,
-        format_result_line,
+        format_result_section,
         format_run_details,
         format_services_operator,
         scope_counts,
@@ -204,7 +204,11 @@ def render_report(
     lines.append(f"**Scope:** {' · '.join(scope_bits)}")
     if duration:
         lines.append(f"**Duration:** {duration}")
-    lines.append(f"**Result:** {format_result_line(case)}")
+    from diagnostic_mas.newness import newness_for
+
+    # What is new since the previous scan, for the Result's tags and the follow-up labels.
+    newness = newness_for(case, case_delta)
+    lines.extend(format_result_section(case, newness))
     lines.append("")
 
     # LLM (or caller-supplied) Summary / Result prose only at the top
@@ -294,7 +298,7 @@ def render_report(
         lines.extend(format_last_known_faults(case.last_known_service_faults))
     lines.append("## Recommended follow-up")
     lines.append("")
-    lines.extend(format_followup_operator(case))
+    lines.extend(format_followup_operator(case, newness))
     lines.append("")
 
     from diagnostic_mas.run_configuration import format_run_configuration

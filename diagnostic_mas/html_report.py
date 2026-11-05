@@ -230,10 +230,11 @@ def notification_digest(report: str, run_id: str, *, changes: list[str] | None =
             lines.append(line[:200])
     coverage = next((l for l in report.splitlines() if 'Only ' in l and 'received additional dataplane investigation:' in l), '')
     result = next((l for l in report.splitlines() if l.startswith('**Result:**')), '')
-    # The status counts lead; the rest of that line and the coverage sentence are in the full report.
-    counts = re.search(r'Final service status: ([^.]*\.)', result)
+    # The status counts lead; the rest of the Result and the coverage sentence are in the full report.
+    counts = (re.search(r'Final service status: ([^.]*\.)', result)
+              or re.search(r'^- \*\*Services:\*\* (\d+ OpUp, \d+ Down, \d+ Degraded, \d+ Unknown)', report, re.M))
     if counts:
-        lines.append('**Result:** ' + counts[1])
+        lines.append('**Result:** ' + counts[1].rstrip('.') + '.')
     else:
         lines.append((coverage or result)[:850])
     if changes:

@@ -90,7 +90,9 @@ async def run_mandatory_spines(
             issues=list(spine.get("issues") or []),
             static_edges=spine.get("static_edges"),
             operational_edges=spine.get("operational_edges"),
-            extra={"coverage": spine.get("coverage")},
+            extra={"coverage": spine.get("coverage"),
+                   # Reads that failed and then answered later this scan: no longer a gap, still a fact.
+                   **({"failed_then_read": spine["failed_then_read"]} if spine.get("failed_then_read") else {})},
         )
         # Both ends' LLDP for each IS-IS adjacency down: it tells each direction and names a far
         # port the adjacency left unknown, before the counters and optics read the ports.

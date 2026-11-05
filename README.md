@@ -518,7 +518,8 @@ Blackboard coordinator with ISIS / BGP / Service / Device roles: **`nso-diagnost
 
 Stdout / `report.md` use a concise operator layout (not the older Issues/Budget dump):
 
-1. **Header** — Scope (devices · services), Duration, Result  
+1. **Header** — Scope (devices · services), Duration, and the Result list: one line per kind
+   of problem, each count tagged new or not when an earlier scan exists to compare with  
 2. **Summary** — LLM prose only (when LLM is enabled); omitted on `--skip-llm`  
 3. **Devices** — per-device sync / health / BGP·IS-IS / Attention (deterministic)  
 4. **Services** — category table with Total and grouped configuration-sync / dataplane
@@ -530,7 +531,9 @@ Stdout / `report.md` use a concise operator layout (not the older Issues/Budget 
 5. **Recommended follow-up** — confirmed service faults first, one action per group
    of faulted services that share a service type and location; then one action per
    device (overlapping involvement counts; do not sum), then reassess distinct
-   unknowns; endpoint combinations stay under Services  
+   unknowns; endpoint combinations stay under Services. With an earlier scan to compare
+   with, each item starts with New this scan, Open since <day first seen>, Carried over or
+   Not read last scan, and new items come first within each kind of action  
 6. **Run details** — evidence counts, budgets, MCP calls (all, from cache, and those made
    during LLM investigations), LLM use, dry-run / reporting notes  
 
@@ -762,7 +765,7 @@ Set `NOTIFICATION_DIGEST=1` to send a bounded digest with the report instead of
 the one line. The digest leads with the status counts, then what changed since the
 previous scan (new service faults, cleared faults, devices answering again, links
 that went down, routing sessions lost) and the faults still open with their age.
-The priority follow-up items come after that. The rest of the Result line and the
+The priority follow-up items come after that. The rest of the Result list and the
 investigation-coverage sentence are in the full report only.
 
 Slack attaches the HTML report only through a bot (`SLACK_BOT_TOKEN` and

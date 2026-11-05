@@ -12,6 +12,7 @@ from nso_facts.topology.graph import (
 from nso_facts.topology.underlay import (
     collect_operational_underlay,
     collect_static_underlay,
+    prefer_later_reading,
 )
 
 
@@ -65,6 +66,9 @@ async def run_isis_spine(
         static_edges,
         physical_edges=physical_edges,
     )
+    # The operational pass read the devices later: what it read stands for a device the first could not.
+    static_edges, static_issues, op_issues, failed_then_read = prefer_later_reading(
+        static_edges, static_issues, op_edges, op_issues)
     issues = dedupe_issues(static_issues + op_issues)
     return {
         "static_summary": summarize_static_underlay(static_edges),
@@ -72,6 +76,7 @@ async def run_isis_spine(
         "issues": issues,
         "static_edges": static_edges,
         "operational_edges": op_edges,
+        "failed_then_read": failed_then_read,
         "coverage": {
             "devices_total": max(
                 static_cov.get("devices_total", 0), op_cov.get("devices_total", 0)

@@ -209,6 +209,8 @@ async def collect_operational_underlay(
                 "id": edge["id"],
                 "state": edge["state"],
                 **({"changed_at": edge["changed_at"]} if "changed_at" in edge else {}),
+                # One the static pass did not have names its own ends.
+                **({"local": edge["local"], "remote": edge["remote"]} if edge["id"] not in static_by_id else {}),
             }
         )
 
@@ -267,6 +269,39 @@ async def collect_operational_underlay(
             )
 
     return operational, issues, coverage
+
+
+def prefer_later_reading(
+    static_edges: list[dict[str, Any]],
+    static_issues: list[dict[str, Any]],
+    operational: list[dict[str, Any]],
+    operational_issues: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """The static pass's edges and issues with what the later, operational pass read put in place.
+
+    A device the static pass could not read and the operational pass did: its one-sided static
+    edges give way to the edges that pass paired, and the static pass's failure for it leaves the
+    issues, returned apart as a fact about that attempt. Returns (static edges, static issues,
+    operational issues, the failures made good).
+    """
+    read_later = _unread_devices(static_issues) - _unread_devices(operational_issues)
+    if not read_later:
+        return static_edges, static_issues, operational_issues, []
+
+    def touches(edge: dict[str, Any]) -> bool:
+        return any((edge.get(side) or {}).get("device") in read_later for side in ("local", "remote"))
+
+    kept = [edge for edge in static_edges if not (_is_one_sided(edge) and touches(edge))]
+    known = {edge["id"] for edge in kept}
+    newer = [_static_adjacency_edge(edge) for edge in operational
+             if edge.get("local") and edge.get("remote") and edge["id"] not in known and touches(edge)]
+    known.update(edge["id"] for edge in newer)
+    made_good = [issue for issue in static_issues if _unread_devices([issue]) & read_later]
+    return (kept + newer,
+            [issue for issue in static_issues if issue not in made_good],
+            [issue for issue in operational_issues
+             if not (issue.get("code") == "unexpected_live_object" and issue.get("edge_id") in known)],
+            made_good)
 
 
 def pair_adjacency_observations(

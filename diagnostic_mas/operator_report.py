@@ -7,6 +7,8 @@ from collections import Counter
 from typing import Any
 
 from diagnostic_mas.case import CaseFile
+from diagnostic_mas.newness import CARRIED, NEW, UNREAD, Newness
+from diagnostic_mas.newness import label as newness_label, tag as newness_tag
 from diagnostic_mas.device_health import (
     _spine_payload,
     fleet_maps_from_case,
@@ -418,11 +420,6 @@ def _bgp_sessions_down_text(case: CaseFile, *, limit: int) -> str | None:
     more = f", and {n - limit} more" if n > limit else ""
     return (f"{n} BGP session{'s' if n != 1 else ''} down: "
             + ", ".join(sessions[:limit]) + more)
-
-
-def _bgp_sessions_not_established_text(case: CaseFile) -> list[str]:
-    """Sentences for configured BGP sessions not established, grouped by the end that could not be read."""
-    return [phrase + "." for phrase, _edges in _bgp_sessions_not_established(case)]
 
 
 def _bgp_sessions_not_established(case: CaseFile) -> list[tuple[str, set[str]]]:
@@ -1978,26 +1975,30 @@ def _fault_location(record: dict[str, Any]) -> tuple[tuple[str, ...], bool]:
     return tuple(sorted({str(d) for d in record.get("devices") or [] if d})), False
 
 
-def format_followup_operator(case: CaseFile) -> list[str]:
+def format_followup_operator(case: CaseFile, newness: Newness | None = None) -> list[str]:
     """Ordered operator actions: service faults → collection → gaps → inventory.
 
     Each item names a target and what resolving it achieves. Avoid generic
     "retry everything", inconclusive service-sync loops, or config changes
-    unsupported by evidence.
+    unsupported by evidence. With ``newness`` (a previous scan to compare with),
+    each item starts with whether it is new or since when it has been open, and
+    within each kind of action the new ones come first.
     """
+    from diagnostic_mas.newness import order_new_first
+
     records = dict(_iter_service_records(case))
     dp_findings = _dataplane_by_name(case)
     # Services a fault action already names; the later actions leave them out.
     fault_names: set[str] = set()
-    items = _service_fault_followups(records, dp_findings, fault_names)
-    items += _decided_fault_followups(case, records, dp_findings, fault_names)
-    items += _last_known_fault_followups(case, fault_names)
-    items += _routing_followups(case)
-    items += _device_access_followups(case)
+    items = order_new_first(_service_fault_followups(records, dp_findings, fault_names, newness)
+                            + _decided_fault_followups(case, records, dp_findings, fault_names, newness)
+                            + _last_known_fault_followups(case, fault_names, newness))
+    items += order_new_first(_routing_followups(case, newness))
+    items += order_new_first(_device_access_followups(case, newness))
     # Do not add generic "retry service sync" / "reassess all unknowns" —
     # per-device actions above already state what they resolve.
     items += _affected_service_followups(case, fault_names)
-    items += _outside_network_followups(case)
+    items += order_new_first(_outside_network_followups(case, newness))
     items += _inventory_followups(case)
     # Intentionally not-selected / not-dug services are covered by the
     # Services table coverage statement — do not list them as follow-up tasks.
@@ -2011,11 +2012,13 @@ def _service_fault_followups(
     records: dict[str, dict[str, Any]],
     dp_findings: dict[str, dict[str, Any]],
     fault_names: set[str],
-) -> list[str]:
-    """Down or degraded services an investigation concluded on; adds them to ``fault_names``."""
-    items: list[str] = []
+    newness: Newness | None = None,
+) -> list[tuple[str | None, str]]:
+    """Down or degraded services an investigation concluded on, labeled; adds them to ``fault_names``."""
+    items: list[tuple[str | None, str]] = []
     # Faults of one service type at the same place usually share one cause,
-    # so they are one action; the grouping itself asserts no diagnosis.
+    # so they are one action; the grouping itself asserts no diagnosis. New
+    # faults are a separate action from those carried over.
     fault_groups: dict[tuple[Any, ...], list[str]] = {}
     for name, dx in dp_findings.items():
         status = str(dx.get("dataplane_status") or "").lower()
@@ -2023,26 +2026,29 @@ def _service_fault_followups(
             fault_names.add(name)
             kind = str(dx.get("service_type") or "").split(":")[-1].strip()
             devices, check_failed = _fault_location(records.get(name) or {})
-            key = ((status, kind, devices, check_failed) if kind and devices
+            seen = newness.of_service(name) if newness else None
+            state = seen.state if seen else None
+            key = ((status, kind, devices, check_failed, state) if kind and devices
                    else (status, name))
             fault_groups.setdefault(key, []).append(name)
     for (status, *where), names in fault_groups.items():
+        heading = newness_label(newness.of_service(n) for n in names) if newness else None
         if len(names) == 1:
-            items.append(
+            items.append((heading,
                 f"Prioritize dataplane {status} on `{names[0]}`: review the "
                 "service evidence and supported next steps before remediation "
                 "(human must approve any configuration/state change)."
-            )
+            ))
             continue
-        kind, devices, check_failed = where
+        kind, devices, check_failed, _state = where
         place = "with failed basic checks on" if check_failed else "on"
-        items.append(
+        items.append((heading,
             f"Prioritize dataplane {status} on {len(names)} {kind} services "
             f"{place} {_format_endpoint_group_label(devices)}: review each "
             "service's evidence and supported next steps before remediation "
             "(human must approve any configuration/state change). Services: "
             + ", ".join(f"`{n}`" for n in names) + "."
-        )
+        ))
     return items
 
 
@@ -2051,13 +2057,18 @@ def _decided_fault_followups(
     records: dict[str, dict[str, Any]],
     dp_findings: dict[str, dict[str, Any]],
     fault_names: set[str],
-) -> list[str]:
-    """Services the fixed check found Down or Degraded; adds them to ``fault_names``."""
-    items: list[str] = []
+    newness: Newness | None = None,
+) -> list[tuple[str | None, str]]:
+    """Services the fixed check found Down or Degraded, labeled; adds them to ``fault_names``."""
+    items: list[tuple[str | None, str]] = []
     from diagnostic_mas.open_faults import decided_reason, shared_reason
 
-    # Faults the fixed check decided need no investigation; those with one reason are one action.
-    decided: dict[tuple[str, str], tuple[int, list[str]]] = {}
+    def seen(name: str):
+        return newness.of_service(name) if newness else None
+
+    # Faults the fixed check decided need no investigation; those with one reason are one action,
+    # new faults apart from those carried over.
+    decided: dict[tuple[str, str, str | None], tuple[int, list[str]]] = {}
     for issue in case.issues:
         name = str(issue.get("edge_id") or "").strip()
         if (name and name not in fault_names and name not in dp_findings
@@ -2066,33 +2077,38 @@ def _decided_fault_followups(
             fault_names.add(name)
             reason = decided_reason(records.get(name))
             if reason:
-                key = (str(records[name].get("service_type") or "service"), shared_reason(reason))
+                state = seen(name).state if seen(name) else None
+                key = (str(records[name].get("service_type") or "service"), shared_reason(reason), state)
                 if key not in decided:
                     decided[key] = (len(items), [])
-                    items.append("")
+                    items.append((None, ""))
                 decided[key][1].append(name)
                 continue
-            items.append(f"Investigate collection-reported fault on `{name}` "
-                         "before remediation (see Services for evidence).")
+            items.append((newness_label([seen(name)]) if newness else None,
+                          f"Investigate collection-reported fault on `{name}` "
+                          "before remediation (see Services for evidence)."))
     closing = "no investigation is needed; resolving it is a change for a person to decide and approve."
-    for (kind, reason), (slot, names) in decided.items():
+    for (kind, reason, _state), (slot, names) in decided.items():
+        heading = newness_label(seen(n) for n in names) if newness else None
         if len(names) == 1:
-            items[slot] = (f"`{names[0]}` is Down on the fixed check's own reading, "
-                           f"\"{decided_reason(records[names[0]])}\": {closing}")
+            items[slot] = (heading, f"`{names[0]}` is Down on the fixed check's own reading, "
+                                    f"\"{decided_reason(records[names[0]])}\": {closing}")
             continue
         devices = sorted({str(d) for n in names for d in records[n].get("devices") or [] if d})
         place = " and ".join(f"`{d}`" for d in devices) if len(devices) <= 2 else f"{len(devices)} devices"
         shown = ", ".join(f"`{n}`" for n in names[:6])
         if len(names) > 6:
             shown += f", +{len(names) - 6} more (see Services)"
-        items[slot] = (f"{len(names)} {kind} services are Down on the fixed check's own reading, \"{reason}\", "
-                       f"on {place}: {closing} Services: {shown}.")
+        items[slot] = (heading, f"{len(names)} {kind} services are Down on the fixed check's own reading, "
+                                f"\"{reason}\", on {place}: {closing} Services: {shown}.")
     return items
 
 
-def _last_known_fault_followups(case: CaseFile, fault_names: set[str]) -> list[str]:
-    """Earlier faults this scan did not recheck; adds them to ``fault_names``."""
-    items: list[str] = []
+def _last_known_fault_followups(
+    case: CaseFile, fault_names: set[str], newness: Newness | None = None,
+) -> list[tuple[str | None, str]]:
+    """Earlier faults this scan did not recheck, labeled; adds them to ``fault_names``."""
+    items: list[tuple[str | None, str]] = []
     from diagnostic_mas.service_presence import disappeared
     absent_names = {r.get("name") for r in services_from_case(case).values() if disappeared(r)}
     for row in case.last_known_service_faults:
@@ -2101,37 +2117,74 @@ def _last_known_fault_followups(case: CaseFile, fault_names: set[str]) -> list[s
             continue
         if name not in fault_names and not row.get("rechecked"):
             fault_names.add(name)
-            items.append(
+            items.append((
+                newness_label([newness.of_service(name)]) if newness else None,
                 f"Recheck `{name}` first: last known {row['status']} "
                 f"(run `{row.get('last_observed_run_id', 'unknown')}`); "
                 f"{row.get('verification', 'not rechecked')}. "
                 "Do not treat a baseline pass or sampling omission as recovery."
-            )
+            ))
     return items
 
 
-def _routing_followups(case: CaseFile) -> list[str]:
-    """BGP sessions and IS-IS adjacencies down, then BGP sessions not established."""
-    items: list[str] = []
+def _by_newness(case: CaseFile, newness: Newness | None, codes: frozenset[str] | set[str],
+                build) -> list[tuple[str | None, str]]:
+    """``build``'s items, labeled: built once for the new issues with ``codes``, once for those the
+    last scan did not read and once for those carried over, each from the case with only those."""
+    if newness is None:
+        return [(None, item) for item in build(case)]
+    from copy import copy
+
+    chosen = [i for i in case.issues if isinstance(i, dict) and str(i.get("code") or "") in codes]
+    rest = [i for i in case.issues if not (isinstance(i, dict) and str(i.get("code") or "") in codes)]
+    items: list[tuple[str | None, str]] = []
+    for state in (NEW, UNREAD, CARRIED):
+        members = [(issue, seen) for issue in chosen if (seen := newness.of_issue(issue)).state == state]
+        if not members:
+            continue
+        part = copy(case)
+        part.issues = rest + [issue for issue, _seen in members]
+        heading = newness_label(seen for _issue, seen in members)
+        items += [(heading, item) for item in build(part)]
+    return items
+
+
+def _routing_followups(case: CaseFile, newness: Newness | None = None) -> list[tuple[str | None, str]]:
+    """BGP sessions and IS-IS adjacencies down, then BGP sessions not established, labeled."""
+    return (_by_newness(case, newness, {"session_down"}, _bgp_down_followups)
+            + _by_newness(case, newness, _ADJACENCY_DOWN_CODES, _isis_down_followups)
+            + _by_newness(case, newness, {"configured_no_session"}, _not_established_followups))
+
+
+def _bgp_down_followups(case: CaseFile) -> list[str]:
     sessions_down = _bgp_sessions_down_text(case, limit=6)
-    if sessions_down:
-        down_sessions = {str(i.get("edge_id") or "") for i in case.issues if str(i.get("code") or "") == "session_down"}
-        found = any(edge in down_sessions for edge, _pair, _finding in _routing_findings(case))
-        items.append(
-            f"Investigate {sessions_down} (reported by the devices"
-            + ("; an LLM investigation's finding is in the devices' blocks" if found else "")
-            + "). Services on these devices may share this cause."
-        )
+    if not sessions_down:
+        return []
+    down_sessions = {str(i.get("edge_id") or "") for i in case.issues if str(i.get("code") or "") == "session_down"}
+    found = any(edge in down_sessions for edge, _pair, _finding in _routing_findings(case))
+    return [
+        f"Investigate {sessions_down} (reported by the devices"
+        + ("; an LLM investigation's finding is in the devices' blocks" if found else "")
+        + "). Services on these devices may share this cause."
+    ]
+
+
+def _isis_down_followups(case: CaseFile) -> list[str]:
     adjacencies_down = _isis_adjacencies_down_text(case, limit=6)
-    if adjacencies_down:
-        down_edges = {str(i.get("edge_id") or "") for i in case.issues
-                      if str(i.get("code") or "") in _ADJACENCY_DOWN_CODES}
-        found = any(edge in down_edges for edge, _pair, _finding in _routing_findings(case))
-        items.append(
-            f"Investigate {adjacencies_down} (each router's view and port state are in its Attention line"
-            + ("; an LLM investigation's finding is in the devices' blocks" if found else "")
-            + "). Services on these devices may share this cause."
-        )
+    if not adjacencies_down:
+        return []
+    down_edges = {str(i.get("edge_id") or "") for i in case.issues
+                  if str(i.get("code") or "") in _ADJACENCY_DOWN_CODES}
+    found = any(edge in down_edges for edge, _pair, _finding in _routing_findings(case))
+    return [
+        f"Investigate {adjacencies_down} (each router's view and port state are in its Attention line"
+        + ("; an LLM investigation's finding is in the devices' blocks" if found else "")
+        + "). Services on these devices may share this cause."
+    ]
+
+
+def _not_established_followups(case: CaseFile) -> list[str]:
+    items: list[str] = []
     for phrase, edges in _bgp_sessions_not_established(case):
         found = sum(1 for edge, _pair, _finding in _routing_findings(case) if edge in edges)
         items.append(
@@ -2143,9 +2196,10 @@ def _routing_followups(case: CaseFile) -> list[str]:
     return items
 
 
-def _device_access_followups(case: CaseFile) -> list[str]:
-    """One action per device for live-MCP quarantine and/or sync unknowns."""
-    items: list[str] = []
+def _device_access_followups(case: CaseFile, newness: Newness | None = None) -> list[tuple[str | None, str]]:
+    """One action per device for live-MCP quarantine and/or sync unknowns; a device NSO could not
+    reach is labeled new or carried over."""
+    items: list[tuple[str | None, str]] = []
     from nso_facts.mcp_client import (
         live_mcp_failure_kind,
         nso_could_not_connect,
@@ -2171,6 +2225,14 @@ def _device_access_followups(case: CaseFile) -> list[str]:
     attributed_devices = sorted(
         involvement.keys(), key=lambda d: (-involvement[d], d)
     )
+    quarantine_issues = {str((i.get("devices") or [None])[0]).strip(): i for i in case.issues
+                         if str(i.get("code") or "") == "device_live_unreachable"
+                         and (i.get("devices") or [None])[0]}
+
+    def heading(device: str) -> str | None:
+        issue = quarantine_issues.get(device)
+        return newness_label([newness.of_issue(issue)]) if newness and issue else None
+
     quarantine_messages = {
         str((i.get("devices") or [None])[0]).strip(): str(i.get("message") or "")
         for i in case.issues
@@ -2223,10 +2285,13 @@ def _device_access_followups(case: CaseFile) -> list[str]:
     sync_failed, affected_count = sync_failure_group(case)
     unconnected, unconnected_count, rest, rest_count = sync_failure_split(case)
     if unconnected_count:
-        items.append(unconnected_followup(unconnected, unconnected_count))
+        # Labeled as the devices NSO could not reach are: new, carried over, or not one label.
+        known = [quarantine_issues.get(d) for d in unconnected]
+        items.append((newness_label(newness.of_issue(i) for i in known) if newness and all(known) else None,
+                      unconnected_followup(unconnected, unconnected_count)))
     if rest_count:
         commands = "; ".join(f"`devices device {d} check-sync`" for d in rest)
-        items.append(f"Resolve failed sync verification for {rest_count} distinct services (Unknown; operational checks skipped). Run {commands} in the NSO CLI, retain complete responses and compare with MCP; reassess affected services after sync succeeds. These are not confirmed outages.")
+        items.append((None, f"Resolve failed sync verification for {rest_count} distinct services (Unknown; operational checks skipped). Run {commands} in the NSO CLI, retain complete responses and compare with MCP; reassess affected services after sync succeeds. These are not confirmed outages."))
     for device in attributed_devices:
         if device in sync_failed and affected_count:
             continue
@@ -2235,20 +2300,20 @@ def _device_access_followups(case: CaseFile) -> list[str]:
             quarantine_messages.get(device, "")
         )
         if kind == "timeout" or nso_could_not_connect(quarantine_messages.get(device, "")):
-            items.append(_live_collection_followup(device, services_n=n))
+            items.append((heading(device), _live_collection_followup(device, services_n=n)))
         elif kind == "unreachable":
-            items.append(
+            items.append((heading(device),
                 f"Restore live reachability to `{device}` to resume automated "
                 f"checks and settle {_service_impact(service_totals[device], n)} "
                 "(strong unreachability evidence this run)."
-            )
+            ))
         else:
-            items.append(
+            items.append((heading(device),
                 f"Restore live collection evidence for `{device}` to settle "
                 f"{_service_impact(service_totals[device], n)} "
                 "(sync/query incomplete — not confirmed outages; avoid "
                 "inconclusive service-sync loops)."
-            )
+            ))
 
     quarantine_only = sorted(
         d for d in quarantined_by_device if d not in involvement
@@ -2256,17 +2321,17 @@ def _device_access_followups(case: CaseFile) -> list[str]:
     for device in quarantine_only:
         kind = quarantined_by_device[device]
         if kind == "timeout" or nso_could_not_connect(quarantine_messages.get(device, "")):
-            items.append(_live_collection_followup(device, services_n=None))
+            items.append((heading(device), _live_collection_followup(device, services_n=None)))
         elif kind == "unreachable":
-            items.append(
+            items.append((heading(device),
                 f"Restore live reachability to `{device}` to resume automated "
                 f"live MCP ({_service_impact(service_totals[device], 0)})."
-            )
+            ))
         else:
-            items.append(
+            items.append((heading(device),
                 f"Investigate failed live MCP for `{device}` to restore "
                 f"automated collection ({_service_impact(service_totals[device], 0)})."
-            )
+            ))
     return items
 
 
@@ -2399,13 +2464,21 @@ def _affected_service_followups(case: CaseFile, fault_names: set[str]) -> list[s
     return items
 
 
-def _outside_network_followups(case: CaseFile) -> list[str]:
-    """Sessions to other networks, then neighbors to identify (after reachability/services)."""
-    items: list[str] = []
-    def coded(code: str) -> list[dict[str, Any]]:
-        return [i for i in case.issues if str(i.get("code") or "") == code]
+def _outside_network_followups(case: CaseFile, newness: Newness | None = None) -> list[tuple[str | None, str]]:
+    """Sessions to other networks, then neighbors to identify (after reachability/services), labeled."""
+    return (_by_newness(case, newness, {"outside_bgp_session_not_established"}, _outside_session_followups)
+            + _by_newness(case, newness, {"unknown_neighbor_address"}, _unmatched_bgp_followups)
+            + _by_newness(case, newness, {"unknown_neighbor_system_id"}, _unmatched_isis_followups))
 
-    outside = coded("outside_bgp_session_not_established")
+
+def _coded(case: CaseFile, code: str) -> list[dict[str, Any]]:
+    return [i for i in case.issues if str(i.get("code") or "") == code]
+
+
+def _outside_session_followups(case: CaseFile) -> list[str]:
+    """Sessions to other networks not established."""
+    items: list[str] = []
+    outside = _coded(case, "outside_bgp_session_not_established")
     if outside:
         ases_by_device: dict[str, set[int]] = {}
         for issue in outside:
@@ -2419,7 +2492,13 @@ def _outside_network_followups(case: CaseFile) -> list[str]:
             f"Check {n} outside BGP session{'s' if n != 1 else ''} that "
             f"{'are' if n != 1 else 'is'} not established ({where}); only FABRIC's end is visible."
         )
-    unmatched_bgp = coded("unknown_neighbor_address")
+    return items
+
+
+def _unmatched_bgp_followups(case: CaseFile) -> list[str]:
+    """BGP neighbors that match no NSO device."""
+    items: list[str] = []
+    unmatched_bgp = _coded(case, "unknown_neighbor_address")
     if unmatched_bgp:
         rows = _unmatched_bgp_rows(case)
         named = []
@@ -2435,7 +2514,13 @@ def _outside_network_followups(case: CaseFile) -> list[str]:
             f"match{'es' if n == 1 else ''} no NSO device"
             + (": " + ", ".join(named) + more if named else "") + "."
         )
-    unmatched_isis = coded("unknown_neighbor_system_id")
+    return items
+
+
+def _unmatched_isis_followups(case: CaseFile) -> list[str]:
+    """IS-IS neighbors that match no NSO device."""
+    items: list[str] = []
+    unmatched_isis = _coded(case, "unknown_neighbor_system_id")
     if unmatched_isis:
         from nso_facts.fleet_rollups import unmapped_isis_neighbor_in
 
@@ -2477,6 +2562,12 @@ def _inventory_followups(case: CaseFile) -> list[str]:
 
 def format_result_line(case: CaseFile) -> str:
     """One-line Result for the report header (deterministic)."""
+    parts = _result_parts(case)
+    return " ".join(text for _kind, text, _issues in parts) if parts else "Run completed."
+
+
+def _result_parts(case: CaseFile) -> list[tuple[str, str, list[dict[str, Any]] | None]]:
+    """The Result's phrases in order: (kind, text, the issues it counts; None for services or inventory)."""
     dp = list(_dataplane_by_name(case).values())
     codes = Counter(str(i.get("code") or "") for i in case.issues)
     quarantined_issues = [
@@ -2620,29 +2711,85 @@ def format_result_line(case: CaseFile) -> str:
                 )
             else:
                 parts.append("No dataplane investigations recorded.")
+    def coded(*codes: str) -> list[dict[str, Any]]:
+        return [i for i in case.issues if isinstance(i, dict) and str(i.get("code") or "") in codes]
+
+    out: list[tuple[str, str, list[dict[str, Any]] | None]] = [("Services", part, None) for part in parts]
     sessions_down = _bgp_sessions_down_text(case, limit=3)
     if sessions_down:
-        parts.append(sessions_down + ".")
-    parts.extend(_bgp_sessions_not_established_text(case))
+        out.append(("BGP", sessions_down + ".", coded("session_down")))
+    for phrase, edges in _bgp_sessions_not_established(case):
+        out.append(("BGP", phrase + ".", [i for i in coded("configured_no_session")
+                                          if str(i.get("edge_id") or "") in edges]))
     adjacencies_down = _isis_adjacencies_down_text(case, limit=3)
     if adjacencies_down:
-        parts.append(adjacencies_down + ".")
-    parts.extend(collection_gaps)
+        out.append(("IS-IS", adjacencies_down + ".", coded(*_ADJACENCY_DOWN_CODES)))
+    out.extend(("NSO connection", gap, quarantined_issues) for gap in collection_gaps)
     for code, protocol in (("unknown_neighbor_address", "BGP"), ("unknown_neighbor_system_id", "IS-IS")):
         n = codes[code]
         if n:
-            parts.append(f"{n} {protocol} neighbor{'s' if n != 1 else ''} "
-                         f"match{'es' if n == 1 else ''} no NSO device.")
+            out.append(("Unmatched neighbors", f"{n} {protocol} neighbor{'s' if n != 1 else ''} "
+                        f"match{'es' if n == 1 else ''} no NSO device.", coded(code)))
     outside_n = codes["outside_bgp_session_not_established"]
     if outside_n:
-        parts.append(f"{outside_n} outside BGP session{'s' if outside_n != 1 else ''} not established.")
+        out.append(("Outside BGP", f"{outside_n} outside BGP session{'s' if outside_n != 1 else ''} not established.",
+                    coded("outside_bgp_session_not_established")))
     health_flags = [r for r in _device_rows(case) if _device_has_health_review(r)]
     if health_flags:
-        parts.append(
-            "Device inventory/counter observations need classification "
-            "(Review is triage, not a confirmed fault)."
-        )
-    return " ".join(parts) if parts else "Run completed."
+        out.append(("Inventory", "Device inventory/counter observations need classification "
+                    "(Review is triage, not a confirmed fault).", None))
+    return out
+
+
+def _issue_name(issue: dict[str, Any]) -> str:
+    """How a Result tag names an issue: a session's or adjacency's two devices, or a device."""
+    edge = str(issue.get("edge_id") or "")
+    pair = _devices_from_bgp_edge_id(edge)
+    if pair:
+        return f"`{pair[0]}` ↔ `{pair[1]}`"
+    parts = edge.split(":")
+    if len(parts) == 5 and parts[0] == "isis":
+        return f"`{parts[1]}` ↔ `{parts[3]}`"
+    devices = issue.get("devices") or []
+    return f"`{devices[0]}`" if devices and issue.get("code") == "device_live_unreachable" else ""
+
+
+def _tagged(text: str, issues: list[dict[str, Any]], newness: Newness) -> str:
+    """``text`` with its tag after the count: ``1 IS-IS adjacency down (not new): …``."""
+    from diagnostic_mas.case_delta import issue_key
+
+    # One entry per thing the phrase counts, as the phrase counts them.
+    unique = {(_issue_name(issue) or issue_key(issue)): issue for issue in issues}
+    names = [name if name.startswith("`") else "" for name in unique]
+    label_text = newness_tag([newness.of_issue(issue) for issue in unique.values()], names)
+    return re.sub(r"^[^:,.]*", lambda m: f"{m[0]} {label_text}", text, count=1)
+
+
+def _services_tagged(text: str, newness: Newness) -> str:
+    """The final status counts, without their lead-in, and which services newly failed."""
+    text = text.removeprefix("Final service status: ")
+    new = sorted(name for name, seen in newness.services.items() if seen.state == NEW)
+    shown = ", ".join(f"`{name}`" for name in new[:3]) + (f", and {len(new) - 3} more" if len(new) > 3 else "")
+    label_text = f"({len(new)} newly failed: {shown})" if new else "(none newly failed)"
+    return text[:-1] + f" {label_text}." if text.endswith(".") else f"{text} {label_text}"
+
+
+def format_result_section(case: CaseFile, newness: Newness | None) -> list[str]:
+    """``**Result:**`` and one line per kind, in the Result's order; with ``newness``, each count
+    says whether anything in it is new since the previous scan."""
+    lines = ["**Result:**"]
+    by_kind: dict[str, list[str]] = {}
+    for kind, text, issues in _result_parts(case):
+        if newness is not None and kind == "Services" and text.startswith("Final service status: "):
+            text = _services_tagged(text, newness)
+        elif kind == "Services" and text.startswith("Final service status: "):
+            text = text.removeprefix("Final service status: ")
+        elif newness is not None and issues:
+            text = _tagged(text, issues, newness)
+        by_kind.setdefault(kind, []).append(text)
+    if not by_kind:
+        return lines + ["- Run completed."]
+    return lines + [f"- **{kind}:** {' '.join(texts)}" for kind, texts in by_kind.items()]
 
 
 def service_sync_note_from_case(case: CaseFile) -> str | None:

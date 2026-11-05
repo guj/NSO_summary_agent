@@ -23,6 +23,16 @@ or **Service topology** (which devices each service attaches to, coloured by fin
 legend and limits are described under
 [Reports and topology](DIAGNOSTIC_RUNNER.md#reports-and-topology). There is no separate graph export.
 
+### How do I tell what is new this scan?
+
+When an earlier saved scan exists to compare with, the **Result** list tags each count:
+**(none new)** or **(not new)**, **(1 new: …)** naming what is new, or **(not read last scan)**
+when the previous scan could not read it; the Services line says which services newly failed.
+Each **Recommended follow-up** item starts with **New this scan**, **Open since** the first day
+it was seen, **Carried over** (seen last scan, with no dated record) or **Not read last scan**,
+and within each kind of action the new items come first. **Changes since previous run** has the
+details. Without an earlier scan, as on the first saved one, nothing is tagged.
+
 ---
 
 ## Devices
@@ -215,7 +225,7 @@ one could expose session state, and the agent would then use the server's per-ne
 
 - A BGP or IS-IS neighbor that could not be mapped to a device in the NSO inventory.
 - A BGP session to another inventory device that the devices report down. It is also counted in
-  the Result line and listed in the follow-up. **Changes since previous run** lists BGP sessions
+  the Result list and listed in the follow-up. **Changes since previous run** lists BGP sessions
   and IS-IS adjacencies that were up in the previous run and are not up now, and interfaces that
   went from up to down. An interface is marked "its service was deleted" when every service the
   previous scan had on it has since been deleted by its owner; that is not a fault on its own.
