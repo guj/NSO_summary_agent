@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from diagnostic_mas.case import Issue, normalize_issue
 from diagnostic_mas.nso_authentication import authentication_failures
 
 # Issue statuses that still count as an unresolved problem.
@@ -47,7 +48,16 @@ def load_case_dict(path: Path | str) -> dict[str, Any]:
     data = json.loads(p.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"case.json is not an object: {p}")
-    return data
+    return _shaped(data)
+
+
+def _shaped(case: dict[str, Any]) -> dict[str, Any]:
+    """A saved or hand-made case with its issues in the issue shape (a copy when any changed)."""
+    issues = case.get("issues")
+    if not isinstance(issues, list):
+        return case
+    shaped = [issue for raw in issues if (issue := normalize_issue(raw)) is not None]
+    return case if shaped == issues else {**case, "issues": shaped}
 
 
 def load_previous_case(
@@ -80,24 +90,23 @@ def load_previous_case(
         return None, None
 
 
-def issue_key(issue: dict[str, Any]) -> str:
+def issue_key(issue: Issue) -> str:
     """Stable identity for matching issues across runs."""
-    layer = str(issue.get("layer") or "")
-    code = str(issue.get("code") or "")
-    edge = issue.get("edge_id")
+    layer = issue["layer"] or ""
+    code = issue["code"]
+    edge = issue["edge_id"]
     if isinstance(edge, str) and edge.strip():
         return f"{layer}|{code}|{edge.strip()}"
     devices = issue.get("devices")
     if isinstance(devices, list) and devices:
         devs = ",".join(sorted(str(d) for d in devices))
         return f"{layer}|{code}|devices:{devs}"
-    msg = str(issue.get("message") or "")[:80]
+    msg = issue["message"][:80]
     return f"{layer}|{code}|msg:{msg}"
 
 
-def is_problem(issue: dict[str, Any]) -> bool:
-    status = str(issue.get("status") or "open").lower()
-    return status in _PROBLEM_STATUSES
+def is_problem(issue: Issue) -> bool:
+    return issue["status"].lower() in _PROBLEM_STATUSES
 
 
 def problem_map(case: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -1100,6 +1109,7 @@ def compute_case_delta(
     Plus legacy issue lists (new_problems / recovered / out_of_scope) and
     coverage_changes.
     """
+    older, newer = _shaped(older), _shaped(newer)
     old_probs = problem_map(older)
     new_probs = problem_map(newer)
     old_cov = coverage_map(older)

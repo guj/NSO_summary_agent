@@ -3,11 +3,51 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, NotRequired, TypedDict
 
 IssueStatus = Literal[
     "open", "explained", "escalated", "needs_human", "budget_exhausted"
 ]
+
+
+class Issue(TypedDict):
+    """A problem the scan found. ``open_issue`` sets every field below; the rest only when known."""
+    id: str
+    code: str
+    message: str
+    evidence_ids: list[str]
+    severity: str
+    layer: str | None
+    edge_id: str | None
+    status: str
+    devices: NotRequired[list[str]]
+    live_l2: NotRequired[dict[str, Any]]
+    device_sync: NotRequired[dict[str, Any]]
+    in_sync: NotRequired[Any]
+    system_status: NotRequired[str]
+    dataplane_status: NotRequired[str]
+
+
+# The fields every issue has, with what an issue from outside a run gets when it lacks one.
+_ISSUE_DEFAULTS: dict[str, Any] = {
+    "id": "", "code": "unknown", "message": "", "evidence_ids": [], "severity": "medium",
+    "layer": None, "edge_id": None, "status": "open",
+}
+ISSUE_FIELDS = tuple(_ISSUE_DEFAULTS)
+
+
+def normalize_issue(raw: Any) -> Issue | None:
+    """An issue from outside this run, such as a saved scan's, given the issue shape; None if it is not one.
+
+    Readers then take the fields as they are, so a missing one fails loudly instead of reading as empty.
+    """
+    if not isinstance(raw, dict):
+        return None
+    issue = dict(raw)
+    for key, default in _ISSUE_DEFAULTS.items():
+        if issue.get(key) is None and (key not in issue or default is not None):
+            issue[key] = list(default) if isinstance(default, list) else default
+    return issue  # type: ignore[return-value]
 
 
 @dataclass
@@ -50,7 +90,7 @@ class CaseFile:
     budget: Budget
     run_configuration: dict[str, Any] = field(default_factory=dict)
     evidence: list[dict[str, Any]] = field(default_factory=list)
-    issues: list[dict[str, Any]] = field(default_factory=list)
+    issues: list[Issue] = field(default_factory=list)
     # Attributed conclusions (LLM/fallback). Not Evidence — cite evidence_ids.
     diagnoses: list[dict[str, Any]] = field(default_factory=list)
     hypotheses: list[dict[str, Any]] = field(default_factory=list)
@@ -178,7 +218,7 @@ def open_issue(
 ) -> str:
     case._issue_seq += 1
     issue_id = f"is_{case._issue_seq}"
-    rec: dict[str, Any] = {
+    rec: Issue = {
         "id": issue_id,
         "code": code,
         "message": message,

@@ -281,8 +281,9 @@ alert file when it starts: to change the 48 hours, edit `params: [48]` in
 
 Test it once: set the threshold to `0.5` and restart Grafana. Within about five minutes Slack gets
 "No published NSO diagnostic scan", if the last published scan is older than half an hour. Set it
-back to `48` and restart Grafana again; the alert clears at its next check. Grafana's alert list
-(**Alerting → Alert rules**, folder **NSO diagnostic**) shows the rule's state at any time.
+back to `48` and restart Grafana again; the alert clears at its next check. Grafana's alert list,
+http://localhost:3000/alerting/list (**Alerting → Alert rules**, folder **NSO diagnostic**), shows
+the rule's state at any time.
 
 The file also sets Grafana's notification policy to this Slack contact point, so the policy can
 no longer be edited in Grafana's UI. Not covered: the scan host itself down, or Prometheus or

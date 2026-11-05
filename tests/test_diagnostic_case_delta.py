@@ -307,8 +307,10 @@ def test_inconclusive_recheck_does_not_make_old_fault_new_again():
 
 
 def test_unchecked_device_is_not_recovered_from_inventory_or_scope():
-    issue = {"code": "device_live_unreachable", "devices": ["scm-data-sw"],
-             "layer": "underlay", "status": "open"}
+    from diagnostic_mas.case import normalize_issue
+
+    issue = normalize_issue({"code": "device_live_unreachable", "devices": ["scm-data-sw"],
+                             "layer": "underlay", "status": "open"})
     old = {"issues": [issue]}
     for current in (
         {},
