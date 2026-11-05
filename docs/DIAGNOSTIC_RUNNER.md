@@ -405,6 +405,36 @@ Watch progress from another terminal with `tail -f log/test.txt`. Logs may conta
 network details; keep them outside version control. These limits are ceilings,
 not targets, and higher concurrency does not guarantee proportional speedup.
 
+### Saving options in a profile
+
+A profile keeps a scan's options in a file, so a long command becomes `--profile FILE`.
+Write the options as you would type them, one or more per line; `#` starts a comment.
+The usual full scan above, saved as `profiles/used_on_mac`:
+
+```text
+# Full published scan, as run on the Mac
+--spine-concurrent-devices 6
+--dataplane-concurrent-workers 2
+--max-dataplane-per-category 30
+--max-dataplane-tools 40
+--max-drill-issues 2
+--publish
+```
+
+```bash
+nso-diagnostic-run --profile profiles/used_on_mac
+```
+
+- Options typed on the command line win over the profile's, wherever they are typed:
+  `--profile profiles/used_on_mac --dry-run` runs the same scan without saving or sending
+  it, and adding `--max-dataplane-tools 20` replaces the profile's 40.
+- An unknown option, or a line that does not start with an option, stops the run before it
+  contacts anything, naming the file and line. A profile cannot name another profile.
+- The report's run configuration names the profile and lists its options, marking any the
+  command line replaced, above the values the scan actually used.
+- A profile holds command-line options only. Settings and secrets stay in `.env`, so a
+  profile can be handed to another user as it is.
+
 ## Claude Code commands
 
 The repository ships five slash commands in `.claude/commands/`. Each one runs

@@ -41,7 +41,7 @@ Run these as the user who will run the scans. Use any folder outside a checkout:
 `/your/nso-diagnostic-dir` here and below with yours, such as `~/nso-diagnostic`.
 
 ```bash
-mkdir -p /your/nso-diagnostic-dir/state && cd /your/nso-diagnostic-dir
+mkdir -p /your/nso-diagnostic-dir/state /your/nso-diagnostic-dir/profiles && cd /your/nso-diagnostic-dir
 docker run --rm --entrypoint cat nso-diagnostic-agent /app/deploy/agent/docker-compose.yml > docker-compose.yml
 docker run --rm --entrypoint cat nso-diagnostic-agent /app/.env.example > nso-diagnostic.env
 chmod 600 nso-diagnostic.env
@@ -49,7 +49,7 @@ printf 'AGENT_UID=%s\nAGENT_GID=%s\n' "$(id -u)" "$(id -g)" > .env
 ```
 
 Run every `docker compose` command below from this folder. Keep its `state/`: each scan
-compares with the last one saved there.
+compares with the last one saved there. `profiles/` holds any [profiles](#profiles).
 
 ## 3. Enter the settings
 
@@ -81,6 +81,17 @@ try a scan that saves and sends nothing, use `--skip-llm --dry-run` instead of `
 Other [options](DIAGNOSTIC_RUNNER.md#running) also go after `agent`; the example below has
 our usual larger scan.
 
+### Profiles
+
+A profile keeps a scan's options in a file in `profiles/`, which the compose file shows to
+the agent read-only. Write the options as you would type them, one or more per line, then
+name the file with `--profile`; options typed after it still win. See
+[Saving options in a profile](DIAGNOSTIC_RUNNER.md#saving-options-in-a-profile).
+
+```bash
+docker compose run --rm agent --profile profiles/used_on_mac
+```
+
 ## Example: start to finish on an Apple-silicon Mac
 
 How we tried it on a Mac with OrbStack, from a checkout of this repository. First replace
@@ -93,7 +104,7 @@ deploy/agent/build_image.sh --platform linux/arm64
 ```
 
 ```bash
-mkdir -p /your/nso-diagnostic-dir/state && cd /your/nso-diagnostic-dir
+mkdir -p /your/nso-diagnostic-dir/state /your/nso-diagnostic-dir/profiles && cd /your/nso-diagnostic-dir
 docker run --rm --entrypoint cat nso-diagnostic-agent /app/deploy/agent/docker-compose.yml > docker-compose.yml
 docker run --rm --entrypoint cat nso-diagnostic-agent /app/.env.example > nso-diagnostic.env
 chmod 600 nso-diagnostic.env
@@ -133,6 +144,8 @@ Use cron on the server; the times are an example:
 ## Upgrade
 
 Load the new image file, then run step 4 again. Settings and saved scans stay as they are.
+A compose file copied from an image older than profiles lacks the `./profiles` line: copy it
+again as in step 2, or add that line under `volumes:`.
 If you build the image from a checkout, rebuild it after each update of the checkout: the
 image holds its own copy of the code, so scans run the old code until you do.
 

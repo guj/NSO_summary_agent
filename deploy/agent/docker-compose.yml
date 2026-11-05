@@ -1,7 +1,8 @@
 # The NSO diagnostic agent, run on demand or from cron, for example:
 #   docker compose run --rm agent --check-connection
 #   docker compose run --rm agent --publish
-# Keep this file in a folder with nso-diagnostic.env and a state/ folder. See docs/DOCKER.md.
+#   docker compose run --rm agent --profile profiles/used_on_mac
+# Keep this file in a folder with nso-diagnostic.env and state/ and profiles/ folders. See docs/DOCKER.md.
 services:
   agent:
     image: nso-diagnostic-agent:latest
@@ -14,3 +15,5 @@ services:
       - ./nso-diagnostic.env:/app/.env
       # Saved runs: the next scan compares with them, so this folder must persist.
       - ./state:/app/state
+      # Profiles for --profile: saved command-line options, no secrets. Read only.
+      - ./profiles:/app/profiles:ro

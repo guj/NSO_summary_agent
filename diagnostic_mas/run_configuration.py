@@ -26,7 +26,10 @@ def capture_run_configuration(args, settings, budget, *, skip_llm, dry_run):
         host = urlsplit(settings.fabric_api_url).hostname or "Not recorded"
     except ValueError:
         host = "Not recorded"
+    profile = getattr(args, "profile", None)
     return {
+        "Profile": (f"{profile}: {', '.join(getattr(args, 'profile_options', None) or []) or 'no options'}"
+                    if profile else "None"),
         "Model": settings.fabric_model,
         "LLM temperature": settings.fabric_temperature if settings.fabric_temperature is not None else "Provider default (parameter omitted)",
         "LLM provider host": host,

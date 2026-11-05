@@ -839,6 +839,11 @@ def build_parser() -> argparse.ArgumentParser:
         description="Diagnostic MAS: ISIS/BGP/Service/Device blackboard runner"
     )
     parser.add_argument(
+        "--profile", metavar="FILE",
+        help=("Read options from FILE, one or more per line (# starts a comment); "
+              "options typed on the command line win"),
+    )
+    parser.add_argument(
         "--max-deep-checks",
         type=int,
         default=0,
@@ -1047,9 +1052,84 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+# Options that set the same thing or cannot be combined: one typed on the command line
+# replaces any of them in the profile.
+_REPLACES_TOGETHER = (
+    frozenset({"publish", "dry_run"}),
+    frozenset({"isis_only", "bgp_only", "device_only", "service_only"}),
+    frozenset({"max_drills", "max_tools_per_drill"}),
+)
+
+
+def _read_profile(parser: argparse.ArgumentParser, path: str) -> list[list[str]]:
+    """A profile's options, each with the values that follow it; stops on a line it cannot use."""
+    import shlex
+
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        parser.error(f"cannot read profile {path}: {getattr(exc, 'strerror', None) or exc}")
+    known = parser._option_string_actions
+    items: list[list[str]] = []
+    for number, line in enumerate(text.splitlines(), 1):
+        where = f"profile {path} line {number}"
+        try:
+            tokens = shlex.split(line, comments=True)
+        except ValueError as exc:
+            parser.error(f"{where}: {exc}")
+        if tokens and not tokens[0].startswith("--"):
+            parser.error(f"{where}: expected an option, found {tokens[0]!r}")
+        for token in tokens:
+            if not token.startswith("--"):
+                items[-1].append(token)
+                continue
+            option = token.split("=", 1)[0]
+            if option not in known:
+                parser.error(f"{where}: unknown option {option}")
+            if known[option].dest == "profile":
+                parser.error(f"{where}: a profile cannot name another profile")
+            items.append([token])
+    return items
+
+
+def parse_cli(argv: list[str] | None = None) -> argparse.Namespace:
+    """The command line's options, after those of its --profile file, so typed options win.
+
+    ``args.profile_options`` lists the profile's options as written, marking any the
+    command line replaced, for the report's run configuration.
+    """
+    import shlex
+
     parser = build_parser()
+    argv = list(sys.argv[1:] if argv is None else argv)
+    paths = [arg.split("=", 1)[1] if arg.startswith("--profile=") else argv[index + 1]
+             for index, arg in enumerate(argv)
+             if arg.startswith("--profile=") or (arg == "--profile" and index + 1 < len(argv))]
+    if len(paths) > 1:
+        parser.error("give --profile only once")
+    profile_options: list[str] = []
+    if paths:
+        known = parser._option_string_actions
+        typed = {known[arg.split("=", 1)[0]].dest for arg in argv
+                 if arg.startswith("--") and arg.split("=", 1)[0] in known}
+        replaced = typed.union(*(group for group in _REPLACES_TOGETHER if typed & group))
+        kept: list[str] = []
+        for item in _read_profile(parser, paths[0]):
+            if known[item[0].split("=", 1)[0]].dest in replaced:
+                profile_options.append(shlex.join(item) + " (replaced on the command line)")
+            else:
+                profile_options.append(shlex.join(item))
+                kept.extend(item)
+        argv = kept + argv
     args = parser.parse_args(argv)
+    if args.profile is not None and not paths:
+        parser.error("write --profile in full")
+    args.profile_options = profile_options
+    return args
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_cli(argv)
     # --max-drills is a deprecated alias for --max-tools-per-drill
     if getattr(args, "max_drills", None) is not None:
         args.max_tools_per_drill = int(args.max_drills)
