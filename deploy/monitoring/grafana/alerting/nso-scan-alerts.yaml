@@ -1,0 +1,61 @@
+# Alert when no published NSO diagnostic scan has arrived for too long: the scheduled scan stopped
+# running (cron entry gone, Docker stopped). A scan that runs and fails sends its own notice.
+# Opt-in: docker-compose.alerting.yml mounts this file and passes NSO_ALERT_SLACK_WEBHOOK_URL
+# from this folder's .env (see README.md). Without them Grafana loads no alert.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: NSO scan alerts
+    receivers:
+      - uid: nso-scan-slack
+        type: slack
+        settings:
+          url: $NSO_ALERT_SLACK_WEBHOOK_URL
+          title: '{{ if eq .Status "firing" }}No published NSO diagnostic scan{{ else }}NSO diagnostic scans published again{{ end }}'
+          text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+
+policies:
+  - orgId: 1
+    receiver: NSO scan alerts
+    group_by: ["alertname"]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 24h
+
+groups:
+  - orgId: 1
+    name: NSO scans
+    folder: NSO diagnostic
+    interval: 5m
+    rules:
+      - uid: nso-scan-stale
+        title: No published NSO diagnostic scan
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              # Hours since the last published scan; only a published scan updates this metric.
+              expr: (time() - max(nso_summary_last_run_timestamp_seconds{pipeline="diagnostic"})) / 3600
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                # The threshold in hours: 48 by default; change it here to match the scan schedule.
+                - evaluator: {type: gt, params: [48]}
+        for: 0s
+        # No metric at all means no scan was ever published here: nothing to say is late.
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: No published NSO diagnostic scan
+          description: >-
+            No NSO diagnostic scan has been published for {{ printf "%.0f" $values.A.Value }} hours.
+            Check that the scheduled scan still runs (cron entry, Docker) on the scan host.

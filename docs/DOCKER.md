@@ -141,6 +141,10 @@ Use cron on the server; the times are an example:
 0 8,14,20 * * * cd /your/nso-diagnostic-dir && docker compose run --rm -T agent --publish >> scans.log 2>&1
 ```
 
+A scan that stops without a report sends a one-line notice to the report's Slack and email. For an
+alert when scheduled scans stop running altogether, see "Alert when scans stop" in the monitoring
+stack's README (`deploy/monitoring/README.md`).
+
 ## Upgrade
 
 Load the new image file, then run step 4 again. Settings and saved scans stay as they are.

@@ -1,0 +1,13 @@
+# Opt-in alert when no published NSO diagnostic scan has arrived for 48 hours (see README.md,
+# "Alert when scans stop"). Turn it on with two lines in this folder's .env:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.alerting.yml
+#   NSO_ALERT_SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+# then `docker compose up -d`. Without the webhook, compose stops with a message instead of
+# starting a Grafana that would refuse the alert.
+
+services:
+  grafana:
+    volumes:
+      - ./grafana/alerting:/etc/grafana/provisioning/alerting:ro
+    environment:
+      NSO_ALERT_SLACK_WEBHOOK_URL: ${NSO_ALERT_SLACK_WEBHOOK_URL:?set NSO_ALERT_SLACK_WEBHOOK_URL in deploy/monitoring/.env to turn on the scan alert}

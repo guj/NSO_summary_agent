@@ -163,12 +163,15 @@ Non-empty `"result"` → Prometheus has it; if Grafana is empty, check time rang
 ```
 deploy/monitoring/
   docker-compose.yml          # pushgateway + prometheus + grafana
+  docker-compose.alerting.yml # opt-in: alert when scans stop arriving
   prometheus/
     prometheus.yml            # scrape config (edit scrape jobs here)
   grafana/
     provisioning/
       datasources/prometheus.yml
       dashboards/dashboards.yml
+    alerting/
+      nso-scan-alerts.yaml    # the alert rule and its Slack contact point (opt-in)
     dashboards/
       nso-diagnostic.json     # scan results (NSO Diagnostic)
       nso-summary.json        # Pushgateway smoke test (NSO Summary)
@@ -250,6 +253,35 @@ It also pushes:
 A scan that ends without a report (for example NSO became unreachable) posts only the last three, with success 0. The last good scan's values stay in the Pushgateway, so compare `nso_summary_last_run_timestamp_seconds` with the current time to see how old they are.
 
 Dashboard **NSO Diagnostic** (folder **NSO**, file `grafana/dashboards/nso-diagnostic.json`) charts these: scanner health, final status, services not OpUp by device, links gaining errors while up, and the latest report.
+
+## Alert when scans stop
+
+Opt-in. Grafana posts to Slack when no published diagnostic scan has arrived for **48 hours**:
+the scheduled scan stopped running (cron entry gone, Docker stopped). It watches
+`nso_summary_last_run_timestamp_seconds`, which only a published scan updates, and posts again
+when scans resume. A scan that runs but fails sends its own notice to the report's Slack and
+email, so this alert is for scans that never start.
+
+Turn it on with two lines in this folder's `.env` (git ignores it; keep the webhook URL there):
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.alerting.yml
+NSO_ALERT_SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+```
+
+then `docker compose up -d`. The webhook can be the one the scans post to. Without it, compose stops
+with a message rather than starting a Grafana that would refuse the alert. Grafana reads the
+alert file when it starts: to change the 48 hours, edit `params: [48]` in
+`grafana/alerting/nso-scan-alerts.yaml` and run `docker compose restart grafana`.
+
+Test it once: set the threshold to `0.5` and restart Grafana. Within about five minutes Slack gets
+"No published NSO diagnostic scan", if the last published scan is older than half an hour. Set it
+back to `48` and restart Grafana again; the alert clears at its next check. Grafana's alert list
+(**Alerting → Alert rules**, folder **NSO diagnostic**) shows the rule's state at any time.
+
+The file also sets Grafana's notification policy to this Slack contact point, so the policy can
+no longer be edited in Grafana's UI. Not covered: the scan host itself down, or Prometheus or
+Grafana stopped, since they run on the same host as the scans.
 
 ## Stop / remove
 

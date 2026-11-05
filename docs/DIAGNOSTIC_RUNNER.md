@@ -362,7 +362,9 @@ device list, a request that contacts no device. If NSO answers, a timeout is rec
 against the device that was queried, and that device is skipped for the rest of the run. If
 NSO does not answer, for example because the VPN dropped, the scan stops at once with
 `NSO is unreachable; scan stopped` and exit status 3. No report is printed, saved or
-published, and nothing is retried: run the scan again when NSO is reachable.
+published, and nothing is retried: run the scan again when NSO is reachable. A publishing
+scan that stops this way, or with an error, sends a one-line notice to its Slack and email
+instead, naming the run and why it stopped (an error by its type only); a dry run sends none.
 
 ### Example: our usual full scan with logging and publication
 

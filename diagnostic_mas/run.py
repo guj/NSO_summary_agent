@@ -301,12 +301,14 @@ async def _run(args: argparse.Namespace) -> int:
                              keep_days=settings.mcp_results_keep_days) as archive_path:
         if archive_path:
             print(f"[mcp archive] Full results: {archive_path}", file=sys.stderr)
-        def report_failed_attempt(reason: str) -> None:
-            """Let monitoring see a scan that ended without a report (never on a dry run)."""
-            if dry_run or bool(getattr(args, "skip_metrics", False)):
+        def report_failed_attempt(reason: str, error: BaseException | None = None) -> None:
+            """Let monitoring and the report's readers know a scan ended without a report (never on a dry run)."""
+            if dry_run:
                 return
-            if push_scan_attempt_failed(settings, reason=reason, pipeline="diagnostic"):
+            if (not getattr(args, "skip_metrics", False)
+                    and push_scan_attempt_failed(settings, reason=reason, pipeline="diagnostic")):
                 print("Pushed scan-failed signal to Pushgateway", file=sys.stderr)
+            _send_failure_notice(settings, run_id, reason, error)
 
         try:
             plan = _ScanPlan(
@@ -317,8 +319,8 @@ async def _run(args: argparse.Namespace) -> int:
             )
             code = await _stop_if_nso_unreachable(_run_after_accounting(
                 args, settings=settings, case=case, plan=plan))
-        except Exception:
-            report_failed_attempt("error")
+        except Exception as exc:
+            report_failed_attempt("error", exc)
             raise
         else:
             if code == NSO_UNREACHABLE_EXIT:
@@ -336,6 +338,31 @@ async def _run(args: argparse.Namespace) -> int:
 
 # Exit status when the scan was abandoned because NSO stopped answering.
 NSO_UNREACHABLE_EXIT = 3
+
+
+def _send_failure_notice(settings, run_id: str, reason: str, error: BaseException | None) -> None:
+    """One short notice through the report's channels; it never changes how the scan ends.
+
+    It names the error's type only: an error's text can carry addresses or other details.
+    """
+    from agent.publish import publish_notice
+
+    if reason == "nso_unreachable":
+        text = (f"NSO diagnostic scan `{run_id}` stopped: NSO stopped answering, so there is no report "
+                "this time. Run the scan again once NSO answers.")
+    else:
+        text = (f"NSO diagnostic scan `{run_id}` stopped with an error ({type(error).__name__}), so there "
+                "is no report this time. The scan's log has the details.")
+    failures: list[tuple[str, str]] = []
+    try:
+        channels = publish_notice(text, run_id, settings, failures=failures)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Scan-failed notice not sent: {type(exc).__name__}", file=sys.stderr)
+        return
+    if channels:
+        print(f"Sent scan-failed notice to: {', '.join(channels)}", file=sys.stderr)
+    for channel, why in failures:
+        print(f"Scan-failed notice not delivered by {channel}: {why}", file=sys.stderr)
 
 
 async def _stop_if_nso_unreachable(scan) -> int:

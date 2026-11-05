@@ -246,7 +246,7 @@ def _publishing(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_scan_saves_and_publishes_nothing_when_nso_becomes_unreachable(
+async def test_scan_saves_and_publishes_no_report_when_nso_becomes_unreachable(
     nso_env, llm_requests, monkeypatch, tmp_path, capsys
 ):
     args = _publishing(monkeypatch)
@@ -259,7 +259,9 @@ async def test_scan_saves_and_publishes_nothing_when_nso_becomes_unreachable(
     assert code == run_mod.NSO_UNREACHABLE_EXIT == 3
     assert "NSO is unreachable; scan stopped" in err
     assert "Request timed out after 30s" in err
-    assert not slack.called and not email.called
+    # Only the short notice that the scan stopped goes out, not a report.
+    assert [call.args[0].name.endswith("failed.txt") for call in slack.call_args_list] == [True]
+    assert [call.kwargs.get("attachment_path") for call in email.call_args_list] == [None]
     assert not render.called
     assert not list(tmp_path.rglob("report.html"))
     assert not list(tmp_path.rglob("latest.json"))
@@ -316,3 +318,81 @@ async def test_stopped_dry_run_or_metrics_off_scan_reports_nothing_for_monitorin
             await _scan(args, spines=_lose_nso)
 
     assert push.call_count == 0
+
+
+# --- the notice that a publishing scan stopped -------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_publishing_scan_that_stops_tells_the_report_channels(nso_env, llm_requests, monkeypatch, capsys):
+    args = _publishing(monkeypatch)
+
+    with patch("agent.publish.publish_slack_file") as slack, patch("agent.publish.publish_email") as email:
+        await _scan(args, spines=_lose_nso)
+
+    notice = slack.call_args.args[1]
+    assert notice.startswith("NSO diagnostic scan `") and "stopped: NSO stopped answering" in notice
+    assert slack.call_args.kwargs["title"] == "NSO diagnostic scan failed"
+    assert email.call_args.args[0] == notice
+    assert email.call_args.kwargs["subject"].endswith(" failed")
+    assert "Sent scan-failed notice to: slack, email" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_a_scan_that_raises_names_only_the_error_type_in_its_notice(nso_env, llm_requests, monkeypatch):
+    args = _publishing(monkeypatch)
+
+    async def crash(*_args, **_kwargs):
+        raise RuntimeError("login to 192.0.2.10 refused")
+
+    with patch("agent.publish.publish_slack_file") as slack, patch("agent.publish.publish_email"):
+        with pytest.raises(RuntimeError):
+            await _scan(args, spines=crash)
+
+    notice = slack.call_args.args[1]
+    assert "stopped with an error (RuntimeError)" in notice and "192.0.2.10" not in notice
+
+
+@pytest.mark.asyncio
+async def test_a_notice_that_cannot_be_sent_does_not_change_how_the_scan_ends(
+    nso_env, llm_requests, monkeypatch, capsys
+):
+    args = _publishing(monkeypatch)
+
+    with patch("agent.publish.publish_slack_file", side_effect=RuntimeError("not_in_channel")), \
+            patch("agent.publish.publish_email"):
+        code, _render = await _scan(args, spines=_lose_nso)
+
+    assert code == run_mod.NSO_UNREACHABLE_EXIT
+    assert "Scan-failed notice not delivered by slack: not_in_channel" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_a_dry_run_that_stops_sends_no_notice(nso_env, llm_requests, monkeypatch):
+    with patch("agent.publish.publish_slack_file") as slack, patch("agent.publish.publish_email") as email, \
+            patch("agent.publish.publish_slack") as webhook:
+        await _scan(_args(skip_llm=True), spines=_lose_nso)
+
+    assert not slack.called and not email.called and not webhook.called
+
+
+@pytest.mark.asyncio
+async def test_metrics_turned_off_still_sends_the_notice(nso_env, llm_requests, monkeypatch):
+    args = _publishing(monkeypatch)
+    args.skip_metrics = True
+
+    with patch("agent.publish.publish_slack_file") as slack, patch("agent.publish.publish_email"):
+        await _scan(args, spines=_lose_nso)
+
+    assert slack.call_count == 1
+
+
+def test_a_notice_goes_by_webhook_when_one_is_set():
+    from agent.publish import publish_notice
+
+    settings = SimpleNamespace(slack_webhook_url="https://hooks.example/x", slack_bot_token="xoxb-test",
+                               slack_channel_id="C1", email_to=[], email_subject_prefix="NSO Summary")
+    with patch("agent.publish.publish_slack") as webhook, patch("agent.publish.publish_slack_file") as upload:
+        assert publish_notice("NSO diagnostic scan `r1` stopped.", "r1", settings) == ["slack"]
+
+    assert webhook.call_args.args[0] == "NSO diagnostic scan `r1` stopped." and not upload.called

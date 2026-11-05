@@ -64,6 +64,7 @@ def publish_email(
     settings: Settings | None = None,
     report_html: str | None = None,
     attachment_path: Path | None = None,
+    subject: str | None = None,
 ) -> None:
     s = settings or load_settings()
     if not email_configured(s):
@@ -71,7 +72,7 @@ def publish_email(
     validate_email_settings(s)
 
     msg = EmailMessage()
-    msg["Subject"] = f"{s.email_subject_prefix} — {run_id}"
+    msg["Subject"] = subject or f"{s.email_subject_prefix} — {run_id}"
     msg["From"] = s.email_from
     msg["To"] = ", ".join(s.email_to)
     msg.set_content(report_plain)
@@ -167,8 +168,53 @@ def publish_all(
     return sent
 
 
-def publish_slack_file(path: Path, summary: str, settings: Settings) -> None:
-    """Upload HTML through Slack's external-upload flow (files:write)."""
+def publish_notice(
+    text: str,
+    run_id: str,
+    settings: Settings | None = None,
+    *,
+    failures: list[tuple[str, str]] | None = None,
+) -> list[str]:
+    """A short notice, such as a scan that stopped without a report, through the report's channels.
+
+    Slack by its webhook when one is set; otherwise the bot, which can only upload files, posts it
+    as the comment on a small text file. Email gets its own subject. Returns the channels used;
+    with ``failures`` given, a channel that fails is recorded there and the others still run.
+    """
+    s = settings or load_settings()
+    sent: list[str] = []
+
+    def deliver(channel: str, send) -> None:
+        try:
+            send()
+        except Exception as exc:  # noqa: BLE001
+            if failures is None:
+                raise
+            failures.append((channel, str(exc)))
+        else:
+            sent.append(channel)
+
+    def upload() -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / f"scan-{run_id}-failed.txt"
+            path.write_text(text + "\n", encoding="utf-8")
+            publish_slack_file(path, text, s, title="NSO diagnostic scan failed")
+
+    if s.slack_webhook_url:
+        deliver("slack", lambda: publish_slack(text, s))
+    elif s.slack_bot_token and s.slack_channel_id:
+        deliver("slack", upload)
+    if s.email_to:
+        deliver("email", lambda: publish_email(text, run_id, s,
+                                               subject=f"{s.email_subject_prefix} — {run_id} failed"))
+    return sent
+
+
+def publish_slack_file(path: Path, summary: str, settings: Settings, *,
+                       title: str = "NSO diagnostic report") -> None:
+    """Upload a file through Slack's external-upload flow (files:write), ``summary`` as its comment."""
     import urllib.parse
 
     def api(method: str, fields: dict) -> dict:
@@ -194,7 +240,7 @@ def publish_slack_file(path: Path, summary: str, settings: Settings) -> None:
     with urllib.request.urlopen(request, timeout=60) as response:
         response.read()
     api("files.completeUploadExternal", {
-        "files": json.dumps([{"id": upload["file_id"], "title": "NSO diagnostic report"}]),
+        "files": json.dumps([{"id": upload["file_id"], "title": title}]),
         "channel_id": settings.slack_channel_id,
         "initial_comment": summary,
     })

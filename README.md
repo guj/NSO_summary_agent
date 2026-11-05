@@ -429,6 +429,11 @@ Launchd does **not** require a crontab entry. `.env` in the project directory is
    shows only the totals) under `state/diagnostic_mas/runs/<run-id>/`
 5. Sends the digest to email and/or Slack if configured
 
+A scheduled run that stops without a report (NSO stopped answering, or an error) sends a one-line
+notice to the same email and Slack instead. To hear when scheduled runs stop starting at all, turn
+on the monitoring stack's alert: [deploy/monitoring/README.md](deploy/monitoring/README.md), "Alert
+when scans stop".
+
 ## Service health status
 
 Each service **instance** has a sync-layer **system status** (`up` / `degraded` /
