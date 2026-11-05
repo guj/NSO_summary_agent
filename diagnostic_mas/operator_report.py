@@ -1130,8 +1130,9 @@ def format_devices_operator(case: CaseFile) -> list[str]:
     rows = _device_rows(case)
     if not rows:
         return ["(none — no device names or spine data)"]
-    _fleet_sync, hardware_health, _system = fleet_maps_from_case(case)
+    _fleet_sync, hardware_health, system_health = fleet_maps_from_case(case)
     hw_map = hardware_health if isinstance(hardware_health, dict) else {}
+    from diagnostic_mas.nso_authentication import failure_reason
 
     unmatched = _unmatched_bgp_rows(case)
     lines: list[str] = []
@@ -1141,14 +1142,26 @@ def format_devices_operator(case: CaseFile) -> list[str]:
         lines.append(f"### {device}")
         lines.append("")
         lines.append(f"**NSO sync:** {_sync_prose(str(row.get('sync') or '—'))}")
-        lines.append(
-            f"**Health:** {_health_prose(row, hardware_entry=hw_entry)}"
-        )
+        system = system_health.get(device) if isinstance(system_health.get(device), dict) else {}
+        refused = failure_reason(str(system.get("error") or ""), device)
+        health = _health_prose(row, hardware_entry=hw_entry)
+        if refused:
+            health = f"System health not read in full ({refused}). {health[:1].upper()}{health[1:]}"
+        lines.append(f"**Health:** {health}")
         bgp_prose, drill_line = _bgp_routing_qualification(
             case, device, str(row.get("bgp") or "—")
         )
         isis = (_one_sided_routing(case, device, "underlay")
                 or _routing_count_prose(str(row.get("isis") or "—")))
+        # A read NSO could not authenticate for was not read, which N/A would hide.
+        unread = {str(issue.get("layer")): reason for issue in case.issues
+                  if issue.get("code") == "collection_error"
+                  and str(issue.get("message") or "").startswith(f"{device}:")
+                  and (reason := failure_reason(str(issue.get("message") or ""), device))}
+        if bgp_prose == "N/A" and "routing" in unread:
+            bgp_prose = f"not read ({unread['routing']})"
+        if isis == "N/A" and "underlay" in unread:
+            isis = f"not read ({unread['underlay']})"
         outside = _outside_peers_prose(unmatched, device)
         lines.append(f"**Routing:** BGP {bgp_prose}" + (f" · {outside}" if outside else "")
                      + f" · IS-IS {isis}")
@@ -2332,6 +2345,26 @@ def _device_access_followups(case: CaseFile, newness: Newness | None = None) -> 
                 f"Investigate failed live MCP for `{device}` to restore "
                 f"automated collection ({_service_impact(service_totals[device], 0)})."
             ))
+    items.extend(_authentication_followups(case, newness))
+    return items
+
+
+def _authentication_followups(case: CaseFile, newness: Newness | None) -> list[tuple[str | None, str]]:
+    """Devices NSO could not authenticate to: verify host keys, or check credentials; new ones apart."""
+    from diagnostic_mas.nso_authentication import (
+        authentication_failures, credentials_followup, host_key_followup)
+
+    groups: dict[tuple[bool, str | None], list[str]] = {}
+    refused = authentication_failures(case)
+    for device, reasons in refused.items():
+        seen = newness.authentication.get(device) if newness else None
+        host_key = any("host key" in reason.lower() for reason in reasons)
+        groups.setdefault((host_key, seen.state if seen else None), []).append(device)
+    items: list[tuple[str | None, str]] = []
+    for (host_key, _state), devices in groups.items():
+        heading = newness_label(newness.authentication.get(d) for d in devices) if newness else None
+        reasons = sorted({reason for device in devices for reason in refused[device]})
+        items.append((heading, host_key_followup(devices) if host_key else credentials_followup(devices, reasons)))
     return items
 
 
@@ -2563,11 +2596,15 @@ def _inventory_followups(case: CaseFile) -> list[str]:
 def format_result_line(case: CaseFile) -> str:
     """One-line Result for the report header (deterministic)."""
     parts = _result_parts(case)
-    return " ".join(text for _kind, text, _issues in parts) if parts else "Run completed."
+    return " ".join(text.replace(_TAG, "") for _kind, text, _tag in parts) if parts else "Run completed."
 
 
-def _result_parts(case: CaseFile) -> list[tuple[str, str, list[dict[str, Any]] | None]]:
-    """The Result's phrases in order: (kind, text, the issues it counts; None for services or inventory)."""
+# Where a Result phrase takes its tag, when that is not right after its first words.
+_TAG = "\x00"
+
+
+def _result_parts(case: CaseFile) -> list[tuple[str, str, Any]]:
+    """The Result's phrases in order: (kind, text, how to tag it from a Newness; None for none)."""
     dp = list(_dataplane_by_name(case).values())
     codes = Counter(str(i.get("code") or "") for i in case.issues)
     quarantined_issues = [
@@ -2714,26 +2751,37 @@ def _result_parts(case: CaseFile) -> list[tuple[str, str, list[dict[str, Any]] |
     def coded(*codes: str) -> list[dict[str, Any]]:
         return [i for i in case.issues if isinstance(i, dict) and str(i.get("code") or "") in codes]
 
-    out: list[tuple[str, str, list[dict[str, Any]] | None]] = [("Services", part, None) for part in parts]
+    out: list[tuple[str, str, Any]] = [("Services", part, None) for part in parts]
     sessions_down = _bgp_sessions_down_text(case, limit=3)
     if sessions_down:
-        out.append(("BGP", sessions_down + ".", coded("session_down")))
+        out.append(("BGP", sessions_down + ".", _issue_tag(coded("session_down"))))
     for phrase, edges in _bgp_sessions_not_established(case):
-        out.append(("BGP", phrase + ".", [i for i in coded("configured_no_session")
-                                          if str(i.get("edge_id") or "") in edges]))
+        out.append(("BGP", phrase + ".", _issue_tag([i for i in coded("configured_no_session")
+                                                     if str(i.get("edge_id") or "") in edges])))
     adjacencies_down = _isis_adjacencies_down_text(case, limit=3)
     if adjacencies_down:
-        out.append(("IS-IS", adjacencies_down + ".", coded(*_ADJACENCY_DOWN_CODES)))
-    out.extend(("NSO connection", gap, quarantined_issues) for gap in collection_gaps)
+        out.append(("IS-IS", adjacencies_down + ".", _issue_tag(coded(*_ADJACENCY_DOWN_CODES))))
+    out.extend(("NSO connection", gap, _issue_tag(quarantined_issues)) for gap in collection_gaps)
+    from diagnostic_mas.nso_authentication import authentication_failures, names
+
+    refused = authentication_failures(case)
+    if refused:
+        devices = list(refused)
+        shown = (names(devices) if len(devices) <= 6
+                 else ", ".join(f"`{d}`" for d in devices[:6]) + f", and {len(devices) - 6} more")
+        reasons = "; ".join(sorted({reason for found in refused.values() for reason in found}))
+        out.append(("NSO connection", f"NSO failed to authenticate to {len(devices)} device"
+                    f"{'s' if len(devices) != 1 else ''}{_TAG} at least once this scan ({reasons}): {shown}.",
+                    _authentication_tag(devices)))
     for code, protocol in (("unknown_neighbor_address", "BGP"), ("unknown_neighbor_system_id", "IS-IS")):
         n = codes[code]
         if n:
             out.append(("Unmatched neighbors", f"{n} {protocol} neighbor{'s' if n != 1 else ''} "
-                        f"match{'es' if n == 1 else ''} no NSO device.", coded(code)))
+                        f"match{'es' if n == 1 else ''} no NSO device.", _issue_tag(coded(code))))
     outside_n = codes["outside_bgp_session_not_established"]
     if outside_n:
         out.append(("Outside BGP", f"{outside_n} outside BGP session{'s' if outside_n != 1 else ''} not established.",
-                    coded("outside_bgp_session_not_established")))
+                    _issue_tag(coded("outside_bgp_session_not_established"))))
     health_flags = [r for r in _device_rows(case) if _device_has_health_review(r)]
     if health_flags:
         out.append(("Inventory", "Device inventory/counter observations need classification "
@@ -2754,22 +2802,47 @@ def _issue_name(issue: dict[str, Any]) -> str:
     return f"`{devices[0]}`" if devices and issue.get("code") == "device_live_unreachable" else ""
 
 
-def _tagged(text: str, issues: list[dict[str, Any]], newness: Newness) -> str:
-    """``text`` with its tag after the count: ``1 IS-IS adjacency down (not new): …``."""
-    from diagnostic_mas.case_delta import issue_key
+def _issue_tag(issues: list[dict[str, Any]]):
+    """How to tag a phrase that counts ``issues``: ``(none new)``, ``(1 new: `a` ↔ `b`)``…"""
+    def tag_for(newness: Newness) -> str | None:
+        from diagnostic_mas.case_delta import issue_key
 
-    # One entry per thing the phrase counts, as the phrase counts them.
-    unique = {(_issue_name(issue) or issue_key(issue)): issue for issue in issues}
-    names = [name if name.startswith("`") else "" for name in unique]
-    label_text = newness_tag([newness.of_issue(issue) for issue in unique.values()], names)
+        # One entry per thing the phrase counts, as the phrase counts them.
+        unique = {(_issue_name(issue) or issue_key(issue)): issue for issue in issues}
+        if not unique:
+            return None
+        names = [name if name.startswith("`") else "" for name in unique]
+        return newness_tag([newness.of_issue(issue) for issue in unique.values()], names)
+    return tag_for
+
+
+def _authentication_tag(devices: list[str]):
+    """How to tag the devices NSO could not authenticate to; none when the previous scan's are not known."""
+    def tag_for(newness: Newness) -> str | None:
+        seen = [newness.authentication.get(device) for device in devices]
+        if any(s is None for s in seen):
+            return None
+        return newness_tag(seen, [f"`{device}`" for device in devices])
+    return tag_for
+
+
+def _tagged(text: str, label_text: str | None) -> str:
+    """``text`` with its tag at its mark, else after its count: ``1 IS-IS adjacency down (not new): …``."""
+    if label_text is None:
+        return text.replace(_TAG, "")
+    if _TAG in text:
+        return text.replace(_TAG, f" {label_text}")
     return re.sub(r"^[^:,.]*", lambda m: f"{m[0]} {label_text}", text, count=1)
 
 
 def _services_tagged(text: str, newness: Newness) -> str:
     """The final status counts, without their lead-in, and which services newly failed."""
+    from diagnostic_mas.open_faults import short_id
+
     text = text.removeprefix("Final service status: ")
     new = sorted(name for name, seen in newness.services.items() if seen.state == NEW)
-    shown = ", ".join(f"`{name}`" for name in new[:3]) + (f", and {len(new) - 3} more" if len(new) > 3 else "")
+    shown = (", ".join(f"`{short_id(name)}`" for name in new[:3])
+             + (f", and {len(new) - 3} more" if len(new) > 3 else ""))
     label_text = f"({len(new)} newly failed: {shown})" if new else "(none newly failed)"
     return text[:-1] + f" {label_text}." if text.endswith(".") else f"{text} {label_text}"
 
@@ -2779,13 +2852,13 @@ def format_result_section(case: CaseFile, newness: Newness | None) -> list[str]:
     says whether anything in it is new since the previous scan."""
     lines = ["**Result:**"]
     by_kind: dict[str, list[str]] = {}
-    for kind, text, issues in _result_parts(case):
+    for kind, text, tag_for in _result_parts(case):
         if newness is not None and kind == "Services" and text.startswith("Final service status: "):
             text = _services_tagged(text, newness)
         elif kind == "Services" and text.startswith("Final service status: "):
             text = text.removeprefix("Final service status: ")
-        elif newness is not None and issues:
-            text = _tagged(text, issues, newness)
+        else:
+            text = _tagged(text, tag_for(newness) if newness is not None and tag_for else None)
         by_kind.setdefault(kind, []).append(text)
     if not by_kind:
         return lines + ["- Run completed."]

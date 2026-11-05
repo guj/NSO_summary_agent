@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from diagnostic_mas.nso_authentication import authentication_failures
+
 # Issue statuses that still count as an unresolved problem.
 _PROBLEM_STATUSES = frozenset(
     {"open", "needs_human", "budget_exhausted", "escalated"}
@@ -1355,6 +1357,8 @@ def compute_case_delta(
         ],
         "status_changed_on_unchanged_checks": _status_changed_on_unchanged_checks(older, newer),
         "links_gaining_errors": _links_gaining_errors(older, newer),
+        # Devices the previous scan recorded NSO failing to authenticate to, to tell new ones apart.
+        "authentication_failed_before": sorted(authentication_failures(older)),
         "sessions_receiving_fewer_prefixes": _sessions_receiving_fewer_prefixes(older, newer),
         "routing_sessions_lost": _routing_sessions_lost(older, newer) + _outside_sessions_lost(older, newer),
         "routing_sessions_regained": _routing_sessions_regained(older, newer),

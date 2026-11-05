@@ -21,10 +21,12 @@ class Seen(NamedTuple):
 
 @dataclass(frozen=True)
 class Newness:
-    """The previous scan's view of this scan's problems: services by name, routing faults by edge."""
+    """The previous scan's view of this scan's problems: services by name, routing faults by edge,
+    devices NSO could not authenticate to by name."""
     services: Mapping[str, Seen] = field(default_factory=dict)
     routing: Mapping[str, Seen] = field(default_factory=dict)
     new_issue_keys: frozenset[str] = frozenset()
+    authentication: Mapping[str, Seen] = field(default_factory=dict)
 
     def of_service(self, name: str) -> Seen | None:
         return self.services.get(str(name))
@@ -75,9 +77,17 @@ def newness_for(case: Any, delta: dict[str, Any] | None) -> Newness | None:
         entry = history.get(routing_key(edge)) if edge else None
         if issue.get("code") in ROUTING_FAULT_CODES and isinstance(entry, dict):
             routing[edge] = _routing_seen(entry)
+    authentication = {}
+    if isinstance(delta.get("authentication_failed_before"), list):
+        from diagnostic_mas.nso_authentication import authentication_failures
+
+        before = set(delta["authentication_failed_before"])
+        authentication = {device: Seen(CARRIED) if device in before else Seen(NEW)
+                          for device in authentication_failures(case)}
     return Newness(services=services, routing=routing,
                    new_issue_keys=frozenset(issue_key(issue) for issue in delta.get("new_problems") or []
-                                            if isinstance(issue, dict)))
+                                            if isinstance(issue, dict)),
+                   authentication=authentication)
 
 
 def _day(seen: Seen) -> str:
@@ -114,7 +124,10 @@ def tag(seen: list[Seen], names: list[str], *, word: str = "new") -> str:
     unread = sum(1 for s in seen if s.state == UNREAD)
     if unread and unread == len(seen):
         return "(not read last scan)"
-    if new and all(new):
+    if new and len(new) == len(seen):
+        # Every one is new: the phrase itself names them.
+        parts = [f"all {word}" if len(seen) > 1 else word]
+    elif new and all(new):
         shown = ", ".join(new[:3]) + (f", and {len(new) - 3} more" if len(new) > 3 else "")
         parts = [f"{len(new)} {word}: {shown}"]
     elif new:

@@ -199,3 +199,12 @@ def test_the_notification_reads_the_service_counts_from_the_result_list():
     digest = notification_digest(report, "run").splitlines()
 
     assert digest[3] == "**Result:** 1853 OpUp, 8 Down, 0 Degraded, 0 Unknown."
+
+
+def test_the_services_line_shortens_the_ids_of_newly_failed_services():
+    case = _faulted_case({"net1-9136dfeb-286d-4c3f-bf2f-f86c3b550865": ("l2sts", ["star-data-sw"])})
+
+    line = _line(format_result_section(case, Newness(services={
+        "net1-9136dfeb-286d-4c3f-bf2f-f86c3b550865": Seen(NEW)})), "Services")
+
+    assert line.endswith("(1 newly failed: `net1-9136dfeb…`).")

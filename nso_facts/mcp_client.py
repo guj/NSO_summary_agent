@@ -333,6 +333,15 @@ def is_strong_device_unreachability(message: str) -> bool:
     return "unreachable" in lowered
 
 
+_NSO_AUTH_FAILED = re.compile(r"Failed to authenticate towards device ([A-Za-z0-9_.-]+): ([^;\n\"]+)")
+
+
+def nso_authentication_failures(message: str) -> list[tuple[str, str]]:
+    """(device, NSO's reason) each time NSO says it could not authenticate to a device, such as
+    ``SSH host key mismatch``: NSO reached the device and refused or was refused the login."""
+    return [(match[1], match[2].strip()) for match in _NSO_AUTH_FAILED.finditer(message or "")]
+
+
 def nso_could_not_connect(message: str) -> bool:
     """NSO's own attempt to reach the device failed, in NSO's words as the MCP server passes them on.
 

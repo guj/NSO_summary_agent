@@ -33,6 +33,16 @@ it was seen, **Carried over** (seen last scan, with no dated record) or **Not re
 and within each kind of action the new items come first. **Changes since previous run** has the
 details. Without an earlier scan, as on the first saved one, nothing is tagged.
 
+### What does "NSO failed to authenticate" mean?
+
+NSO reached the device but the login failed, in NSO's own words such as `SSH host key mismatch`:
+the key the device presented is not the one NSO stores. The Result names those devices, their
+blocks say which reads were not read, and a follow-up item asks a person to verify the host keys
+out-of-band. A key changed by an upgrade is then updated in NSO by a person
+(`devices device <name> ssh fetch-host-keys`); an unexplained change is a security concern. The
+scan changes nothing. A read that failed this way and then answered on a later try counts the
+answer: the device's links and counts come from it, and the failure is still named in the Result.
+
 ---
 
 ## Devices
