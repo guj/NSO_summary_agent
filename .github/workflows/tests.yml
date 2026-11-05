@@ -11,11 +11,17 @@ jobs:
   pytest:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      # One version failing does not cancel the other: both results are worth seeing.
+      fail-fast: false
+      matrix:
+        # The lowest Python pyproject.toml accepts, and the Docker image's.
+        python-version: ["3.12", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.14"   # the Docker image's Python
+          python-version: ${{ matrix.python-version }}
       # The versions the Docker image installs, plus pytest from the dev extra.
       # The suite is offline: it needs no .env, NSO, LLM endpoint or MCP server.
       - run: python -m pip install -c deploy/agent/constraints.txt -e '.[dev]'
