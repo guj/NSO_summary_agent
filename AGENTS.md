@@ -35,6 +35,7 @@ These instructions guide coding assistants across this repository. They do not r
 - For validation, avoid publishing Slack/email or updating production state unless requested. Dry-run and `--check-connection` still contact live systems and may invoke a paid LLM; neither is an offline test.
 - Keep reports concise and put actionable service faults before collection gaps and inventory observations. Per-device interface and hardware detail belongs in the HTML report's collapsed device blocks, not in the terminal or Slack text; preserve existing CLI behavior unless the task changes it.
 - Budgets are ceilings, not targets. Distinguish per-service limits from aggregate calls and MCP time from LLM time; do not recommend larger budgets for a timeout or an unavailable evidence source.
+- Add a line under **Unreleased** in `CHANGELOG.md` for a change that a report reader or scan runner would notice: what a status, count or report phrase means (under Report meaning), an option, a saved file, or delivery. Code-only changes stay out.
 
 ## Validation
 - Use the existing Python environment (project requires Python 3.12+). Run focused offline tests with `python -m pytest <relevant test paths>`; inspect fixtures before assuming a test is offline.

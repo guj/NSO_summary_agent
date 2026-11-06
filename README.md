@@ -16,6 +16,7 @@ Anthropic-only bases (for example `…/anthropic`) are not supported.
 
 **Quick start:** follow [docs/DIAGNOSTIC_RUNNER.md](docs/DIAGNOSTIC_RUNNER.md) to install, configure, and run `nso-diagnostic-run`.
 On a machine with nothing but Python, start with its [step-by-step section](docs/DIAGNOSTIC_RUNNER.md#new-machine-step-by-step).
+What changed between versions, including what the report's terms mean: [CHANGELOG.md](CHANGELOG.md).
 
 ## Prerequisites
 
