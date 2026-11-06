@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 from diagnostic_mas.case import CaseFile
+from diagnostic_mas.case_delta import CaseDelta
 
 _MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
@@ -173,7 +174,7 @@ def _listed(items: list[str], limit: int) -> str:
     return f"{len(items)} — " + ", ".join(items[:limit]) + more
 
 
-def digest_changes(delta: dict[str, Any] | None, previous_run_id: str | None,
+def digest_changes(delta: CaseDelta | None, previous_run_id: str | None,
                    groups: list[dict[str, Any]], *, limit: int = 5) -> list[str]:
     """The lines that lead the notification: changes since the previous scan, then what is still open."""
     from diagnostic_mas.case_delta import _interface_lines, _routing_session_line, _status_change_line

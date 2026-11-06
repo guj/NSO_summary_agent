@@ -326,6 +326,18 @@ async def test_a_dry_run_that_saved_mcp_results_says_where_they_are(tmp_path, mo
 
 
 @pytest.mark.asyncio
+async def test_the_report_gets_a_delta_with_exactly_the_keys_written_down(tmp_path, monkeypatch):
+    import diagnostic_mas.case_delta as case_delta
+
+    phases = Phases(monkeypatch)
+    monkeypatch.setattr(case_delta, "load_previous_case", lambda state_dir: ({"evidence": [], "issues": []}, "r0"))
+
+    await _scan(tmp_path)
+
+    assert set(phases.of("render_report")["case_delta"]) == set(case_delta.CaseDelta.__annotations__)
+
+
+@pytest.mark.asyncio
 async def test_the_changes_section_of_a_service_focused_report_lists_only_its_faults(tmp_path, monkeypatch):
     import diagnostic_mas.case_delta as case_delta
 

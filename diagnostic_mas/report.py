@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from diagnostic_mas.case import CaseFile
+from diagnostic_mas.case_delta import CaseDelta
 from diagnostic_mas.roles.summary import scrub_internal_ids
 
 
@@ -174,7 +175,7 @@ def render_report(
     dry_run: bool = False,
     reporting_notes: list[str] | None = None,
     llm_model: str | None = None,
-    case_delta: dict | None = None,
+    case_delta: CaseDelta | None = None,
     previous_run_id: str | None = None,
     include_changes_section: bool = True,
 ) -> str:

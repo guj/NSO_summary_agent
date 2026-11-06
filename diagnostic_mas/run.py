@@ -33,6 +33,7 @@ from agent.llm_usage import (  # noqa: E402
 )
 from agent.publish import mask_nso_address, publish_all  # noqa: E402
 from diagnostic_mas.case import Budget, CaseFile  # noqa: E402
+from diagnostic_mas.case_delta import CaseDelta  # noqa: E402
 from diagnostic_mas.coordinator import (  # noqa: E402
     run_autonomous_loop,
     run_mandatory_spines,
@@ -645,7 +646,7 @@ def _may_drill(case: CaseFile, plan: _ScanPlan) -> bool:
 
 def _compare_with_previous(
     case: CaseFile, settings, plan: _ScanPlan,
-) -> tuple[CaseFile, dict[str, Any] | None, str | None, list[dict[str, Any]]]:
+) -> tuple[CaseFile, CaseDelta | None, str | None, list[dict[str, Any]]]:
     """The case the report shows, the changes since the last published scan, its run id, and the open faults.
 
     Compared to the last published case when there is one, even on a dry run.
@@ -690,8 +691,8 @@ def _compare_with_previous(
 
 
 def _scoped_to_services(
-    case: CaseFile, case_delta: dict[str, Any] | None, plan: _ScanPlan,
-) -> tuple[CaseFile, dict[str, Any] | None]:
+    case: CaseFile, case_delta: CaseDelta | None, plan: _ScanPlan,
+) -> tuple[CaseFile, CaseDelta | None]:
     """For a service focus, the report lists only the focused services' last-known faults.
 
     The case itself keeps the full fault ledger for persistence.
@@ -713,7 +714,7 @@ def _scoped_to_services(
 
 async def _render(
     args: argparse.Namespace, settings, case: CaseFile, report_case: CaseFile, plan: _ScanPlan,
-    *, case_delta: dict[str, Any] | None, previous_run_id: str | None,
+    *, case_delta: CaseDelta | None, previous_run_id: str | None,
 ) -> str:
     """The report, with the LLM's Summary on top when it ran, printed and returned with NSO's address masked."""
     narrative, reporting_notes = await _summary(args, settings, case, report_case, plan,
@@ -741,7 +742,7 @@ async def _render(
 
 async def _summary(
     args: argparse.Namespace, settings, case: CaseFile, report_case: CaseFile, plan: _ScanPlan,
-    *, case_delta: dict[str, Any] | None, previous_run_id: str | None,
+    *, case_delta: CaseDelta | None, previous_run_id: str | None,
 ) -> tuple[str, list[str]]:
     """The LLM's Summary ("" without one) and the notes the report carries about it.
 
@@ -778,7 +779,7 @@ async def _summary(
 
 def _save_and_deliver(
     args: argparse.Namespace, settings, case: CaseFile, plan: _ScanPlan, report: str,
-    *, case_delta: dict[str, Any] | None, previous_run_id: str | None, open_faults: list[dict[str, Any]],
+    *, case_delta: CaseDelta | None, previous_run_id: str | None, open_faults: list[dict[str, Any]],
     report_case: CaseFile | None = None, matched_devices: list[str] | None = None,
 ) -> int:
     """Save the scan with its faults.json, send its notice and push its metrics; 1 when a channel could not deliver.
@@ -851,7 +852,7 @@ def _save_and_deliver(
 
 
 def _push_metrics(
-    settings, case: CaseFile, plan: _ScanPlan, *, report_url: str | None, case_delta: dict[str, Any] | None,
+    settings, case: CaseFile, plan: _ScanPlan, *, report_url: str | None, case_delta: CaseDelta | None,
 ) -> None:
     snapshot = metrics_snapshot_from_case(
         case, run_id=plan.run_id, report_url=report_url,

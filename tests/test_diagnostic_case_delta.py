@@ -501,6 +501,14 @@ def test_last_known_fault_is_kept_when_a_narrower_scan_leaves_the_service_out():
     assert "not rechecked" in history[0]["verification"]
 
 
+def test_the_comparison_returns_every_key_written_down_but_the_two_the_scan_adds():
+    from diagnostic_mas.case_delta import CaseDelta
+
+    older, newer = _faulty_then_gone()
+
+    assert set(compute_case_delta(older, newer)) == set(CaseDelta.__annotations__) - {"item_history", "open_faults"}
+
+
 def test_an_open_fault_on_a_service_a_full_scan_no_longer_lists_is_listed_with_what_it_was():
     older, newer = _faulty_then_gone()
     older["run_id"] = "r1"

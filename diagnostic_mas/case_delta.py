@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NotRequired, TypedDict
 
 from diagnostic_mas.case import Issue, normalize_issue
 from diagnostic_mas.nso_authentication import authentication_failures
@@ -1119,9 +1119,58 @@ class _ScanPair:
     gone: dict[str, str]
 
 
+class CaseDelta(TypedDict):
+    """What changed between the previous saved scan and this one: every key, written down once.
+
+    ``compute_case_delta`` sets all but the last two, which the scan adds after it. A list is empty,
+    never missing, when nothing changed; hand-made deltas, as in tests, may still leave keys out.
+    """
+    # The issue lists: problems new this scan, read clear, still open, and gone this scan without
+    # being confirmed clear (the last is read by nothing).
+    new_problems: list[Issue]
+    recovered: list[Issue]
+    persistent: list[Issue]
+    out_of_scope: list[Issue]
+    # Previous services whose coverage label changed, "no longer present" included.
+    coverage_changes: list[dict[str, str]]
+    # Services faulty now that were not before: a detection, not a proven regression.
+    newly_failed_services: list[dict[str, str]]
+    # The service-fault ledger, carried through scans that did not recheck a fault.
+    last_known_service_faults: list[dict[str, Any]]
+    # Devices unreadable last scan that this scan read live.
+    recovered_devices: list[str]
+    # Coverage lost, investigations that newly did not finish, and devices newly unreadable.
+    newly_missing_evidence: list[dict[str, str]]
+    # Ledger faults this scan ended: the service now passes, or a full scan no longer lists it.
+    service_faults_cleared: list[dict[str, str]]
+    service_faults_no_longer_present: list[dict[str, str]]
+    # Services investigated in both scans whose final status changed while the fixed check read the same.
+    status_changed_on_unchanged_checks: list[dict[str, str]]
+    # Leads on working links and sessions; no service status rests on them.
+    links_gaining_errors: list[dict[str, Any]]
+    sessions_receiving_fewer_prefixes: list[dict[str, Any]]
+    # Devices the previous scan recorded NSO failing to authenticate to, to tell new ones apart.
+    authentication_failed_before: list[str]
+    # BGP sessions and IS-IS adjacencies up last scan and not now (outside BGP included), and the reverse.
+    routing_sessions_lost: list[dict[str, Any]]
+    routing_sessions_regained: list[dict[str, str]]
+    # IS-IS adjacencies up in both scans that last changed state after the previous scan began.
+    adjacencies_changed_between_scans: list[dict[str, str]]
+    # Interfaces up last scan that this scan recorded down.
+    interfaces_lost: list[dict[str, Any]]
+    # Services a full scan no longer lists: deleted by their owners, neither a fault nor a gap.
+    services_no_longer_present: list[dict[str, str]]
+    # When the two scans focused on different devices, or only one recorded service coverage.
+    notes: list[str]
+    # Added by the scan: how long routing faults, error links and IS-IS changes have been seen,
+    # and the open faults grouped by the port or device that explains them.
+    item_history: NotRequired[dict[str, dict[str, Any]]]
+    open_faults: NotRequired[list[dict[str, Any]]]
+
+
 def compute_case_delta(
     older: dict[str, Any], newer: dict[str, Any]
-) -> dict[str, Any]:
+) -> CaseDelta:
     """Diff two case dicts into operational change buckets.
 
     Buckets operators care about most:
@@ -1373,7 +1422,7 @@ def _scope_notes(pair: _ScanPair) -> list[str]:
     return notes
 
 
-def delta_has_operational_changes(delta: dict[str, Any]) -> bool:
+def delta_has_operational_changes(delta: CaseDelta) -> bool:
     """True when any operator-priority bucket is non-empty."""
     if delta.get("last_known_service_faults"):
         return True
@@ -1405,7 +1454,7 @@ def delta_has_operational_changes(delta: dict[str, Any]) -> bool:
 
 
 def format_changes_since_previous(
-    delta: dict[str, Any] | None,
+    delta: CaseDelta | None,
     *,
     previous_run_id: str | None = None,
     persistent_limit: int = 8,
@@ -1610,7 +1659,7 @@ def format_changes_since_previous(
     return lines
 
 
-def compact_delta_for_llm(delta: dict[str, Any] | None) -> dict[str, Any] | None:
+def compact_delta_for_llm(delta: CaseDelta | None) -> dict[str, Any] | None:
     """Small delta payload for the summary LLM (no full issue dumps)."""
     from diagnostic_mas.item_history import routing_fault_clause
 

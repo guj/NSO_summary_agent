@@ -9,6 +9,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
+from diagnostic_mas.case_delta import CaseDelta
+
 NEW, CARRIED, UNREAD = "new", "carried", "unread"
 
 
@@ -57,7 +59,7 @@ def _routing_seen(entry: dict[str, Any]) -> Seen:
     return Seen(CARRIED, entry.get("first_seen_run_id"), bool(entry.get("first_seen_exact")))
 
 
-def newness_for(case: Any, delta: dict[str, Any] | None) -> Newness | None:
+def newness_for(case: Any, delta: CaseDelta | None) -> Newness | None:
     """This scan's problems against the previous scan; None when there was none to compare with."""
     if delta is None:
         return None

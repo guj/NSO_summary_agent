@@ -14,7 +14,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from diagnostic_mas.case import CaseFile
-from diagnostic_mas.case_delta import full_service_scope, is_problem
+from diagnostic_mas.case_delta import CaseDelta, full_service_scope, is_problem
 from diagnostic_mas import newness as scan_newness
 from diagnostic_mas.item_history import CLEAR, ROUTING_FAULT_CODES, SEEN, UNREAD, routing_lead
 from diagnostic_mas.newness import Newness, Seen, newness_for
@@ -48,7 +48,7 @@ def scan_scope(
 
 
 def scan_faults(
-    case: CaseFile, delta: dict[str, Any] | None, *, run_id: str, previous_run_id: str | None,
+    case: CaseFile, delta: CaseDelta | None, *, run_id: str, previous_run_id: str | None,
     scope: dict[str, Any], report_url: str | None = None,
 ) -> dict[str, Any]:
     """The scan's faults against the previous saved scan; ``delta`` is None when there was none."""
@@ -150,11 +150,11 @@ def _service_row(row: dict[str, Any]) -> dict[str, Any]:
             "last_seen_run_id": None if last_seen in (None, "", "unknown") else last_seen}
 
 
-def _cleared_services(delta: dict[str, Any] | None) -> list[dict[str, Any]]:
+def _cleared_services(delta: CaseDelta | None) -> list[dict[str, Any]]:
     return [_service_row(row) for row in (delta or {}).get("service_faults_cleared") or [] if row.get("service")]
 
 
-def _removed_services(delta: dict[str, Any] | None) -> list[dict[str, Any]]:
+def _removed_services(delta: CaseDelta | None) -> list[dict[str, Any]]:
     """Service faults ended because a full scan no longer finds the service; empty after a partial scan."""
     return [_service_row(row) for row in (delta or {}).get("service_faults_no_longer_present") or []
             if row.get("service")]
