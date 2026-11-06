@@ -15,6 +15,8 @@ from nso_facts.topology.graph import bgp_edge_id, isis_edge_id
 ISIS = isis_edge_id("salt-data-sw", "HundredGigE0/0/0/21", "seat-data-sw", "HundredGigE0/0/0/23.3000")
 BGP = bgp_edge_id("wash-data-sw", "10.133.0.9", "cien-data-sw", "10.148.0.1")
 OUTSIDE = "bgp-outside:star-data-sw:192.0.2.9"
+# A scan of everything; what a scope says is tested on its own below.
+SCOPE = {"kind": "full", "checked": ["service", "isis", "bgp", "outside_bgp"]}
 
 
 def _service(name, status, service_type="l2sts"):
@@ -56,7 +58,7 @@ def test_open_services_are_new_or_still_open_and_unknown_ones_are_only_counted()
                  "first_observed_run_id": "20261027T000000Z", "first_observed_exact": False}])
     delta = {"newly_failed_services": [{"service": "s-new", "status": "down"}]}
 
-    out = scan_faults(case, delta, run_id="R2", previous_run_id="R1")
+    out = scan_faults(case, delta, run_id="R2", previous_run_id="R1", scope=SCOPE)
 
     assert out["new"] == [{"key": "service:s-new", "kind": "service", "service": "s-new", "service_type": "l2sts",
                            "status": "down", "previous_scan": "not open",
@@ -75,7 +77,7 @@ def test_routing_faults_name_their_ends_and_say_what_the_previous_scan_saw():
         history={f"routing|{ISIS}": _history("SS", exact=False), f"routing|{BGP}": _history("CS"),
                  f"routing|{OUTSIDE}": _history("-S")})
 
-    out = scan_faults(case, {}, run_id="R2", previous_run_id="R1")
+    out = scan_faults(case, {}, run_id="R2", previous_run_id="R1", scope=SCOPE)
 
     [new] = out["new"]
     assert new == {"key": BGP, "kind": "bgp", "status": "not established", "code": "configured_no_session",
@@ -107,7 +109,7 @@ def test_only_a_fault_read_clear_after_being_open_is_recovered():
     delta = {"service_faults_cleared": [{"service": "s-fixed", "service_type": "l2sts", "was": "down",
                                          "last_observed_run_id": "R1"}]}
 
-    out = scan_faults(case, delta, run_id="R2", previous_run_id="R1")
+    out = scan_faults(case, delta, run_id="R2", previous_run_id="R1", scope=SCOPE)
 
     recovered = _by_key(out["recovered"])
     assert set(recovered) == {ISIS, BGP, "service:s-fixed"}
@@ -123,7 +125,7 @@ def test_without_a_previous_scan_every_open_fault_is_new():
     case = _case(services=[_service("s-down", "down")], issues=[_routing_issue(ISIS, "configured_no_adjacency")],
                  history={f"routing|{ISIS}": _history("S")})
 
-    out = scan_faults(case, None, run_id="R1", previous_run_id=None)
+    out = scan_faults(case, None, run_id="R1", previous_run_id=None, scope=SCOPE)
 
     assert out["previous_run_id"] is None
     assert {(row["key"], row["previous_scan"], row["first_seen_exact"]) for row in out["new"]} == {
@@ -132,16 +134,15 @@ def test_without_a_previous_scan_every_open_fault_is_new():
 
 
 def test_the_scan_facts_say_what_was_compared_and_what_was_scanned():
-    full = scan_faults(_case(), {}, run_id="R2", previous_run_id="R1", report_url="https://reports.invalid/R2")
-    focused = scan_faults(_case(), {}, run_id="R2", previous_run_id="R1", service_type="l2sts")
+    linked = scan_faults(_case(), {}, run_id="R2", previous_run_id="R1", scope=SCOPE,
+                         report_url="https://reports.invalid/R2")
+    unlinked = scan_faults(_case(), {}, run_id="R2", previous_run_id="R1", scope=SCOPE)
 
-    assert {k: full[k] for k in ("format_version", "run_id", "previous_run_id", "scope", "report_url")} == {
-        "format_version": FORMAT_VERSION, "run_id": "R2", "previous_run_id": "R1",
-        "scope": {"kind": "full", "service_type": None, "service_id": None},
+    assert {k: linked[k] for k in ("format_version", "run_id", "previous_run_id", "scope", "report_url")} == {
+        "format_version": FORMAT_VERSION, "run_id": "R2", "previous_run_id": "R1", "scope": SCOPE,
         "report_url": "https://reports.invalid/R2"}
-    assert focused["scope"] == {"kind": "services", "service_type": "l2sts", "service_id": None}
-    assert focused["report_url"] is None
-    json.dumps(full)
+    assert unlinked["report_url"] is None
+    json.dumps(linked)
 
 
 def test_a_saved_scan_writes_faults_json_and_latest_json_points_at_it(tmp_path):
@@ -168,11 +169,11 @@ class _Session:
         return False
 
 
-async def _scan(*, dry_run):
-    args = argparse.Namespace(
-        skip_llm=True, dry_run=dry_run, publish=not dry_run, isis_only=False, bgp_only=False, device_only=False,
-        service_only=False, skip_service=True, devices="", service_type="", service_id="",
-        max_deep_checks=0, max_handoffs=0, skip_metrics=True)
+async def _scan(*, dry_run, **flags):
+    args = argparse.Namespace(**{
+        "skip_llm": True, "dry_run": dry_run, "publish": not dry_run, "isis_only": False, "bgp_only": False,
+        "device_only": False, "service_only": False, "skip_service": True, "devices": "", "service_type": "",
+        "service_id": "", "max_deep_checks": 0, "max_handoffs": 0, "skip_metrics": True, **flags})
     stubs = {"mcp_session": MagicMock(return_value=_Session()),
              "call_mcp": AsyncMock(return_value={"status": "success", "data": {"device": []}}),
              "parse_device_names": MagicMock(return_value=["pe1"]),
@@ -192,6 +193,55 @@ async def test_a_published_scan_saves_its_faults_json(nso_env, llm_requests, tmp
     [path] = tmp_path.rglob("faults.json")
     faults = json.loads(path.read_text())
     assert faults["run_id"] == path.parent.name and faults["format_version"] == FORMAT_VERSION
+
+
+def _saved_scope(tmp_path):
+    [path] = tmp_path.rglob("faults.json")
+    return json.loads(path.read_text())["scope"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("flags", "kind", "checked"), [
+    ({"skip_service": False}, "full", ["service", "isis", "bgp", "outside_bgp"]),
+    ({"skip_service": True}, "partial", ["isis", "bgp", "outside_bgp"]),
+    ({"skip_service": False, "isis_only": True}, "partial", ["isis"]),
+    ({"skip_service": False, "bgp_only": True}, "partial", ["bgp", "outside_bgp"]),
+])
+async def test_faults_json_says_whether_the_scan_was_full_and_which_fault_kinds_it_checked(
+        nso_env, llm_requests, tmp_path, flags, kind, checked):
+    assert await _scan(dry_run=False, **flags) == 0
+
+    scope = _saved_scope(tmp_path)
+    assert (scope["kind"], scope["checked"], scope["devices"]) == (kind, checked, None)
+
+
+@pytest.mark.asyncio
+async def test_a_device_scan_names_the_devices_it_matched_not_the_text_typed(nso_env, llm_requests, tmp_path):
+    assert await _scan(dry_run=False, skip_service=False, device_only=True, devices="pe") == 0
+
+    scope = _saved_scope(tmp_path)
+    assert (scope["kind"], scope["devices"], scope["checked"]) == ("partial", ["pe1"], [])
+
+
+@pytest.mark.asyncio
+async def test_faults_json_lists_the_service_types_every_scan_skips(nso_env, llm_requests, tmp_path, monkeypatch):
+    monkeypatch.setenv("IGNORE_SERVICE_TYPES", "port-mirror,idipa")
+
+    assert await _scan(dry_run=False, skip_service=False) == 0
+
+    assert _saved_scope(tmp_path)["ignored_service_types"] == ["idipa", "port-mirror"]
+
+
+def test_a_service_scan_is_partial_and_checks_only_services():
+    from diagnostic_mas.scan_faults import scan_scope
+
+    case = _case()
+    case.run_configuration = {"Device filter": "All", "Service type filter": "l2sts",
+                              "Service ID filter": "All", "Scope flags": "Default"}
+
+    assert scan_scope(case, run_service=True, run_isis=False, run_bgp=False, service_type="l2sts") == {
+        "kind": "partial", "devices": None, "checked": ["service"], "service_type": "l2sts",
+        "service_id": None, "ignored_service_types": []}
 
 
 @pytest.mark.asyncio
@@ -220,7 +270,7 @@ def test_an_interface_the_scan_could_not_name_is_null_not_a_placeholder():
     case = _case(issues=[_routing_issue(one_sided, "unidirectional_adjacency")],
                  history={f"routing|{one_sided}": _history("SS")})
 
-    [row] = scan_faults(case, {}, run_id="R2", previous_run_id="R1")["still_open"]
+    [row] = scan_faults(case, {}, run_id="R2", previous_run_id="R1", scope=SCOPE)["still_open"]
 
     assert row["key"] == one_sided
     assert row["ends"] == [{"device": "salt-data-sw", "interface": None},

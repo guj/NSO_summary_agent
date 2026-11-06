@@ -18,6 +18,9 @@ read-only evidence; no device configuration is changed.
 
 ## Modules and pass criteria
 
+One real service per type, from NSO's intent to its final status, is worked through in
+[docs/SERVICE_EXAMPLES.md](../../docs/SERVICE_EXAMPLES.md).
+
 - `common.py`: evaluates collected sync evidence; no duplicate sync queries.
 - `l2ptp.py`: every intended AC-matched xconnect UP, no contradictory segment state.
   Then, for a circuit between two devices, the service label is followed in each

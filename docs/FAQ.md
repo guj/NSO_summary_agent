@@ -284,6 +284,8 @@ Each service is counted once, and the four status columns add up to Total.
 In the HTML report, expand a count to see what produced it, for example a basic operational pass
 or an LLM conclusion. The "basic operational checks" lines under the table report the deterministic
 checks for each service type; they are separate from LLM dataplane investigation.
+[SERVICE_EXAMPLES.md](SERVICE_EXAMPLES.md) follows one real service of each type from NSO's intent
+to its final status.
 
 ### Which command did a Collector detail line come from?
 
@@ -401,5 +403,6 @@ signal (`nso_scan_last_attempt_success` 0) and leaves the last good scan's value
 ## Related docs
 
 - [Diagnostic runner guide](DIAGNOSTIC_RUNNER.md) — install, run, and read the report
+- [Service examples](SERVICE_EXAMPLES.md) — one real service per type, from intent to final status
 - [Topology design](../nso_facts/topology/docs/DESIGN.md) — design notes for the topology facts layer
 - [README.md](../README.md) — setup, environment variables, delivery and scheduling

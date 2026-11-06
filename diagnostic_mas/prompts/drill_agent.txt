@@ -34,7 +34,9 @@ Workflow (Claude-like):
    endpoints' l2vpn xconnect). Do NOT evaluate after the first call of a planned
    pair — wait for the whole batch, then decide.
 5. Before conclude_investigation: double-check that cause, headline and fix_suggestion are
-   supported by specific Evidence fields or tool results you just received.
+   supported by specific Evidence fields or tool results you just received. Later
+   scans may show the conclusion again under its date: name the device and command
+   behind a reading, never "this scan" or "this run".
 6. Stop as soon as you can name a grounded cause (with a previous_scan_finding,
    one that settles what it left open). Prefer a short investigation.
 

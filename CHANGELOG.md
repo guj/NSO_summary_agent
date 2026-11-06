@@ -6,7 +6,18 @@ status, count or phrase in the report means, so read it first.
 
 ## Unreleased
 
-Nothing yet.
+### Added
+
+- [docs/SERVICE_EXAMPLES.md](docs/SERVICE_EXAMPLES.md): one real service per type (l2bridge, l2sts,
+  l3rt, l2ptp) followed from NSO's intent through the checks to its final status.
+
+### Changed
+
+- `faults.json` is format version 2. Its `scope` says what the scan examined: `kind` is `full` or
+  `partial` (it was `full` or `services`, and a scan narrowed by `--devices` or a layer option was
+  wrongly `full`), with new `checked`, `devices` and `ignored_service_types` fields
+  ([docs/DIAGNOSTIC_RUNNER.md](docs/DIAGNOSTIC_RUNNER.md), "faults.json: the scan's faults for a
+  script").
 
 ## 0.2.0 (November 2026)
 

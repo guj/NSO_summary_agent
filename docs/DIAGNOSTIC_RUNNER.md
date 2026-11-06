@@ -540,15 +540,29 @@ stay in the report.
 
 | Field | Meaning |
 |---|---|
-| `format_version` | `1`. Raised when a field changes meaning or is removed; new fields can appear without it. |
+| `format_version` | `2`. Files written before 6 November 2026 are `1`, whose `scope` had only `kind` `full` or `services`. Raised when a field changes meaning or is removed; new fields can appear without it. |
 | `run_id`, `previous_run_id` | This scan, and the saved scan it was compared with (`null` when there was none). |
-| `scope` | `kind` is `full`, or `services` for a `--service-type`/`--service-id` scan, which lists only those services; `service_type` and `service_id` as given. |
+| `scope` | What the scan examined; see below. |
 | `report_url` | The HTML report when `DIAGNOSTIC_REPORT_BASE_URL` is set, otherwise `null`. |
 | `counts.services` | The final service status totals: `up`, `down`, `degraded`, `unknown`. |
 | `new` | Faults open now that the previous scan did not have open; every open fault when there was no previous scan. |
 | `still_open` | Faults open now that the previous scan had open, could not read, or did not record. |
 | `recovered` | Faults open when last read that this scan read clear. |
 | `not_rechecked` | Faults open when last read that this scan did not read. |
+
+`scope` says what the scan examined:
+
+- `kind`: `full` for a scan of every device and service, or `partial` when an option narrowed it
+  (`--devices`, `--service-type`, `--service-id`, `--service-only`, `--skip-service`,
+  `--isis-only`, `--bgp-only` or `--device-only`).
+- `checked`: the entry kinds the scan read, from `service`, `isis`, `bgp` and `outside_bgp`.
+  `--skip-service` leaves out `service`, `--isis-only` keeps only `isis`, `--bgp-only` keeps `bgp`
+  and `outside_bgp`, a service scan keeps only `service`, and `--device-only` reads none of them.
+- `devices`: the device names `--devices` matched (it matches part of a name), otherwise `null`.
+  IS-IS and BGP also read those devices' direct neighbours; each routing entry's `ends` names its
+  devices.
+- `service_type` and `service_id` as given, otherwise `null`.
+- `ignored_service_types`: the types every scan skips (`IGNORE_SERVICE_TYPES`), even a full one.
 
 Every entry has:
 
@@ -578,8 +592,9 @@ A ticketing script would:
 1. Open a ticket for each `new` key that has none.
 2. Keep the ticket of each `still_open` key, opening one if it has none.
 3. Close the ticket of each `recovered` key.
-4. Leave every other ticket alone. A fault in `not_rechecked`, or in no list (such as one outside a
-   `--service-type` scan's scope), was not looked at, which is not recovery.
+4. Leave every other ticket alone. A fault in `not_rechecked`, or in no list after a `partial`
+   scan (such as one outside a `--service-type` scan's scope), was not looked at, which is not
+   recovery.
 
 An entry from a saved scan; `salt-data-sw` does not list this adjacency, so its interface is `null`:
 

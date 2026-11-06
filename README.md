@@ -438,6 +438,9 @@ when scans stop".
 
 ## Service health status
 
+For one real service of each type followed from NSO's intent to its final status, see
+[docs/SERVICE_EXAMPLES.md](docs/SERVICE_EXAMPLES.md).
+
 Each service **instance** has a sync-layer **system status** (`up` / `degraded` /
 `unknown`) and an optional **dataplane** status after dig. Overall `status` is
 the worse of the two (incomplete digs do **not** demote — see Diagnostic MAS

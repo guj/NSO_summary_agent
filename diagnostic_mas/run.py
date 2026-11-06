@@ -458,7 +458,8 @@ async def _run_after_accounting(
     report = await _render(args, settings, case, report_case, plan,
                            case_delta=case_delta, previous_run_id=previous_run_id)
     return _save_and_deliver(args, settings, case, plan, report, report_case=report_case,
-                             case_delta=case_delta, previous_run_id=previous_run_id, open_faults=open_faults)
+                             case_delta=case_delta, previous_run_id=previous_run_id, open_faults=open_faults,
+                             matched_devices=focus)
 
 
 async def _choose_devices(
@@ -778,7 +779,7 @@ async def _summary(
 def _save_and_deliver(
     args: argparse.Namespace, settings, case: CaseFile, plan: _ScanPlan, report: str,
     *, case_delta: dict[str, Any] | None, previous_run_id: str | None, open_faults: list[dict[str, Any]],
-    report_case: CaseFile | None = None,
+    report_case: CaseFile | None = None, matched_devices: list[str] | None = None,
 ) -> int:
     """Save the scan with its faults.json, send its notice and push its metrics; 1 when a channel could not deliver.
 
@@ -798,7 +799,7 @@ def _save_and_deliver(
 
     from diagnostic_mas.html_report import notification_digest, report_notice
     from diagnostic_mas.open_faults import digest_changes
-    from diagnostic_mas.scan_faults import scan_faults
+    from diagnostic_mas.scan_faults import scan_faults, scan_scope
     from diagnostic_mas.state_paths import run_folder
 
     state_dir = diagnostic_mas_state_dir(settings)
@@ -811,8 +812,11 @@ def _save_and_deliver(
     # The faults the report shows, for a script to read: a service focus lists only its services.
     # An extra: when it cannot be built, the scan and its report are still saved.
     try:
+        scope = scan_scope(case, run_service=plan.run_service, run_isis=plan.run_isis, run_bgp=plan.run_bgp,
+                           devices=matched_devices or (), service_type=plan.service_type,
+                           service_id=plan.service_id, ignored_service_types=settings.ignore_service_types)
         faults = scan_faults(report_case or case, case_delta, run_id=plan.run_id, previous_run_id=previous_run_id,
-                             service_type=plan.service_type, service_id=plan.service_id, report_url=report_url)
+                             scope=scope, report_url=report_url)
     except Exception as exc:  # noqa: BLE001
         faults = None
         print(f"[faults] faults.json not written ({type(exc).__name__}: "

@@ -153,7 +153,7 @@ def _removed_during_scan(case: dict[str, Any]) -> set[str]:
     return {name for name, _kind, removed in _service_records(case) if removed}
 
 
-def _full_service_scope(case: dict[str, Any]) -> bool:
+def full_service_scope(case: dict[str, Any]) -> bool:
     """True when the run recorded that it listed every service, unfiltered."""
     config = case.get("run_configuration")
     if not isinstance(config, dict) or case.get("focus_devices"):
@@ -170,7 +170,7 @@ def _collected_types(case: dict[str, Any]) -> set[str] | None:
     A type counts when it still has services, or when the scan recorded that
     NSO answered its listing in full, even with no instances left.
     """
-    if not _full_service_scope(case):
+    if not full_service_scope(case):
         return None
     types = set(_service_inventory(case).values())
     for extra in _service_extras(case):

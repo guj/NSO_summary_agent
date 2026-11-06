@@ -8,10 +8,11 @@ Bump ``FORMAT_VERSION`` when a field changes meaning or goes away; adding a fiel
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from diagnostic_mas.case import CaseFile
-from diagnostic_mas.case_delta import is_problem
+from diagnostic_mas.case_delta import full_service_scope, is_problem
 from diagnostic_mas import newness as scan_newness
 from diagnostic_mas.item_history import CLEAR, ROUTING_FAULT_CODES, SEEN, UNREAD, routing_lead
 from diagnostic_mas.newness import Newness, Seen, newness_for
@@ -19,7 +20,7 @@ from diagnostic_mas.service_final_status import STATUSES, final_service_assessme
 from nso_facts.topology.graph import ends_from_edge_id
 from nso_facts.topology.underlay import UNREAD_INTERFACE
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 # Final service statuses that are faults; Unknown is too little evidence to be one, so is only counted.
 _OPEN_SERVICE = ("down", "degraded")
 _PREVIOUS = {scan_newness.NEW: "not open", scan_newness.CARRIED: "open", scan_newness.UNREAD: "not read"}
@@ -27,9 +28,26 @@ _NEW = {"not open", "none"}
 _ROUTING_KINDS = {"isis": "isis", "bgp": "bgp", "bgp-outside": "outside_bgp"}
 
 
+def scan_scope(
+    case: CaseFile, *, run_service: bool, run_isis: bool, run_bgp: bool, devices: Iterable[str] = (),
+    service_type: str | None = None, service_id: str | None = None, ignored_service_types: Iterable[str] = (),
+) -> dict[str, Any]:
+    """What the scan examined, so a script never reads absence from a narrower scan as recovery or deletion.
+
+    ``kind`` is ``full`` only when the comparison with the previous scan would also count the scan as
+    unfiltered; ``checked`` names the entry kinds the scan read; ``devices`` the ones ``--devices`` matched.
+    """
+    full = full_service_scope({"run_configuration": case.run_configuration, "focus_devices": case.focus_devices})
+    checked = [kind for kind, read in (("service", run_service), ("isis", run_isis), ("bgp", run_bgp),
+                                       ("outside_bgp", run_bgp)) if read]
+    return {"kind": "full" if full else "partial", "devices": list(devices) or None, "checked": checked,
+            "service_type": service_type or None, "service_id": service_id or None,
+            "ignored_service_types": sorted(ignored_service_types)}
+
+
 def scan_faults(
     case: CaseFile, delta: dict[str, Any] | None, *, run_id: str, previous_run_id: str | None,
-    service_type: str | None = None, service_id: str | None = None, report_url: str | None = None,
+    scope: dict[str, Any], report_url: str | None = None,
 ) -> dict[str, Any]:
     """The scan's faults against the previous saved scan; ``delta`` is None when there was none."""
     newness = newness_for(case, delta)
@@ -42,8 +60,7 @@ def scan_faults(
         "format_version": FORMAT_VERSION,
         "run_id": run_id,
         "previous_run_id": previous_run_id,
-        "scope": {"kind": "services" if service_type or service_id else "full",
-                  "service_type": service_type or None, "service_id": service_id or None},
+        "scope": scope,
         "report_url": report_url or None,
         "counts": {"services": _service_counts(case)},
         "new": [row for row in open_rows if row["previous_scan"] in _NEW],
