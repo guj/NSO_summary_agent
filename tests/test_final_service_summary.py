@@ -1,5 +1,5 @@
 import pytest
-from diagnostic_mas.case import CaseFile, Budget
+from diagnostic_mas.case import CaseFile, Budget, normalize_diagnosis
 from diagnostic_mas.service_final_status import assessment, final_service_counts, format_final_services_table, STATUSES
 from diagnostic_mas.html_report import render_html_report
 
@@ -32,7 +32,7 @@ def test_counts_exclusive_typed_identity_and_html():
     one=service("down")
     two=service("unknown"); two["service_type"]="l3rt"
     c.evidence=[dict(kind="spine",role="service",payload={"extra":{"services":{"l2sts/s":one,"l3rt/s":two}}})]
-    c.diagnoses=[dict(kind="dataplane",subject={"name":"s","service_type":"l3rt"},source="llm",status="up",complete=True)]
+    c.diagnoses=[normalize_diagnosis(dict(kind="dataplane",subject={"name":"s","service_type":"l3rt"},source="llm",status="up",complete=True))]
     rows=final_service_counts(c)
     assert rows["l2sts"]["down"]==1 and rows["l3rt"]["up"]==1
     for row in rows.values():
@@ -73,14 +73,14 @@ def test_headline_matches_final_counts_with_incomplete_digs():
         rec["name"] = f"s{i}"
         records[f"l2sts/s{i}"] = rec
         if i >= 15:
-            c.diagnoses.append(dict(kind="dataplane", source="llm", status="unknown",
-                complete=False, subject={"service_type":"l2sts", "name":f"s{i}"}))
+            c.diagnoses.append(normalize_diagnosis(dict(kind="dataplane", source="llm", status="unknown",
+                complete=False, subject={"service_type":"l2sts", "name":f"s{i}"})))
     for status in ("down", "degraded"):
         rec = service(status)
         rec["name"] = status
         records[f"l2sts/{status}"] = rec
-        c.diagnoses.append(dict(kind="dataplane", source="llm", status="unknown",
-            complete=False, subject={"service_type":"l2sts", "name":status}))
+        c.diagnoses.append(normalize_diagnosis(dict(kind="dataplane", source="llm", status="unknown",
+            complete=False, subject={"service_type":"l2sts", "name":status})))
     c.evidence = [dict(kind="spine", role="service", payload={"extra":{"services":records}})]
     assert "Final service status: 0 OpUp, 1 Down, 1 Degraded, 36 Unknown." in format_result_line(c)
     assert final_service_counts(c)["l2sts"]["unknown"] == 36

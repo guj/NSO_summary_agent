@@ -30,17 +30,14 @@ def _diagnosis_suggests_underlay(case: CaseFile) -> bool:
         "evpn",
     )
     for dx in case.diagnoses:
-        if dx.get("kind") != "dataplane":
+        if dx["kind"] != "dataplane":
             continue
-        blob = " ".join(
-            str(dx.get(k) or "") for k in ("observed", "cause", "fix_suggestion")
-        ).lower()
+        blob = " ".join((dx["observed"], dx["cause"], dx.get("fix_suggestion") or "")).lower()
         if any(n in blob for n in needles):
             return True
-        if dx.get("complete") is False:
+        if not dx["complete"]:
             # Incomplete verify on L2 often needs peer/underlay context next.
-            subject = dx.get("subject") if isinstance(dx.get("subject"), dict) else {}
-            stype = str(subject.get("service_type") or "").lower()
+            stype = str(dx["subject"]["service_type"] or "").lower()
             if stype.startswith("l2"):
                 return True
     for issue in case.issues:

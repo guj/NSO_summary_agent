@@ -60,7 +60,7 @@ def test_normalization_preserves_verified_direction_but_not_llm_gate_claim():
 
 def _scan(services, digs=None, coverage=None):
     """A scan's case: l3rt services on one router each, their fixed-check status, and any LLM investigation."""
-    from diagnostic_mas.case import Budget, CaseFile, add_evidence
+    from diagnostic_mas.case import Budget, CaseFile, add_evidence, normalize_diagnosis
 
     case = CaseFile(budget=Budget(0, 0))
     records = {}
@@ -72,7 +72,7 @@ def _scan(services, digs=None, coverage=None):
     add_evidence(case, {"kind": "spine", "role": "service", "layer": "services",
                         "payload": {"extra": {"services": records}}})
     for name, dx in (digs or {}).items():
-        case.diagnoses.append({"kind": "dataplane", "subject": {"name": name, "service_type": "l3rt"}, **dx})
+        case.diagnoses.append(normalize_diagnosis({"kind": "dataplane", "subject": {"name": name, "service_type": "l3rt"}, **dx}))
     case.service_coverage = dict(coverage or {})
     return case
 

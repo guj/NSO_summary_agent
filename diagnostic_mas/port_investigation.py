@@ -575,10 +575,7 @@ def lost_adjacencies(case: CaseFile, device: str) -> list[str]:
 
 def _dependents(case: CaseFile, device: str):
     """Services on the device that do not pass and whose own config names another device."""
-    diagnosed = {
-        str((dx.get("subject") or {}).get("name") or "")
-        for dx in case.diagnoses if dx.get("kind") == "dataplane"
-    }
+    diagnosed = {dx["subject"]["name"] for dx in case.diagnoses if dx["kind"] == "dataplane"}
     for ev, record in _records(case):
         devices = {str(d) for d in record.get("devices") or []}
         status = (record.get("basic_checks") or {}).get("status")

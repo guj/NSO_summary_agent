@@ -1265,21 +1265,18 @@ def _port_finding_lines(case: CaseFile, device: str) -> list[str]:
 def _dataplane_by_name(case: CaseFile) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for dx in case.diagnoses:
-        if dx.get("kind") != "dataplane":
+        if dx["kind"] != "dataplane":
             continue
-        subject = dx.get("subject") if isinstance(dx.get("subject"), dict) else {}
-        name = subject.get("name") or dx.get("name")
-        if not isinstance(name, str) or not name.strip():
-            continue
-        out[name.strip()] = {
-            "name": name.strip(),
-            "service_type": subject.get("service_type") or dx.get("service_type"),
-            "dataplane_status": dx.get("status") or dx.get("dataplane_status"),
-            "observed": dx.get("observed"),
-            "cause": dx.get("cause"),
+        subject = dx["subject"]
+        out[subject["name"]] = {
+            "name": subject["name"],
+            "service_type": subject["service_type"],
+            "dataplane_status": dx["status"],
+            "observed": dx["observed"],
+            "cause": dx["cause"],
             "fix_suggestion": dx.get("fix_suggestion"),
-            "complete": dx.get("complete", True),
-            "source": dx.get("source") or "llm",
+            "complete": dx["complete"],
+            "source": dx["source"] or "llm",
             "verification_gap": dx.get("verification_gap"),
             "gate_review": dx.get("gate_review"),
             "investigation": dx.get("investigation"),
@@ -2891,8 +2888,7 @@ def format_run_details(
     dp_cap = dataplane_tools_cap(b)
     dp_used = int(getattr(b, "dataplane_tools_used", 0) or 0)
     explained_sources = {"port_investigation", "device_investigation"}
-    digs_n = sum(1 for d in case.diagnoses
-                 if d.get("kind") == "dataplane" and d.get("source") not in explained_sources)
+    digs_n = sum(1 for d in case.diagnoses if d["kind"] == "dataplane" and d["source"] not in explained_sources)
     if digs_n <= 0:
         # Fall back to incomplete/finding evidence if diagnoses absent.
         digs_n = sum(
@@ -2924,7 +2920,7 @@ def format_run_details(
     ]
     kept = len(getattr(case, "earlier_port_findings", None) or {})
     if getattr(b, "port_investigations_used", 0) or kept:
-        by_port = sum(1 for d in case.diagnoses if d.get("source") in explained_sources)
+        by_port = sum(1 for d in case.diagnoses if d["source"] in explained_sources)
         lines.append(
             f"**Port and device investigations:** {b.port_investigations_used} / {b.max_port_investigations} "
             f"(tools used {b.port_tools_used}); {by_port} service{'s' if by_port != 1 else ''} explained"

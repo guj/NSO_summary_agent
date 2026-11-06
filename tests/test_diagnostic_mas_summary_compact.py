@@ -86,7 +86,7 @@ def test_compact_includes_dataplane_budget_per_dig_semantics():
             subject={"name": f"svc-{i}", "service_type": "l3rt"},
             cause="ok",
             observed="ok",
-            extra={"complete": True},
+            complete=True,
         )
     compact = _compact_case_for_llm(case)
     bud = compact["dataplane_budget"]
@@ -164,7 +164,7 @@ def test_dataplane_tally_counts_incomplete_by_type():
             subject={"name": name, "service_type": "l2sts"},
             cause="verification incomplete",
             observed="gap",
-            extra={"complete": False},
+            complete=False,
         )
     add_diagnosis(
         case,
@@ -174,7 +174,7 @@ def test_dataplane_tally_counts_incomplete_by_type():
         subject={"name": "ATLA_SALT", "service_type": "l2ptp"},
         cause="PE-side ready",
         observed="xc up",
-        extra={"complete": True},
+        complete=True,
     )
     tally = dataplane_tally_for_summary(case)
     assert tally["digs_total"] == 11
@@ -205,7 +205,7 @@ def test_compact_keeps_all_dataplane_diagnoses_beyond_20():
             },
             cause="c",
             observed="o",
-            extra={"complete": i < 14},
+            complete=i < 14,
         )
     compact = _compact_case_for_llm(case)
     assert len(compact["diagnoses"]) == 24

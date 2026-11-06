@@ -50,6 +50,62 @@ def normalize_issue(raw: Any) -> Issue | None:
     return issue  # type: ignore[return-value]
 
 
+class DiagnosisSubject(TypedDict):
+    service_type: str | None
+    name: str
+
+
+class Diagnosis(TypedDict):
+    """A service's dataplane conclusion. ``add_diagnosis`` sets every field below; the last three only when known."""
+    id: str
+    kind: str  # "dataplane"
+    source: str  # llm, gate, fallback, port_investigation or device_investigation
+    observed: str
+    cause: str
+    evidence_ids: list[str]
+    status: str  # up, down, degraded or unknown
+    subject: DiagnosisSubject
+    confidence: str  # high, medium or low
+    complete: bool  # False: the investigation did not finish, so the service's issue stays open
+    fix_suggestion: NotRequired[str]
+    verification_gap: NotRequired[dict[str, Any]]
+    investigation: NotRequired[dict[str, Any]]
+
+
+# The fields every diagnosis has besides ``subject``, with what one from outside a run gets when it lacks one.
+_DIAGNOSIS_DEFAULTS: dict[str, Any] = {
+    "id": "", "kind": "", "source": "", "observed": "", "cause": "", "evidence_ids": [],
+    "status": "unknown", "confidence": "medium", "complete": True,
+}
+DIAGNOSIS_FIELDS = (*_DIAGNOSIS_DEFAULTS, "subject")
+# Where older scans kept a diagnosis's service and status.
+_LEGACY_DIAGNOSIS_KEYS = ("name", "service_name", "service_type", "dataplane_status")
+
+
+def normalize_diagnosis(raw: Any) -> Diagnosis | None:
+    """A diagnosis from outside this run, such as a saved scan's, given the diagnosis shape.
+
+    None if it is not one: not a dict, or naming no service, since every reader finds a diagnosis by its
+    service. A service or status kept where older scans kept them moves to where it is now.
+    """
+    if not isinstance(raw, dict):
+        return None
+    diagnosis = {key: value for key, value in raw.items() if key not in _LEGACY_DIAGNOSIS_KEYS}
+    subject = raw.get("subject") if isinstance(raw.get("subject"), dict) else {}
+    name = str(subject.get("name") or raw.get("name") or raw.get("service_name") or "").strip()
+    if not name:
+        return None
+    diagnosis["subject"] = {"service_type": subject.get("service_type") or raw.get("service_type"), "name": name}
+    diagnosis["status"] = str(raw.get("status") or raw.get("dataplane_status") or "").lower() or None
+    for key, default in _DIAGNOSIS_DEFAULTS.items():
+        if diagnosis.get(key) is None:
+            diagnosis[key] = list(default) if isinstance(default, list) else default
+    for key in ("fix_suggestion", "verification_gap", "investigation"):
+        if diagnosis.get(key) is None:
+            diagnosis.pop(key, None)
+    return diagnosis  # type: ignore[return-value]
+
+
 @dataclass
 class Budget:
     max_deep_checks: int
@@ -92,7 +148,7 @@ class CaseFile:
     evidence: list[dict[str, Any]] = field(default_factory=list)
     issues: list[Issue] = field(default_factory=list)
     # Attributed conclusions (LLM/fallback). Not Evidence — cite evidence_ids.
-    diagnoses: list[dict[str, Any]] = field(default_factory=list)
+    diagnoses: list[Diagnosis] = field(default_factory=list)
     hypotheses: list[dict[str, Any]] = field(default_factory=list)
     plans: list[dict[str, Any]] = field(default_factory=list)
     handoffs: list[dict[str, Any]] = field(default_factory=list)
@@ -163,16 +219,18 @@ def add_diagnosis(
     source: str,
     observed: str,
     cause: str,
-    status: str | None = None,
-    subject: dict[str, Any] | None = None,
+    status: str,
+    subject: dict[str, Any],
     fix_suggestion: str | None = None,
-    confidence: str | None = None,
+    confidence: str = "medium",
+    complete: bool = True,
+    verification_gap: dict[str, Any] | None = None,
     evidence_ids: list[str] | None = None,
-    extra: dict[str, Any] | None = None,
 ) -> str:
-    """Append an attributed diagnosis (not Evidence). Citations via evidence_ids."""
+    """Append an attributed diagnosis (not Evidence) in the diagnosis shape. Citations via evidence_ids."""
     case._diagnosis_seq += 1
     diag_id = f"dx_{case._diagnosis_seq}"
+    # Fields in the order saved scans have always written them.
     rec: dict[str, Any] = {
         "id": diag_id,
         "kind": kind,
@@ -180,20 +238,16 @@ def add_diagnosis(
         "observed": observed,
         "cause": cause,
         "evidence_ids": list(evidence_ids or []),
+        "status": status,
+        "subject": {"service_type": subject.get("service_type"), "name": subject["name"]},
     }
-    if status is not None:
-        rec["status"] = status
-    if subject:
-        rec["subject"] = dict(subject)
     if fix_suggestion is not None:
         rec["fix_suggestion"] = fix_suggestion
-    if confidence is not None:
-        rec["confidence"] = confidence
-    if extra:
-        for key, value in extra.items():
-            if key not in rec and value is not None:
-                rec[key] = value
-    case.diagnoses.append(rec)
+    rec["confidence"] = confidence
+    rec["complete"] = complete
+    if verification_gap is not None:
+        rec["verification_gap"] = verification_gap
+    case.diagnoses.append(rec)  # type: ignore[arg-type]
     return diag_id
 
 

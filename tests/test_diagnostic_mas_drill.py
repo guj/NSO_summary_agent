@@ -1450,7 +1450,7 @@ def test_prior_exploration_lists_dataplane_probes_and_filters_plans():
         cause="tool budget exhausted",
         subject={"name": "svc-a"},
         evidence_ids=[],
-        extra={"complete": False},
+        complete=False,
     )
     issue = next(i for i in case.issues if i["id"] == iid)
     prior = prior_exploration_for_issue(case, issue)

@@ -44,7 +44,7 @@ def case_has_drill_evidence(case: CaseFile) -> bool:
 
 
 def case_has_dataplane_evidence(case: CaseFile) -> bool:
-    if any(d.get("kind") == "dataplane" for d in case.diagnoses):
+    if any(d["kind"] == "dataplane" for d in case.diagnoses):
         return True
     return any(
         e.get("kind") in {"dataplane_finding", "dataplane_incomplete"}
@@ -56,20 +56,19 @@ def _dataplane_conclusion_rows(case: CaseFile) -> list[dict[str, Any]]:
     """Operator-facing dataplane rows; prefer Diagnoses over Evidence."""
     rows: list[dict[str, Any]] = []
     for dx in case.diagnoses:
-        if dx.get("kind") != "dataplane":
+        if dx["kind"] != "dataplane":
             continue
-        subject = dx.get("subject") if isinstance(dx.get("subject"), dict) else {}
         rows.append(
             {
-                "name": subject.get("name") or dx.get("name"),
-                "service_type": subject.get("service_type") or dx.get("service_type"),
-                "dataplane_status": dx.get("status") or dx.get("dataplane_status"),
-                "observed": dx.get("observed"),
-                "cause": dx.get("cause"),
+                "name": dx["subject"]["name"],
+                "service_type": dx["subject"]["service_type"],
+                "dataplane_status": dx["status"],
+                "observed": dx["observed"],
+                "cause": dx["cause"],
                 "fix_suggestion": dx.get("fix_suggestion"),
-                "source": dx.get("source") or "llm",
-                "confidence": dx.get("confidence"),
-                "complete": dx.get("complete", True),
+                "source": dx["source"] or "llm",
+                "confidence": dx["confidence"],
+                "complete": dx["complete"],
             }
         )
     if rows:
@@ -143,8 +142,7 @@ def _investigated(case: CaseFile) -> list[dict[str, Any]]:
     """Each investigated port or cut-off device, with the services whose diagnosis its finding gave."""
     from diagnostic_mas.port_investigation import DEVICE_SOURCE, SOURCE, device_findings, port_findings
 
-    source_of = {str(dx["subject"].get("name")): dx.get("source") for dx in case.diagnoses
-                 if dx.get("kind") == "dataplane" and isinstance(dx.get("subject"), dict)}
+    source_of = {dx["subject"]["name"]: dx["source"] for dx in case.diagnoses if dx["kind"] == "dataplane"}
     out: list[dict[str, Any]] = []
     for finding in port_findings(case):
         attached = (str(name) for names in (finding.get("links") or {}).values() for name in names)
@@ -389,22 +387,14 @@ def _compact_case_for_llm(
     diagnoses_brief = []
     other_dx = 0
     for dx in case.diagnoses:
-        kind = str(dx.get("kind") or "")
-        if kind != "dataplane":
+        if dx["kind"] != "dataplane":
             if other_dx >= 20:
                 continue
             other_dx += 1
-        row: dict[str, Any] = {
-            "kind": dx.get("kind"),
-            "source": dx.get("source"),
-            "status": dx.get("status"),
-            "complete": dx.get("complete", True),
-        }
-        subject = dx.get("subject") if isinstance(dx.get("subject"), dict) else {}
-        if subject.get("name"):
-            row["name"] = subject.get("name")
-        if subject.get("service_type"):
-            row["service_type"] = subject.get("service_type")
+        row: dict[str, Any] = {"kind": dx["kind"], "source": dx["source"], "status": dx["status"],
+                               "complete": dx["complete"], "name": dx["subject"]["name"]}
+        if dx["subject"]["service_type"]:
+            row["service_type"] = dx["subject"]["service_type"]
         for key in ("observed", "cause", "fix_suggestion", "confidence"):
             if key in dx and dx.get(key) is not None:
                 # Snip long Observed for summary context; Cause stays fuller.

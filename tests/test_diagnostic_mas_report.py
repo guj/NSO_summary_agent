@@ -46,7 +46,7 @@ def test_services_footnote_systemup_omitted_excludes_displayed_digs():
             subject={"name": name, "service_type": "l2sts"},
             observed="gap",
             cause="incomplete",
-            extra={"complete": False},
+            complete=False,
         )
     text = "\n".join(format_services_operator(case, services_detail=False))
     assert "3 services skipped LLM investigation" in text
@@ -345,7 +345,7 @@ def _inconclusive_case(name: str, next_check: str) -> CaseFile:
         case, kind="dataplane", source="llm", status="unknown",
         subject={"name": name, "service_type": "l2bridge"},
         observed="operational access failed", cause="exec unavailable",
-        extra={"complete": False, "verification_gap": {"next_check": next_check}},
+        complete=False, verification_gap={"next_check": next_check},
     )
     return case
 
@@ -791,7 +791,7 @@ def test_incomplete_timeout_next_action_not_tool_budget():
         observed=dx["observed"],
         cause=dx["cause"],
         subject={"name": "l2-STS-timeout", "service_type": "l2sts"},
-        extra={"complete": False},
+        complete=False,
     )
     svc = "\n".join(format_services_operator(case, services_detail=True))
     assert "Address the dataplane LLM timeout first" in svc
@@ -876,7 +876,7 @@ def test_incomplete_gap_result_query_vs_customer_traffic():
         observed=query_dx["observed"],
         cause=query_dx["cause"],
         subject={"name": "svc-query", "service_type": "l2sts"},
-        extra={"complete": False},
+        complete=False,
     )
     add_diagnosis(
         case,
@@ -886,7 +886,7 @@ def test_incomplete_gap_result_query_vs_customer_traffic():
         observed=traffic_dx["observed"],
         cause=traffic_dx["cause"],
         subject={"name": "svc-traffic", "service_type": "l2sts"},
-        extra={"complete": False},
+        complete=False,
     )
     text = "\n".join(format_services_operator(case, services_detail=True))
     assert "blocked by query/object failure" in text
@@ -977,7 +977,7 @@ def test_dataplane_dig_line_counts():
         observed="ok",
         cause="none",
         subject={"name": "svc-pass", "service_type": "l2ptp"},
-        extra={"complete": True},
+        complete=True,
     )
     add_diagnosis(
         case,
@@ -987,7 +987,7 @@ def test_dataplane_dig_line_counts():
         observed="timeout",
         cause="unresolved",
         subject={"name": "svc-incomplete", "service_type": "l3rt"},
-        extra={"complete": False},
+        complete=False,
     )
     line = format_dataplane_dig_line(case)
     assert line == (
@@ -1011,7 +1011,7 @@ def test_dataplane_dig_line_all_passed():
             observed="ok",
             cause="none",
             subject={"name": name, "service_type": "l2ptp"},
-            extra={"complete": True},
+            complete=True,
         )
     line = format_dataplane_dig_line(case)
     assert line == (
@@ -1074,7 +1074,7 @@ def test_operator_services_from_diagnosis():
         observed="Both ACs UP, xconnect UP",
         cause="No dataplane fault found",
         subject={"name": "fabric-l2ptp-t1", "service_type": "l2ptp"},
-        extra={"complete": True},
+        complete=True,
     )
     text = render_report(case, services_detail=True, duration_seconds=260)
     assert text.startswith("# NSO Diagnostic Report\n")
@@ -1178,7 +1178,7 @@ def test_ac_not_found_uncertainty_and_up_next_omit_approve():
         observed="Both ACs up in BD",
         cause="PE-side ready",
         subject={"name": "p4-kans", "service_type": "l2sts"},
-        extra={"complete": True},
+        complete=True,
         fix_suggestion=(
             "Obtain a known customer endpoint and perform a scoped "
             "reachability test."
@@ -1254,7 +1254,7 @@ def test_followup_incomplete_count_excludes_up_dig_with_ac_not_found():
             subject={"name": f"inc-{i}", "service_type": "l2sts"},
             cause="gap",
             observed="gap",
-            extra={"complete": False},
+            complete=False,
         )
     add_diagnosis(
         case,
@@ -1264,7 +1264,7 @@ def test_followup_incomplete_count_excludes_up_dig_with_ac_not_found():
         subject={"name": "up-ac", "service_type": "l2sts"},
         cause="ready",
         observed="ACs up",
-        extra={"complete": True},
+        complete=True,
     )
     follow = "\n".join(format_followup_operator(case))
     assert "Finish verification for 9" in follow
@@ -1323,7 +1323,7 @@ def test_l2sts_evidence_shows_identity_and_directions_before_collector():
         ),
         cause="PE-side ready; traffic delivery unverified",
         subject={"name": "p4-kans", "service_type": "l2sts"},
-        extra={"complete": True},
+        complete=True,
     )
     text = render_report(case, services_detail=True)
     assert "**Evidence:**" in text
@@ -1372,7 +1372,7 @@ def test_down_dataplane_next_keeps_config_approve():
         observed="XC DN",
         cause="Remote segment down",
         subject={"name": "bad", "service_type": "l2ptp"},
-        extra={"complete": True},
+        complete=True,
         fix_suggestion="Verify EVPN remote binding on peer PE.",
     )
     text = render_report(case, services_detail=True)
@@ -1537,7 +1537,7 @@ def test_format_duration_and_result():
         observed="ok",
         cause="ok",
         subject={"name": "svc-a", "service_type": "l2ptp"},
-        extra={"complete": True},
+        complete=True,
     )
     assert "No fault identified" in format_result_line(case)
 
@@ -1563,7 +1563,7 @@ def test_service_faults_precede_collection_and_are_not_collapsed_into_gaps():
     for i in range(5):
         add_diagnosis(case, kind="dataplane", source="llm", status="unknown",
                       observed="gap", cause="missing check", subject={"name": f"gap-{i}"},
-                      extra={"complete": False})
+                      complete=False)
     add_diagnosis(case, kind="dataplane", source="llm", status="down",
                   observed="XC down", cause="transport unavailable",
                   subject={"name": "faulty-circuit"})

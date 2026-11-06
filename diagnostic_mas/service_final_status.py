@@ -59,11 +59,9 @@ def final_service_assessments(case):
     names = Counter(str(r.get("name") or k.split("/", 1)[-1]) for k,r in services.items())
     digs = {}
     for dig in case.diagnoses:
-        if dig.get("kind") != "dataplane":
+        if dig["kind"] != "dataplane":
             continue
-        subject = dig.get("subject") or {}
-        name = subject.get("name") or dig.get("name")
-        kind = subject.get("service_type")
+        name, kind = dig["subject"]["name"], dig["subject"]["service_type"]
         if kind or names.get(name) == 1:
             digs[kind, name] = dig
     from diagnostic_mas.service_presence import disappeared

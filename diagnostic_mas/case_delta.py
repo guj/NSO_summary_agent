@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
-from diagnostic_mas.case import Issue, normalize_issue
+from diagnostic_mas.case import Issue, normalize_diagnosis, normalize_issue
 from diagnostic_mas.nso_authentication import authentication_failures
 from nso_facts.topology.routing import unmatched_neighbor_in
 
@@ -54,12 +54,15 @@ def load_case_dict(path: Path | str) -> dict[str, Any]:
 
 
 def _shaped(case: dict[str, Any]) -> dict[str, Any]:
-    """A saved or hand-made case with its issues in the issue shape (a copy when any changed)."""
-    issues = case.get("issues")
-    if not isinstance(issues, list):
-        return case
-    shaped = [issue for raw in issues if (issue := normalize_issue(raw)) is not None]
-    return case if shaped == issues else {**case, "issues": shaped}
+    """A saved or hand-made case with its issues and diagnoses in their shapes (a copy when any changed)."""
+    out = case
+    for key, normalize in (("issues", normalize_issue), ("diagnoses", normalize_diagnosis)):
+        rows = case.get(key)
+        if isinstance(rows, list):
+            shaped = [row for raw in rows if (row := normalize(raw)) is not None]
+            if shaped != rows:
+                out = {**out, key: shaped}
+    return out
 
 
 def load_previous_case(
@@ -767,22 +770,11 @@ def _service_dataplane_map(case: dict[str, Any]) -> dict[str, dict[str, Any]]:
         out[key] = row
 
     for dx in case.get("diagnoses") or []:
-        if not isinstance(dx, dict):
+        if dx["kind"] != "dataplane":
             continue
-        if str(dx.get("kind") or "") != "dataplane":
-            continue
-        subject = dx.get("subject") if isinstance(dx.get("subject"), dict) else {}
-        name = subject.get("name") or dx.get("name")
-        if not name:
-            continue
-        status = dx.get("status") or dx.get("dataplane_status") or ""
-        complete = dx.get("complete", True)
-        _put(
-            str(name),
-            status=str(status),
-            complete=False if complete is False else True,
-            service_type=str(subject.get("service_type") or "") or None,
-        )
+        subject = dx["subject"]
+        _put(subject["name"], status=dx["status"], complete=dx["complete"],
+             service_type=subject["service_type"] or None)
 
     for ev in case.get("evidence") or []:
         if not isinstance(ev, dict):
@@ -809,11 +801,7 @@ def _passing_this_run(case: dict[str, Any]) -> set[str]:
     """Services whose final status in this run is OpUp, by fixed check or LLM."""
     from diagnostic_mas.service_final_status import assessment
 
-    digs = {
-        str((dx.get("subject") or {}).get("name") or ""): dx
-        for dx in case.get("diagnoses") or []
-        if isinstance(dx, dict) and dx.get("kind") == "dataplane"
-    }
+    digs = {dx["subject"]["name"]: dx for dx in case.get("diagnoses") or [] if dx["kind"] == "dataplane"}
     return {
         str(record["name"])
         for extra in _service_extras(case)
@@ -827,11 +815,7 @@ def _judged_services(case: dict[str, Any]) -> dict[str, tuple[str, str, Any]]:
     """Service name -> (type, final status, what its fixed check read), for investigated services."""
     from diagnostic_mas.service_final_status import assessment
 
-    digs = {
-        str((dx.get("subject") or {}).get("name") or ""): dx
-        for dx in case.get("diagnoses") or []
-        if isinstance(dx, dict) and dx.get("kind") == "dataplane"
-    }
+    digs = {dx["subject"]["name"]: dx for dx in case.get("diagnoses") or [] if dx["kind"] == "dataplane"}
     out: dict[str, tuple[str, str, Any]] = {}
     for extra in _service_extras(case):
         for record in (extra.get("services") or {}).values():
@@ -978,6 +962,7 @@ def service_fault_history(
     A fault ends without being cleared when a full scan no longer lists
     the service: there is nothing left to recheck.
     """
+    older, newer = _shaped(older), _shaped(newer)
     history = {
         str(row["service"]): dict(row)
         for row in older.get("last_known_service_faults") or []
@@ -998,9 +983,7 @@ def service_fault_history(
             elif st in _FAULT_DP:
                 diagnosis = next((
                     d for d in snapshot.get("diagnoses") or []
-                    if d.get("kind") == "dataplane"
-                    and (d.get("subject") or {}).get("name") == name
-                    and d.get("status", d.get("dataplane_status")) == st
+                    if d["kind"] == "dataplane" and d["subject"]["name"] == name and d["status"] == st
                 ), {})
                 # A row carried without a first-seen scan is dated from the saved scans later.
                 earlier = history.get(name)

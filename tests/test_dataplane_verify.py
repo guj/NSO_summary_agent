@@ -2188,7 +2188,7 @@ def test_narrative_incomplete_timeout_preserves_cause_not_sync_xconnect():
             "Dataplane verification incomplete because the LLM request "
             "timed out. Service forwarding status remains unknown."
         ),
-        extra={"complete": False},
+        complete=False,
     )
     text = narrative_from_dataplane_findings(case)
     assert "timed out" in text.lower()

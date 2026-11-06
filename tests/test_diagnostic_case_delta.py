@@ -117,7 +117,7 @@ def test_recovered_devices_and_incomplete_dig_missing_evidence():
         observed="ok",
         cause="ready",
         subject={"name": "svc-a", "service_type": "l2ptp"},
-        extra={"complete": True},
+        complete=True,
     )
 
     newer = CaseFile(budget=Budget(max_deep_checks=1, max_handoffs=1))
@@ -129,7 +129,7 @@ def test_recovered_devices_and_incomplete_dig_missing_evidence():
         observed="XC DN",
         cause="remote down",
         subject={"name": "svc-a", "service_type": "l2ptp"},
-        extra={"complete": True},
+        complete=True,
     )
     add_diagnosis(
         newer,
@@ -139,7 +139,7 @@ def test_recovered_devices_and_incomplete_dig_missing_evidence():
         observed="incomplete",
         cause="budget",
         subject={"name": "svc-b", "service_type": "l2sts"},
-        extra={"complete": False},
+        complete=False,
     )
 
     newer.live_verified_devices = ["wash-data-sw"]
@@ -237,7 +237,7 @@ def _dp_case(status=None, complete=True):
         add_diagnosis(case, kind="dataplane", source="llm", status=status,
                       observed="targeted observation", cause="label inconsistency",
                       subject={"name": "circuit", "service_type": "l2ptp"},
-                      extra={"complete": complete})
+                      complete=complete)
     return case
 
 
@@ -380,7 +380,7 @@ def _down(case: dict, name: str, kind: str) -> dict:
 
     found = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
     add_diagnosis(found, kind="dataplane", source="llm", status="down", observed="AC down",
-                  cause="no light", subject={"name": name, "service_type": kind}, extra={"complete": True})
+                  cause="no light", subject={"name": name, "service_type": kind}, complete=True)
     return {**case, "diagnoses": case_to_dict(found)["diagnoses"]}
 
 

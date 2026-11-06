@@ -280,19 +280,9 @@ def prior_exploration_for_issue(
 
     diagnoses: list[dict[str, Any]] = []
     for dx in case.diagnoses:
-        if dx.get("kind") != "dataplane":
-            continue
-        subject = dx.get("subject") if isinstance(dx.get("subject"), dict) else {}
-        if edge and subject.get("name") == edge:
-            diagnoses.append(
-                {
-                    "status": dx.get("status"),
-                    "source": dx.get("source"),
-                    "complete": dx.get("complete", True),
-                    "observed": dx.get("observed"),
-                    "cause": dx.get("cause"),
-                }
-            )
+        if dx["kind"] == "dataplane" and edge and dx["subject"]["name"] == edge:
+            diagnoses.append({"status": dx["status"], "source": dx["source"], "complete": dx["complete"],
+                              "observed": dx["observed"], "cause": dx["cause"]})
 
     hypotheses = [
         {"text": h.get("text")}

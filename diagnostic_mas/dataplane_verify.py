@@ -624,16 +624,9 @@ def _collection_already_unhealthy(rec: dict[str, Any]) -> bool:
 def update_coverage_from_diagnoses(case: CaseFile) -> None:
     """Refresh coverage from dataplane diagnoses after verify."""
     for dx in case.diagnoses:
-        if dx.get("kind") != "dataplane":
+        if dx["kind"] != "dataplane" or dx["source"] in {"port_investigation", "device_investigation"}:
             continue
-        subject = dx.get("subject") if isinstance(dx.get("subject"), dict) else {}
-        name = str(subject.get("name") or dx.get("name") or "").strip()
-        if not name or dx.get("source") in {"port_investigation", "device_investigation"}:
-            continue
-        if dx.get("complete") is False:
-            case.service_coverage[name] = "unresolved"
-        else:
-            case.service_coverage[name] = "investigated"
+        case.service_coverage[dx["subject"]["name"]] = "investigated" if dx["complete"] else "unresolved"
 
 
 def _live_l2_all_soft_errors(record: dict[str, Any]) -> bool:
@@ -1760,25 +1753,20 @@ def _record_dataplane_finding(
             "payload": payload,
         },
     )
-    subject: dict[str, Any] = {}
-    if record.get("service_type") is not None:
-        subject["service_type"] = record.get("service_type")
-    if record.get("name") is not None:
-        subject["name"] = record.get("name")
     add_diagnosis(
         case,
         kind="dataplane",
         source=source,
         status=str(finding["dataplane_status"]),
-        subject=subject or None,
+        subject={"service_type": record.get("service_type"), "name": record["name"]},
         observed=str(finding.get("observed") or ""),
         cause=str(finding.get("cause") or ""),
         fix_suggestion=finding.get("fix_suggestion")
         if isinstance(finding.get("fix_suggestion"), str)
         else None,
         confidence=str(finding.get("confidence") or "medium"),
+        verification_gap=finding.get("verification_gap"),
         evidence_ids=list(evidence_ids or []),
-        extra={"complete": True, "verification_gap": finding.get("verification_gap")},
     )
     record["status"] = combine_service_status(
         str(record.get("system_status") or "unknown"),
@@ -1848,23 +1836,19 @@ def _record_incomplete_dataplane_verify(
             "payload": payload,
         },
     )
-    subject: dict[str, Any] = {}
-    if record.get("service_type") is not None:
-        subject["service_type"] = record.get("service_type")
-    if record.get("name") is not None:
-        subject["name"] = record.get("name")
     add_diagnosis(
         case,
         kind="dataplane",
         source=src,
         status="unknown",
-        subject=subject or None,
+        subject={"service_type": record.get("service_type"), "name": record["name"]},
         observed=str(finding.get("observed") or ""),
         cause=str(finding.get("cause") or ""),
         fix_suggestion=None,
         confidence="low",
+        complete=False,
+        verification_gap=finding.get("verification_gap"),
         evidence_ids=list(evidence_ids or []),
-        extra={"complete": False, "verification_gap": finding.get("verification_gap")},
     )
     # Intentionally leave open service Issues open — unresolved, not explained.
     # Overall status already restored to system_status above (SystemUp preserved).
@@ -1929,19 +1913,7 @@ def _refresh_spine_counts(ev: dict[str, Any]) -> None:
 
 def dataplane_diagnosed_names(case: CaseFile) -> set[str]:
     """Service names with a *complete* dataplane conclusion (issue explained)."""
-    names: set[str] = set()
-    for dx in case.diagnoses:
-        if dx.get("kind") != "dataplane":
-            continue
-        if dx.get("complete") is False:
-            continue
-        subject = dx.get("subject") if isinstance(dx.get("subject"), dict) else {}
-        for key in ("name", "service_name"):
-            n = subject.get(key) if subject else None
-            if n is None:
-                n = dx.get(key)
-            if isinstance(n, str) and n.strip():
-                names.add(n.strip())
+    names = {dx["subject"]["name"] for dx in case.diagnoses if dx["kind"] == "dataplane" and dx["complete"]}
     if names:
         return names
     # Legacy: diagnoses empty — fall back to complete dataplane_finding Evidence
@@ -2023,10 +1995,10 @@ async def llm_dataplane_verify_one(
     finally:
         metrics = investigation.finish(session.tools_used-before, session.max_tools-before)
         for dx in case.diagnoses[diag_start:]:
-            if dx.get("kind") != "dataplane":
+            if dx["kind"] != "dataplane":
                 continue
             dx["investigation"] = metrics
-            if dx.get("status") == "unknown":
+            if dx["status"] == "unknown":
                 if metrics["stop_reason"] != "concluded_insufficient_evidence" or not dx.get("verification_gap"):
                     dx["verification_gap"] = fallback_gap(metrics)
         for ev in case.evidence[ev_start:]:
@@ -2794,12 +2766,7 @@ async def run_dataplane_verify_phase(
             }:
                 continue
             # Skip if a diagnosis already exists for this service.
-            has_dx = any(
-                d.get("kind") == "dataplane"
-                and isinstance(d.get("subject"), dict)
-                and str(d["subject"].get("name") or "") == name
-                for d in case.diagnoses
-            )
+            has_dx = any(d["kind"] == "dataplane" and d["subject"]["name"] == name for d in case.diagnoses)
             if has_dx:
                 continue
             case.service_coverage[name] = "llm_budget_exceeded"

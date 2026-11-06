@@ -15,17 +15,9 @@ def _dataplane_dig_subjects(case: CaseFile) -> dict[str, dict[str, Any]]:
     """Per-service dig outcome; prefer Diagnoses over Evidence."""
     rows: dict[str, dict[str, Any]] = {}
     for dx in case.diagnoses:
-        if dx.get("kind") != "dataplane":
+        if dx["kind"] != "dataplane":
             continue
-        subject = dx.get("subject") if isinstance(dx.get("subject"), dict) else {}
-        name = str(subject.get("name") or dx.get("name") or "").strip()
-        if not name:
-            continue
-        rows[name] = {
-            "status": str(dx.get("status") or dx.get("dataplane_status") or "").lower(),
-            "complete": dx.get("complete"),
-            "source": dx.get("source"),
-        }
+        rows[dx["subject"]["name"]] = {"status": dx["status"], "complete": dx["complete"], "source": dx["source"]}
     for ev in case.evidence:
         kind = ev.get("kind")
         if kind not in {"dataplane_finding", "dataplane_incomplete"}:

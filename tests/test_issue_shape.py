@@ -40,3 +40,57 @@ def test_the_delta_gives_hand_made_issues_the_shape_before_reading_them():
 def test_a_reader_given_a_dict_without_the_shape_fails_loudly():
     with pytest.raises(KeyError):
         issue_key({"message": "no code, layer or edge"})
+
+
+def test_a_conclusion_the_scan_records_has_every_field_of_the_diagnosis_shape():
+    from diagnostic_mas.case import DIAGNOSIS_FIELDS
+    from diagnostic_mas.dataplane_verify import _commit_dataplane_conclusion, parse_dataplane_conclusion
+
+    case = CaseFile(budget=Budget(0, 0))
+    for record, status in (({"name": "svc-a", "service_type": None, "system_status": "up"}, "down"),
+                           ({"name": "svc-b", "service_type": "l2sts", "system_status": "up"}, "unknown")):
+        conclusion = parse_dataplane_conclusion({"dataplane_status": status, "observed": "read", "cause": "why"})
+        _commit_dataplane_conclusion(case, record, conclusion, source="llm")
+
+    assert all(set(DIAGNOSIS_FIELDS) <= set(dx) for dx in case.diagnoses)
+    assert [(dx["subject"], dx["status"], dx["complete"]) for dx in case.diagnoses] == [
+        ({"service_type": None, "name": "svc-a"}, "down", True),
+        ({"service_type": "l2sts", "name": "svc-b"}, "unknown", False)]
+
+
+def test_a_saved_diagnosis_is_given_the_shape_when_loaded(tmp_path):
+    path = tmp_path / "case.json"
+    path.write_text(json.dumps({"diagnoses": [
+        {"kind": "dataplane", "source": "llm", "status": "down", "observed": "o", "cause": "c",
+         "subject": {"service_type": "l3rt", "name": "svc-a"}, "fix_suggestion": "reseat"},
+        {"kind": "dataplane", "name": "svc-old", "dataplane_status": "up", "observed": "o", "cause": "c"},
+        {"kind": "dataplane", "subject": {}, "status": "up"},
+        "not a diagnosis",
+    ]}))
+
+    assert load_case_dict(path)["diagnoses"] == [
+        {"id": "", "kind": "dataplane", "source": "llm", "observed": "o", "cause": "c", "evidence_ids": [],
+         "status": "down", "subject": {"service_type": "l3rt", "name": "svc-a"}, "confidence": "medium",
+         "complete": True, "fix_suggestion": "reseat"},
+        {"id": "", "kind": "dataplane", "source": "", "observed": "o", "cause": "c", "evidence_ids": [],
+         "status": "up", "subject": {"service_type": None, "name": "svc-old"}, "confidence": "medium",
+         "complete": True}]
+
+
+def test_the_delta_gives_hand_made_diagnoses_the_shape_before_reading_them():
+    newer = {"diagnoses": [{"kind": "dataplane", "subject": {"name": "svc", "service_type": "l3rt"},
+                            "status": "down"}]}
+
+    delta = compute_case_delta({}, newer)
+
+    assert [row["service"] for row in delta["newly_failed_services"]] == ["svc"]
+
+
+def test_a_reader_given_a_diagnosis_without_the_shape_fails_loudly():
+    from diagnostic_mas.report import _dataplane_dig_subjects
+
+    case = CaseFile(budget=Budget(0, 0))
+    case.diagnoses.append({"kind": "dataplane", "status": "down"})
+
+    with pytest.raises(KeyError):
+        _dataplane_dig_subjects(case)

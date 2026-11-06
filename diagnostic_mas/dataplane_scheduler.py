@@ -158,7 +158,7 @@ def merge_case(parent, child, evidence_start, diagnosis_start, name):
         row = deepcopy(row)
         parent._diagnosis_seq += 1
         row['id'] = f'dx_{parent._diagnosis_seq}'
-        row['evidence_ids'] = [mapping.get(e, e) for e in row.get('evidence_ids', [])]
+        row['evidence_ids'] = [mapping.get(e, e) for e in row['evidence_ids']]
         parent.diagnoses.append(row)
     updates = {i['id']: i for i in child.issues if i.get('edge_id') == name and i.get('layer') == 'services'}
     for issue in parent.issues:
