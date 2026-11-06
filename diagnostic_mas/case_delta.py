@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from diagnostic_mas.case import Issue, normalize_issue
 from diagnostic_mas.nso_authentication import authentication_failures
+from nso_facts.topology.routing import unmatched_neighbor_in
 
 # Issue statuses that still count as an unresolved problem.
 _PROBLEM_STATUSES = frozenset(
@@ -1096,6 +1098,27 @@ def format_last_known_faults(rows: list[dict[str, Any]]) -> list[str]:
     lines.append("")
     return lines
 
+@dataclass(frozen=True)
+class _ScanPair:
+    """The two scans compute_case_delta compares, with the lookups its parts share."""
+
+    older: dict[str, Any]
+    newer: dict[str, Any]
+    old_probs: dict[str, dict[str, Any]]
+    new_probs: dict[str, dict[str, Any]]
+    old_cov: dict[str, str]
+    new_cov: dict[str, str]
+    old_q: dict[str, dict[str, Any]]
+    new_q: dict[str, dict[str, Any]]
+    live_verified: set[str]
+    old_dp: dict[str, dict[str, Any]]
+    new_dp: dict[str, dict[str, Any]]
+    # Service faults carried into the older scan, by service.
+    old_history: dict[str, dict[str, Any]]
+    # Services a full newer scan no longer lists, with their type.
+    gone: dict[str, str]
+
+
 def compute_case_delta(
     older: dict[str, Any], newer: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1110,243 +1133,20 @@ def compute_case_delta(
     coverage_changes.
     """
     older, newer = _shaped(older), _shaped(newer)
-    old_probs = problem_map(older)
-    new_probs = problem_map(newer)
-    old_cov = coverage_map(older)
-    new_cov = coverage_map(newer)
-    old_q = _quarantined_devices(older)
-    new_q = _quarantined_devices(newer)
-    live_verified = set(newer.get("live_verified_devices") or [])
-    old_dp = _service_dataplane_map(older)
-    new_dp = _service_dataplane_map(newer)
-    old_svc_faults = _service_issue_faults(older)
+    pair = _ScanPair(
+        older=older, newer=newer,
+        old_probs=problem_map(older), new_probs=problem_map(newer),
+        old_cov=coverage_map(older), new_cov=coverage_map(newer),
+        old_q=_quarantined_devices(older), new_q=_quarantined_devices(newer),
+        live_verified=set(newer.get("live_verified_devices") or []),
+        old_dp=_service_dataplane_map(older), new_dp=_service_dataplane_map(newer),
+        old_history={r["service"]: r for r in service_fault_history(older, {})},
+        gone=_services_no_longer_present(older, newer),
+    )
     history = service_fault_history(older, newer)
-    old_history = {r["service"]: r for r in service_fault_history(older, {})}
-    pending_names = {r["service"] for r in history if not r["rechecked"]}
-    new_svc_faults = _service_issue_faults(newer)
-
-    new_problems: list[dict[str, Any]] = []
-    recovered: list[dict[str, Any]] = []
-    persistent: list[dict[str, Any]] = []
-    out_of_scope: list[dict[str, Any]] = []
-
-    for key, issue in new_probs.items():
-        if key not in old_probs:
-            new_problems.append(issue)
-        else:
-            persistent.append(issue)
-
-    gone = _services_no_longer_present(older, newer)
-    from nso_facts.topology.routing import unmatched_neighbor_in
-
-    now_outside = {key for key, row in (_unmatched_rows(newer) or {}).items() if row.get("outside")}
-    for key, issue in old_probs.items():
-        if key in new_probs:
-            continue
-        # Now listed as a session to another network's router: re-sorted, not recovered.
-        if (issue.get("code") == "unknown_neighbor_address"
-                and unmatched_neighbor_in(str(issue.get("message") or "")) in now_outside):
-            continue
-        subject = _issue_subject(issue)
-        # Listed under services no longer present: neither recovered nor skipped.
-        if str(issue.get("layer") or "") == "services" and subject in gone:
-            continue
-        if issue.get("code") == "device_live_unreachable":
-            devices = set(issue.get("devices") or [])
-            if devices and devices <= live_verified and not devices.intersection(new_q):
-                recovered.append(issue)
-            else:
-                out_of_scope.append(issue)
-            continue
-        # A baseline pass or an omitted service is not dataplane recovery.
-        if str(issue.get("layer") or "") == "services" and subject in pending_names:
-            out_of_scope.append(issue)
-            continue
-        # Narrower newer run: missing from newer coverage → not a recovery.
-        if new_cov and not _subject_in_coverage(subject, new_cov):
-            out_of_scope.append(issue)
-        else:
-            recovered.append(issue)
-
-    coverage_changes: list[dict[str, str]] = []
-    newly_missing_evidence: list[dict[str, str]] = []
-    reported_removed = _removed_during_scan(older)
-    for name, old_label in old_cov.items():
-        if name not in new_cov and name in reported_removed:
-            continue
-        if name not in new_cov and name in gone:
-            # No longer in NSO, not left unchecked: no evidence is missing.
-            coverage_changes.append(
-                {"service": name, "from": old_label, "to": "no longer present",
-                 "kind": "no_longer_present"}
-            )
-        elif name not in new_cov:
-            row = {
-                "service": name,
-                "from": old_label,
-                "to": "not_checked",
-                "kind": "not_checked",
-            }
-            coverage_changes.append(row)
-            if old_label in _CHECKED_COVERAGE:
-                newly_missing_evidence.append(
-                    {
-                        "kind": "coverage_gap",
-                        "subject": name,
-                        "detail": f"{old_label} → not_checked",
-                    }
-                )
-        elif old_label in _CHECKED_COVERAGE and new_cov[name] == "budget_skipped":
-            if old_label != "budget_skipped":
-                row = {
-                    "service": name,
-                    "from": old_label,
-                    "to": "budget_skipped",
-                    "kind": "budget_skipped",
-                }
-                coverage_changes.append(row)
-                newly_missing_evidence.append(
-                    {
-                        "kind": "coverage_gap",
-                        "subject": name,
-                        "detail": f"{old_label} → budget_skipped",
-                    }
-                )
-        elif old_label != new_cov[name]:
-            coverage_changes.append(
-                {
-                    "service": name,
-                    "from": old_label,
-                    "to": new_cov[name],
-                    "kind": "label_change",
-                }
-            )
-
-    # Digs that newly failed to conclude = missing evidence.
-    for name, row in new_dp.items():
-        if row.get("complete") is not False:
-            continue
-        prev = old_dp.get(name)
-        if prev is None or prev.get("complete") is not False:
-            newly_missing_evidence.append(
-                {
-                    "kind": "incomplete_dig",
-                    "subject": name,
-                    "detail": "dataplane verification incomplete",
-                }
-            )
-
-    # Newly quarantined devices = missing live evidence this run.
-    for device, issue in new_q.items():
-        if device in old_q:
-            continue
-        msg = str(issue.get("message") or "").strip()
-        newly_missing_evidence.append(
-            {
-                "kind": "collection_gap",
-                "subject": device,
-                "detail": msg or "live MCP collection failed",
-            }
-        )
-
-    recovered_devices = sorted(d for d in old_q if d not in new_q and d in live_verified)
-
-    newly_failed_services: list[dict[str, str]] = []
-    seen_failed: set[str] = set()
-
-    def _add_failed(
-        name: str,
-        *,
-        status: str,
-        detail: str,
-        service_type: str | None = None,
-    ) -> None:
-        key = str(name).strip()
-        if not key or key in seen_failed:
-            return
-        seen_failed.add(key)
-        row: dict[str, str] = {
-            "service": key,
-            "status": status,
-            "detail": detail,
-            "classification": "newly_detected_fault",
-            "regression_proven": False,
-        }
-        if service_type:
-            row["service_type"] = service_type
-        newly_failed_services.append(row)
-
-    new_services = _services_new_since(older, newer)
-    for name, row in new_dp.items():
-        st = str(row.get("status") or "").lower()
-        if st not in _FAULT_DP:
-            continue
-        prev = old_history.get(name) or old_dp.get(name)
-        prev_st = str((prev or {}).get("status") or "").lower()
-        if prev is None or prev_st in _OK_DP or prev_st in {"", "unknown", "not_checked"}:
-            _add_failed(
-                name,
-                status=st,
-                detail=(
-                    f"dataplane {prev_st or 'unchecked'} → {st}"
-                    if prev is not None
-                    else f"dataplane={st}; service not in the previous scan"
-                    if name in new_services
-                    else f"dataplane={st} (new)"
-                ),
-                service_type=str(row.get("service_type") or "") or None,
-            )
-        elif prev_st != st and prev_st in _FAULT_DP:
-            # severity change still operationally new
-            _add_failed(
-                name,
-                status=st,
-                detail=f"dataplane {prev_st} → {st}",
-                service_type=str(row.get("service_type") or "") or None,
-            )
-
-    for name, issue in new_svc_faults.items():
-        if name in seen_failed:
-            continue
-        if name in old_svc_faults or name in old_history:
-            continue
-        # Skip pure collection/sync unknowns that are not service faults.
-        code = str(issue.get("code") or "")
-        if code in {"service_unknown", "service_sync_unknown"}:
-            continue
-        _add_failed(
-            name,
-            status=str(issue.get("status") or "open"),
-            detail=str(issue.get("message") or code or "new service problem"),
-        )
-
-    focus_old = list(older.get("focus_devices") or [])
-    focus_new = list(newer.get("focus_devices") or [])
-    notes: list[str] = []
-    if focus_old != focus_new and (focus_old or focus_new):
-        notes.append(
-            "focus_devices differ: "
-            f"{focus_old or '(none)'} → {focus_new or '(none)'}"
-        )
-    if old_cov and not new_cov:
-        notes.append(
-            "newer case has no service_coverage "
-            "(older runs may predate coverage persistence)"
-        )
-    if new_cov and not old_cov:
-        notes.append(
-            "older case has no service_coverage "
-            "(older runs may predate coverage persistence)"
-        )
-
-    lanes_now, _ = _lanes(newer)
-    _, lanes_down_before = _lanes(older)
-    checks_then, checks_now = _fixed_checks(older), _fixed_checks(newer)
-    for row in newly_failed_services:
-        for note in (_lane_note(row["service"], lanes_now, lanes_down_before),
-                     _earlier_check_note(checks_then.get(row["service"]), checks_now.get(row["service"]))):
-            if note:
-                row["detail"] = f"{row['detail']}; {note}" if row.get("detail") else note
+    new_problems, recovered, persistent, out_of_scope = _sorted_issues(
+        pair, pending_services={r["service"] for r in history if not r["rechecked"]})
+    coverage_changes, coverage_gaps = _coverage_changes(pair)
 
     return {
         "new_problems": new_problems,
@@ -1355,15 +1155,15 @@ def compute_case_delta(
         "out_of_scope": out_of_scope,
         "coverage_changes": coverage_changes,
         # Keep the legacy JSON key for consumers; no claim of failure onset.
-        "newly_failed_services": newly_failed_services,
+        "newly_failed_services": _newly_failed_services(pair),
         "last_known_service_faults": history,
-        "recovered_devices": recovered_devices,
-        "newly_missing_evidence": newly_missing_evidence,
+        "recovered_devices": sorted(d for d in pair.old_q if d not in pair.new_q and d in pair.live_verified),
+        "newly_missing_evidence": coverage_gaps + _new_collection_gaps(pair),
         "service_faults_cleared": [
             {"service": name, "service_type": row.get("service_type") or "",
              "was": row.get("status") or "", "last_observed_run_id": row.get("last_observed_run_id") or "unknown"}
-            for name, row in sorted(old_history.items())
-            if name in _passing_this_run(newer) and name not in gone
+            for name, row in sorted(pair.old_history.items())
+            if name in _passing_this_run(newer) and name not in pair.gone
         ],
         "status_changed_on_unchanged_checks": _status_changed_on_unchanged_checks(older, newer),
         "links_gaining_errors": _links_gaining_errors(older, newer),
@@ -1376,11 +1176,193 @@ def compute_case_delta(
         "interfaces_lost": _interfaces_lost(older, newer),
         "services_no_longer_present": [
             {"service": name, "service_type": kind,
-             "previous_coverage": old_cov.get(name, "")}
-            for name, kind in sorted(gone.items())
+             "previous_coverage": pair.old_cov.get(name, "")}
+            for name, kind in sorted(pair.gone.items())
         ],
-        "notes": notes,
+        "notes": _scope_notes(pair),
     }
+
+
+def _sorted_issues(
+    pair: _ScanPair, *, pending_services: set[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """The problems of both scans as new, recovered, persistent and out of scope.
+
+    A problem the older scan had and the newer one lacks is recovered only when the newer scan
+    could have seen it again: not when it moved to the outside-peer list or its service is gone,
+    not rechecked or outside the newer scan's coverage.
+    """
+    new_problems = [issue for key, issue in pair.new_probs.items() if key not in pair.old_probs]
+    persistent = [issue for key, issue in pair.new_probs.items() if key in pair.old_probs]
+    recovered: list[dict[str, Any]] = []
+    out_of_scope: list[dict[str, Any]] = []
+    now_outside = {key for key, row in (_unmatched_rows(pair.newer) or {}).items() if row.get("outside")}
+    for key, issue in pair.old_probs.items():
+        if key in pair.new_probs:
+            continue
+        # Now listed as a session to another network's router: re-sorted, not recovered.
+        if (issue.get("code") == "unknown_neighbor_address"
+                and unmatched_neighbor_in(str(issue.get("message") or "")) in now_outside):
+            continue
+        subject = _issue_subject(issue)
+        # Listed under services no longer present: neither recovered nor skipped.
+        if str(issue.get("layer") or "") == "services" and subject in pair.gone:
+            continue
+        if issue.get("code") == "device_live_unreachable":
+            devices = set(issue.get("devices") or [])
+            if devices and devices <= pair.live_verified and not devices.intersection(pair.new_q):
+                recovered.append(issue)
+            else:
+                out_of_scope.append(issue)
+            continue
+        # A baseline pass or an omitted service is not dataplane recovery.
+        if str(issue.get("layer") or "") == "services" and subject in pending_services:
+            out_of_scope.append(issue)
+            continue
+        # Narrower newer run: missing from newer coverage → not a recovery.
+        if pair.new_cov and not _subject_in_coverage(subject, pair.new_cov):
+            out_of_scope.append(issue)
+        else:
+            recovered.append(issue)
+    return new_problems, recovered, persistent, out_of_scope
+
+
+def _coverage_changes(pair: _ScanPair) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """How each older service's coverage changed, and the evidence gaps that leaves.
+
+    A service no longer in NSO, or removed while the older scan ran, leaves no gap.
+    """
+    changes: list[dict[str, str]] = []
+    gaps: list[dict[str, str]] = []
+    new_cov = pair.new_cov
+    reported_removed = _removed_during_scan(pair.older)
+    for name, old_label in pair.old_cov.items():
+        if name not in new_cov and name in reported_removed:
+            continue
+        if name not in new_cov and name in pair.gone:
+            # No longer in NSO, not left unchecked: no evidence is missing.
+            changes.append({"service": name, "from": old_label, "to": "no longer present",
+                            "kind": "no_longer_present"})
+        elif name not in new_cov:
+            changes.append({"service": name, "from": old_label, "to": "not_checked", "kind": "not_checked"})
+            if old_label in _CHECKED_COVERAGE:
+                gaps.append({"kind": "coverage_gap", "subject": name, "detail": f"{old_label} → not_checked"})
+        elif old_label in _CHECKED_COVERAGE and new_cov[name] == "budget_skipped":
+            if old_label != "budget_skipped":
+                changes.append({"service": name, "from": old_label, "to": "budget_skipped",
+                                "kind": "budget_skipped"})
+                gaps.append({"kind": "coverage_gap", "subject": name, "detail": f"{old_label} → budget_skipped"})
+        elif old_label != new_cov[name]:
+            changes.append({"service": name, "from": old_label, "to": new_cov[name], "kind": "label_change"})
+    return changes, gaps
+
+
+def _new_collection_gaps(pair: _ScanPair) -> list[dict[str, str]]:
+    """Investigations that newly did not finish, then devices newly unreadable: evidence missing this run."""
+    gaps: list[dict[str, str]] = []
+    for name, row in pair.new_dp.items():
+        if row.get("complete") is not False:
+            continue
+        prev = pair.old_dp.get(name)
+        if prev is None or prev.get("complete") is not False:
+            gaps.append({"kind": "incomplete_dig", "subject": name, "detail": "dataplane verification incomplete"})
+    for device, issue in pair.new_q.items():
+        if device in pair.old_q:
+            continue
+        msg = str(issue.get("message") or "").strip()
+        gaps.append({"kind": "collection_gap", "subject": device, "detail": msg or "live MCP collection failed"})
+    return gaps
+
+
+def _newly_failed_services(pair: _ScanPair) -> list[dict[str, str]]:
+    """Services faulty in the newer scan that were not before, each once: a detection, not a proven regression.
+
+    Dataplane findings come first; a service problem adds a service only when neither scan's
+    dataplane listed it. Sync or collection Unknowns are not faults. Each row says which lane it
+    is on and what the previous scan's fixed check passed, when known.
+    """
+    failed: dict[str, dict[str, str]] = {}
+
+    def _add(name: str, *, status: str, detail: str, service_type: str | None = None) -> None:
+        key = str(name).strip()
+        if not key or key in failed:
+            return
+        row: dict[str, str] = {
+            "service": key,
+            "status": status,
+            "detail": detail,
+            "classification": "newly_detected_fault",
+            "regression_proven": False,
+        }
+        if service_type:
+            row["service_type"] = service_type
+        failed[key] = row
+
+    new_services = _services_new_since(pair.older, pair.newer)
+    for name, row in pair.new_dp.items():
+        st = str(row.get("status") or "").lower()
+        if st not in _FAULT_DP:
+            continue
+        prev = pair.old_history.get(name) or pair.old_dp.get(name)
+        prev_st = str((prev or {}).get("status") or "").lower()
+        service_type = str(row.get("service_type") or "") or None
+        if prev is None or prev_st in _OK_DP or prev_st in {"", "unknown", "not_checked"}:
+            _add(
+                name,
+                status=st,
+                detail=(
+                    f"dataplane {prev_st or 'unchecked'} → {st}"
+                    if prev is not None
+                    else f"dataplane={st}; service not in the previous scan"
+                    if name in new_services
+                    else f"dataplane={st} (new)"
+                ),
+                service_type=service_type,
+            )
+        elif prev_st != st and prev_st in _FAULT_DP:
+            # severity change still operationally new
+            _add(name, status=st, detail=f"dataplane {prev_st} → {st}", service_type=service_type)
+
+    old_svc_faults = _service_issue_faults(pair.older)
+    for name, issue in _service_issue_faults(pair.newer).items():
+        if name in failed:
+            continue
+        if name in old_svc_faults or name in pair.old_history:
+            continue
+        # Skip pure collection/sync unknowns that are not service faults.
+        code = str(issue.get("code") or "")
+        if code in {"service_unknown", "service_sync_unknown"}:
+            continue
+        _add(
+            name,
+            status=str(issue.get("status") or "open"),
+            detail=str(issue.get("message") or code or "new service problem"),
+        )
+
+    rows = list(failed.values())
+    lanes_now, _ = _lanes(pair.newer)
+    _, lanes_down_before = _lanes(pair.older)
+    checks_then, checks_now = _fixed_checks(pair.older), _fixed_checks(pair.newer)
+    for row in rows:
+        for note in (_lane_note(row["service"], lanes_now, lanes_down_before),
+                     _earlier_check_note(checks_then.get(row["service"]), checks_now.get(row["service"]))):
+            if note:
+                row["detail"] = f"{row['detail']}; {note}" if row.get("detail") else note
+    return rows
+
+
+def _scope_notes(pair: _ScanPair) -> list[str]:
+    """Notes when the two scans focused on different devices or only one recorded service coverage."""
+    focus_old = list(pair.older.get("focus_devices") or [])
+    focus_new = list(pair.newer.get("focus_devices") or [])
+    notes: list[str] = []
+    if focus_old != focus_new and (focus_old or focus_new):
+        notes.append(f"focus_devices differ: {focus_old or '(none)'} → {focus_new or '(none)'}")
+    if pair.old_cov and not pair.new_cov:
+        notes.append("newer case has no service_coverage (older runs may predate coverage persistence)")
+    if pair.new_cov and not pair.old_cov:
+        notes.append("older case has no service_coverage (older runs may predate coverage persistence)")
+    return notes
 
 
 def delta_has_operational_changes(delta: dict[str, Any]) -> bool:

@@ -1346,3 +1346,84 @@ def test_an_earlier_check_with_a_structured_observation_is_shown_as_json():
     detail = compute_case_delta(before, now)["newly_failed_services"][0]["detail"]
 
     assert detail.endswith('; the previous scan\'s fixed check passed on pe1: xconnect ({"ac": "FH0/0/0/12.2385", "st": "UP"})')
+
+
+# Paths of compute_case_delta the other tests did not reach (6 Nov 2026), so splitting it changes none.
+
+def _with_issue(case: CaseFile, code: str, *, layer: str, edge_id: str | None = None,
+                devices: list[str] | None = None, message: str = "") -> CaseFile:
+    open_issue(case, code=code, message=message, evidence_ids=["ev_1"], layer=layer, edge_id=edge_id, devices=devices)
+    return case
+
+
+def _blank() -> CaseFile:
+    return CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+
+
+def test_a_cleared_problem_whose_subject_the_newer_scan_did_not_cover_is_out_of_scope_not_recovered():
+    edge = "isis:salt-data-sw:Hu0/0/0/21:seat-data-sw:Hu0/0/0/23"
+    older = _with_issue(_blank(), "configured_no_adjacency", layer="underlay", edge_id=edge)
+    newer = _blank()
+    newer.service_coverage = {"svc-keep": "basic_passed"}
+
+    delta = compute_case_delta(case_to_dict(older), case_to_dict(newer))
+
+    assert [i["edge_id"] for i in delta["out_of_scope"]] == [edge]
+    assert delta["recovered"] == []
+
+
+def test_a_service_checked_before_and_skipped_for_budget_now_is_missing_evidence():
+    older, newer = _blank(), _blank()
+    older.service_coverage = {"svc-a": "investigated", "svc-b": "budget_skipped"}
+    newer.service_coverage = {"svc-a": "budget_skipped", "svc-b": "budget_skipped"}
+
+    delta = compute_case_delta(case_to_dict(older), case_to_dict(newer))
+
+    assert delta["coverage_changes"] == [
+        {"service": "svc-a", "from": "investigated", "to": "budget_skipped", "kind": "budget_skipped"}]
+    assert delta["newly_missing_evidence"] == [
+        {"kind": "coverage_gap", "subject": "svc-a", "detail": "investigated → budget_skipped"}]
+
+
+def test_a_device_newly_unreadable_is_missing_evidence_and_one_unreadable_before_is_not():
+    older = _with_issue(_blank(), "device_live_unreachable", layer="underlay", devices=["cien-data-sw"],
+                        message="cien timed out")
+    newer = _with_issue(_blank(), "device_live_unreachable", layer="underlay", devices=["cien-data-sw"],
+                        message="cien timed out")
+    _with_issue(newer, "device_live_unreachable", layer="underlay", devices=["scm-data-sw"],
+                message="  scm connect timed out  ")
+    _with_issue(newer, "device_live_unreachable", layer="underlay", devices=["cape-data-sw"])
+
+    delta = compute_case_delta(case_to_dict(older), case_to_dict(newer))
+
+    assert delta["newly_missing_evidence"] == [
+        {"kind": "collection_gap", "subject": "scm-data-sw", "detail": "scm connect timed out"},
+        {"kind": "collection_gap", "subject": "cape-data-sw", "detail": "live MCP collection failed"}]
+
+
+def test_a_fault_that_changed_from_down_to_degraded_is_listed_with_both_states():
+    delta = compute_case_delta(case_to_dict(_dp_case("down")), case_to_dict(_dp_case("degraded")))
+
+    [row] = delta["newly_failed_services"]
+    assert (row["service"], row["status"], row["detail"]) == ("circuit", "degraded", "dataplane down → degraded")
+
+
+def test_a_service_with_a_dataplane_fault_and_a_service_problem_is_listed_once_from_its_dataplane():
+    newer = _with_issue(_dp_case("down"), "service_down", layer="services", edge_id="circuit",
+                        message="fixed check failed")
+
+    delta = compute_case_delta(case_to_dict(_blank()), case_to_dict(newer))
+
+    [row] = delta["newly_failed_services"]
+    assert (row["service"], row["detail"]) == ("circuit", "dataplane=down (new)")
+
+
+def test_a_service_unknown_only_for_its_sync_or_collection_is_not_a_newly_failed_service():
+    newer = _blank()
+    for name, code in (("svc-sync", "service_sync_unknown"), ("svc-unknown", "service_unknown"),
+                       ("svc-down", "service_down")):
+        _with_issue(newer, code, layer="services", edge_id=name, message=f"{name} message")
+
+    delta = compute_case_delta(case_to_dict(_blank()), case_to_dict(newer))
+
+    assert [(r["service"], r["detail"]) for r in delta["newly_failed_services"]] == [("svc-down", "svc-down message")]
