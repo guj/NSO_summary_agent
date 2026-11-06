@@ -10,6 +10,9 @@ status, count or phrase in the report means, so read it first.
 
 - [docs/SERVICE_EXAMPLES.md](docs/SERVICE_EXAMPLES.md): one real service per type (l2bridge, l2sts,
   l3rt, l2ptp) followed from NSO's intent through the checks to its final status.
+- `faults.json` lists `no_longer_present`: service faults open when last read whose service a full
+  scan no longer finds in NSO, because its owner deleted it. They used to appear in no list, so a
+  ticketing script had no way to close them.
 
 ### Changed
 

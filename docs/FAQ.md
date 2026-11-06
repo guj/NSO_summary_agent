@@ -36,9 +36,10 @@ details. Without an earlier scan, as on the first saved one, nothing is tagged.
 ### Can a script or ticketing system read a scan's faults?
 
 Yes, without parsing the report: each saved scan writes `faults.json` next to `report.html`. It
-lists the faults the Result counts as `new`, `still_open`, `recovered` or `not_rechecked`, each
-with a key that stays the same from scan to scan, so a script can open, keep and close tickets.
-Only `recovered` means a fault was read clear; `not_rechecked` means it was not looked at. Nothing
+lists the faults the Result counts as `new`, `still_open`, `recovered`, `not_rechecked` or
+`no_longer_present`, each with a key that stays the same from scan to scan, so a script can open,
+keep and close tickets. Only `recovered` means a fault was read clear; `no_longer_present` means
+its service was deleted; `not_rechecked` means it was not looked at. Nothing
 here reads the file yet. The fields are in the
 [runner guide](DIAGNOSTIC_RUNNER.md#faultsjson-the-scans-faults-for-a-script).
 

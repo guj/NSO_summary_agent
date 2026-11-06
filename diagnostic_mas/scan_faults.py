@@ -1,7 +1,9 @@
-"""What a saved scan writes to ``faults.json``: its faults as new, still open, recovered or not rechecked.
+"""What a saved scan writes to ``faults.json``: its faults as new, still open, recovered, not rechecked
+or no longer present.
 
 For a script such as a ticketing tool: open a ticket for a new fault, keep one for a fault still
-open, close one only for a recovered fault, and leave one alone when its fault was not rechecked.
+open, close one for a recovered fault or one whose service was deleted, and leave one alone when
+its fault was not rechecked.
 Built from what the report already uses (the final service status, the routing faults and their
 history, the comparison with the previous scan); nothing here changes a status or a check.
 Bump ``FORMAT_VERSION`` when a field changes meaning or goes away; adding a field does not need it.
@@ -67,6 +69,7 @@ def scan_faults(
         "still_open": [row for row in open_rows if row["previous_scan"] not in _NEW],
         "recovered": [row for row in recovered if row["key"] not in open_keys],
         "not_rechecked": [row for row in not_rechecked if row["key"] not in open_keys],
+        "no_longer_present": _removed_services(delta),
     }
 
 
@@ -149,6 +152,12 @@ def _service_row(row: dict[str, Any]) -> dict[str, Any]:
 
 def _cleared_services(delta: dict[str, Any] | None) -> list[dict[str, Any]]:
     return [_service_row(row) for row in (delta or {}).get("service_faults_cleared") or [] if row.get("service")]
+
+
+def _removed_services(delta: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Service faults ended because a full scan no longer finds the service; empty after a partial scan."""
+    return [_service_row(row) for row in (delta or {}).get("service_faults_no_longer_present") or []
+            if row.get("service")]
 
 
 def _stale_services(case: CaseFile) -> list[dict[str, Any]]:

@@ -1160,10 +1160,12 @@ def compute_case_delta(
         "recovered_devices": sorted(d for d in pair.old_q if d not in pair.new_q and d in pair.live_verified),
         "newly_missing_evidence": coverage_gaps + _new_collection_gaps(pair),
         "service_faults_cleared": [
-            {"service": name, "service_type": row.get("service_type") or "",
-             "was": row.get("status") or "", "last_observed_run_id": row.get("last_observed_run_id") or "unknown"}
-            for name, row in sorted(pair.old_history.items())
+            _ended_fault(name, row) for name, row in sorted(pair.old_history.items())
             if name in _passing_this_run(newer) and name not in pair.gone
+        ],
+        # Ended without a recheck: a full scan no longer lists the service, so its owner deleted it.
+        "service_faults_no_longer_present": [
+            _ended_fault(name, row) for name, row in sorted(pair.old_history.items()) if name in pair.gone
         ],
         "status_changed_on_unchanged_checks": _status_changed_on_unchanged_checks(older, newer),
         "links_gaining_errors": _links_gaining_errors(older, newer),
@@ -1181,6 +1183,12 @@ def compute_case_delta(
         ],
         "notes": _scope_notes(pair),
     }
+
+
+def _ended_fault(name: str, row: dict[str, Any]) -> dict[str, Any]:
+    """A last-known service fault that this scan ended, with the status it had when last read."""
+    return {"service": name, "service_type": row.get("service_type") or "",
+            "was": row.get("status") or "", "last_observed_run_id": row.get("last_observed_run_id") or "unknown"}
 
 
 def _sorted_issues(

@@ -549,6 +549,7 @@ stay in the report.
 | `still_open` | Faults open now that the previous scan had open, could not read, or did not record. |
 | `recovered` | Faults open when last read that this scan read clear. |
 | `not_rechecked` | Faults open when last read that this scan did not read. |
+| `no_longer_present` | Service faults open when last read whose service this `full` scan no longer finds in NSO: its owner deleted it. Always empty after a `partial` scan. |
 
 `scope` says what the scan examined:
 
@@ -584,15 +585,16 @@ Entries in `new` and `still_open` add:
   every scan that read it since, otherwise `null`. `first_seen_exact` false means "or earlier": the
   saved scans start after it. This is when it was first seen, not when it broke.
 
-Entries in `recovered` and `not_rechecked` add `last_seen_run_id`, and for a service `was`, its
-status when last seen.
+Entries in `recovered`, `not_rechecked` and `no_longer_present` add `last_seen_run_id`, and for a
+service `was`, its status when last seen.
 
 A ticketing script would:
 
 1. Open a ticket for each `new` key that has none.
 2. Keep the ticket of each `still_open` key, opening one if it has none.
 3. Close the ticket of each `recovered` key.
-4. Leave every other ticket alone. A fault in `not_rechecked`, or in no list after a `partial`
+4. Close the ticket of each `no_longer_present` key, as deleted rather than fixed.
+5. Leave every other ticket alone. A fault in `not_rechecked`, or in no list after a `partial`
    scan (such as one outside a `--service-type` scan's scope), was not looked at, which is not
    recovery.
 

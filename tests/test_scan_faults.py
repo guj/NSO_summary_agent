@@ -1,4 +1,4 @@
-"""faults.json: each saved scan's faults as new, still open, recovered or not rechecked, for a script to read."""
+"""faults.json: each saved scan's faults as new, still open, recovered, not rechecked or no longer present."""
 import argparse
 import json
 from contextlib import ExitStack
@@ -130,7 +130,19 @@ def test_without_a_previous_scan_every_open_fault_is_new():
     assert out["previous_run_id"] is None
     assert {(row["key"], row["previous_scan"], row["first_seen_exact"]) for row in out["new"]} == {
         ("service:s-down", "none", False), (ISIS, "none", False)}
-    assert out["still_open"] == out["recovered"] == out["not_rechecked"] == []
+    assert out["still_open"] == out["recovered"] == out["not_rechecked"] == out["no_longer_present"] == []
+
+
+def test_a_fault_whose_service_a_full_scan_no_longer_finds_is_no_longer_present():
+    """Its owner deleted it: the file says so, since absence from the lists must never be read as an answer."""
+    delta = {"service_faults_no_longer_present": [{"service": "s-gone", "service_type": "l2bridge",
+                                                    "was": "down", "last_observed_run_id": "R1"}]}
+
+    out = scan_faults(_case(), delta, run_id="R2", previous_run_id="R1", scope=SCOPE)
+
+    assert out["no_longer_present"] == [{"key": "service:s-gone", "kind": "service", "service": "s-gone",
+                                         "service_type": "l2bridge", "was": "down", "last_seen_run_id": "R1"}]
+    assert out["recovered"] == out["not_rechecked"] == []
 
 
 def test_the_scan_facts_say_what_was_compared_and_what_was_scanned():

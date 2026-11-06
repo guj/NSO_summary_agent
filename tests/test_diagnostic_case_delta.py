@@ -501,6 +501,32 @@ def test_last_known_fault_is_kept_when_a_narrower_scan_leaves_the_service_out():
     assert "not rechecked" in history[0]["verification"]
 
 
+def test_an_open_fault_on_a_service_a_full_scan_no_longer_lists_is_listed_with_what_it_was():
+    older, newer = _faulty_then_gone()
+    older["run_id"] = "r1"
+
+    delta = compute_case_delta(older, newer)
+
+    assert delta["service_faults_no_longer_present"] == [
+        {"service": "faulty", "service_type": "l3rt", "was": "down", "last_observed_run_id": "r1"}]
+    assert delta["service_faults_cleared"] == []
+
+
+def test_a_narrower_scan_lists_no_fault_as_no_longer_present():
+    older, narrower = _faulty_then_gone(scope={**FULL_SCOPE, "Service ID filter": "keep"})
+
+    assert compute_case_delta(older, narrower)["service_faults_no_longer_present"] == []
+
+
+def test_a_deleted_service_that_had_no_open_fault_is_not_a_fault_no_longer_present():
+    older = _scan({"keep": "l2bridge", "quiet": "l2bridge"})
+
+    delta = compute_case_delta(older, _scan({"keep": "l2bridge"}))
+
+    assert [row["service"] for row in delta["services_no_longer_present"]] == ["quiet"]
+    assert delta["service_faults_no_longer_present"] == []
+
+
 def test_changes_section_lists_services_no_longer_present_apart_from_missing_evidence():
     from diagnostic_mas.case_delta import compact_delta_for_llm, format_changes_since_previous
 
