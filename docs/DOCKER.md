@@ -75,7 +75,9 @@ Every line should say OK, such as `MCP server: OK (33 tools)` and `NSO: OK (<n> 
 docker compose run --rm agent --publish
 ```
 
-The report is saved in `state/diagnostic_mas/runs/<run-id>/` and sent to Slack or email. To
+The report is saved in `state/diagnostic_mas/runs/<run-id>/` and sent to Slack or email; the same
+folder has `faults.json`, the scan's faults for a script
+([fields](DIAGNOSTIC_RUNNER.md#faultsjson-the-scans-faults-for-a-script)). To
 try a scan that saves and sends nothing, use `--skip-llm --dry-run` instead of `--publish`.
 
 Other [options](DIAGNOSTIC_RUNNER.md#running) also go after `agent`; the example below has

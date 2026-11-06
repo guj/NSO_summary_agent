@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
+import sys
 from typing import Any
 
+from nso_facts.topology.graph import ends_from_edge_id
 from nso_facts.fleet_summary_thresholds import (
     FleetSummaryThresholds,
     load_fleet_summary_thresholds,
@@ -63,6 +65,18 @@ def operational_issues(topology: Any) -> list[dict[str, Any]]:
     return [i for i in issues if isinstance(i, dict)]
 
 
+# Links already reported as unnamed this run, so each is said once however often the report merges.
+_unnamed_reported: set[tuple[str, str]] = set()
+
+
+def _report_unnamed(layer: str, edge_id: Any) -> None:
+    key = (layer, str(edge_id))
+    if key not in _unnamed_reported:
+        _unnamed_reported.add(key)
+        print(f"[topology] could not name the ends of {layer} link {edge_id}; it is left out of the report's "
+              "counts", file=sys.stderr)
+
+
 def merged_edges(
     op_layers: dict[str, Any],
     static_layers_map: dict[str, Any],
@@ -81,10 +95,14 @@ def merged_edges(
             continue
         static = by_id.get(edge.get("id")) if isinstance(edge.get("id"), str) else None
         if static is None:
-            if (edge.get("local") or {}).get("device") or (
-                edge.get("remote") or {}
-            ).get("device"):
-                merged.append(edge)
+            if not ((edge.get("local") or {}).get("device") or (edge.get("remote") or {}).get("device")):
+                # No static twin and no ends of its own: name them from the id, or say it was left out.
+                ends = ends_from_edge_id(edge.get("id"))
+                if ends is None:
+                    _report_unnamed(layer, edge.get("id"))
+                    continue
+                edge = {**edge, "local": ends[0], **({"remote": ends[1]} if ends[1] else {})}
+            merged.append(edge)
             continue
         row = dict(edge)
         if "local" not in row or row.get("local") is None:

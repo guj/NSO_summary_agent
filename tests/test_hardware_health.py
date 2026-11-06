@@ -1,6 +1,6 @@
 import pytest
 
-from agent.hardware_health import (
+from nso_facts.hardware_health import (
     collect_hardware_health,
     device_hardware_label,
     fleet_hardware_alert_counts,

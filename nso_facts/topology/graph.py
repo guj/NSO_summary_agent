@@ -114,6 +114,26 @@ def device_from_physical_edge(edge: dict[str, Any]) -> str | None:
     return None
 
 
+def ends_from_edge_id(edge_id: Any) -> tuple[dict[str, str], dict[str, str] | None] | None:
+    """A link's two ends read back from an id this module builds; None when the id does not split cleanly.
+
+    ``isis:`` ids give each end's device and interface, ``bgp:`` ids each end's device and address,
+    and ``if:`` ids the one interface. An address with colons (IPv6) cannot be split, so gives None.
+    """
+    if not isinstance(edge_id, str):
+        return None
+    kind, _, rest = edge_id.partition(":")
+    if kind == "if":
+        device, _, interface = rest.partition(":")
+        return ({"device": device, "interface": interface}, None) if device and interface else None
+    parts = rest.split(":")
+    if kind not in {"isis", "bgp"} or len(parts) != 4 or not all(parts):
+        return None
+    if kind == "isis":
+        return ({"device": parts[0], "interface": parts[1]}, {"device": parts[2], "interface": parts[3]})
+    return ({"device": parts[2], "address": parts[0]}, {"device": parts[3], "address": parts[1]})
+
+
 def device_from_edge_id(edge_id: str) -> str | None:
     if not edge_id.startswith("if:"):
         return None

@@ -80,3 +80,14 @@ def test_recipients_may_be_separated_by_commas_or_semicolons():
 
     assert _parse_email_list("a@example.org, b@example.org; c@example.org;") == [
         "a@example.org", "b@example.org", "c@example.org"]
+
+
+def test_email_subjects_are_named_after_the_diagnostic_agent_by_default(monkeypatch):
+    from agent.config import load_settings
+
+    monkeypatch.setenv("NSO_ADDRESS", "localhost")
+    monkeypatch.setenv("NSO_PASSWORD", "test")
+    monkeypatch.setenv("FABRIC_AI_API_KEY", "test")
+    monkeypatch.delenv("EMAIL_SUBJECT_PREFIX", raising=False)
+
+    assert load_settings().email_subject_prefix == "NSO Diagnostic"

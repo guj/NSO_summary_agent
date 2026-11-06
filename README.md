@@ -1,4 +1,4 @@
-# NSO Summary Agent
+# NSO Diagnostic Agent
 
 Deterministic **MCP collection** from the Cisco NSO MCP server, plus an optional
 **LLM** (OpenAI-compatible chat API) for human-readable reports and diagnostic plans.
@@ -425,8 +425,9 @@ Launchd does **not** require a crontab entry. `.env` in the project directory is
 1. Collects inventory and endpoint sync from NSO through MCP, then runs the deterministic operational checks
 2. Investigates eligible services with the LLM (skipped with `--skip-llm`)
 3. Compares the result with the last published case
-4. Saves `case.json`, `report.md`, `report.html` and `mcp_calls.txt` (one line per MCP call; the terminal
-   shows only the totals) under `state/diagnostic_mas/runs/<run-id>/`
+4. Saves `case.json`, `report.md`, `report.html`, `faults.json` (the scan's faults for a script) and
+   `mcp_calls.txt` (one line per MCP call; the terminal shows only the totals) under
+   `state/diagnostic_mas/runs/<run-id>/`
 5. Sends the digest to email and/or Slack if configured
 
 A scheduled run that stops without a report (NSO stopped answering, or an error) sends a one-line
@@ -598,12 +599,25 @@ docs/
   DOCKER.md             # run the agent from the image on a server
   FAQ.md                # operator FAQ
   SLACK.md              # set up Slack delivery
-state/            # gitignored; diagnostic_mas/runs/<run-id>/ holds case.json, report.md, report.html, mcp_calls.txt
+state/            # gitignored; diagnostic_mas/runs/<run-id>/ holds case.json, report.md, report.html, faults.json, mcp_calls.txt
 deploy/
   agent/                        # building the image (README.md), compose file, pinned versions
   com.esnet.nso-summary.plist   # example launchd schedule
   monitoring/                   # docker compose, Prometheus and Grafana dashboards
 ```
+
+### Names you will see
+
+The agent began as an "NSO summary" tool; its runner and package are now `nso-diagnostic-run` and
+`nso-diagnostic-agent`. A few older names stay on purpose because something outside the code
+depends on them:
+
+- **Metrics** are `nso_summary_*`, pushed under the Prometheus job `nso-summary`: the dashboards,
+  the scan alert and the stored Prometheus history all use these names.
+- **`deploy/com.esnet.nso-summary.plist`** is the launchd example; an installed copy keeps its name.
+- **`multi_agent/`** and **`nso_report/`** are helper packages that `diagnostic_mas/` imports; their
+  names come from runners that were removed. Modules move into `diagnostic_mas/` only alongside
+  other changes to them.
 
 ## Diagnostic report details
 
@@ -745,8 +759,8 @@ Saved scans under `runs/` (about 24 MB each, mostly `case.json`) are kept unless
 `RUNS_KEEP_DAYS` is set. Then a scan that saves its own results removes saved scans whose run
 ID is more than that many days before its own. It never removes the scan `latest.json` names,
 which the next scan compares with. Only folders named exactly like a run ID are candidates,
-and only the four files a scan writes in them (`case.json`, `report.md`, `report.html`, `mcp_calls.txt`): a
-folder you rename, or anything you add to one, stays. Dry runs remove nothing. History the
+and only the five files a scan writes in them (`case.json`, `report.md`, `report.html`, `faults.json`,
+`mcp_calls.txt`): a folder you rename, or anything you add to one, stays. Dry runs remove nothing. History the
 report shows (first-seen dates, how often an item was seen) is carried from scan to scan, so
 removing old scans loses none of it. Report links into `runs/` (see
 `DIAGNOSTIC_REPORT_BASE_URL`) stop working for removed scans.

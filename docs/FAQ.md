@@ -33,6 +33,15 @@ it was seen, **Carried over** (seen last scan, with no dated record) or **Not re
 and within each kind of action the new items come first. **Changes since previous run** has the
 details. Without an earlier scan, as on the first saved one, nothing is tagged.
 
+### Can a script or ticketing system read a scan's faults?
+
+Yes, without parsing the report: each saved scan writes `faults.json` next to `report.html`. It
+lists the faults the Result counts as `new`, `still_open`, `recovered` or `not_rechecked`, each
+with a key that stays the same from scan to scan, so a script can open, keep and close tickets.
+Only `recovered` means a fault was read clear; `not_rechecked` means it was not looked at. Nothing
+here reads the file yet. The fields are in the
+[runner guide](DIAGNOSTIC_RUNNER.md#faultsjson-the-scans-faults-for-a-script).
+
 ### What does "NSO failed to authenticate" mean?
 
 NSO reached the device but the login failed, in NSO's own words such as `SSH host key mismatch`:

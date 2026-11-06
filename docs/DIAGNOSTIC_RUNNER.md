@@ -501,7 +501,8 @@ to zero; these older mechanisms are separate from dataplane digs and issue drill
 ## Reports and topology
 
 Saved reports live under `state/diagnostic_mas/runs/<run-id>/` by default:
-`case.json`, `report.md`, self-contained `report.html`, and `mcp_calls.txt`, one line per MCP
+`case.json`, `report.md`, self-contained `report.html`, `faults.json` (the scan's faults for a
+script; see [below](#faultsjson-the-scans-faults-for-a-script)), and `mcp_calls.txt`, one line per MCP
 call (the terminal shows only the totals and per-stage counts). The HTML attachment
 contains a collapsible circular routing topology with IS-IS/BGP toggles, curved
 parallel links, device selection and endpoint evidence. No extra queries or
@@ -521,6 +522,82 @@ separate relationships; device-pair counts collapse those connections.
 Disabled and unused deep-check/handoff counters are hidden from Run details;
 limits remain in Run configuration. Historical findings, current faults and
 verification gaps must be interpreted separately from recovery or regression.
+
+### faults.json: the scan's faults for a script
+
+Each saved scan (`--publish`) also writes `faults.json` to its run folder, for a script such as a
+ticketing tool. It lists the scan's faults by what changed since the previous saved scan, so the
+script does not have to read the report. Nothing in this repository reads it; it is there for when
+one is wanted. A dry run writes none. `latest.json` in `state/diagnostic_mas/` names the newest one
+as `faults_path`; when the scan runs in Docker that is the path inside the container, and the file
+is in the same run folder under the mounted `state/`.
+
+A fault is what the report's **Result** counts: a service whose final status is Down or Degraded,
+a BGP session down or not established, an IS-IS adjacency down, or an outside BGP session not
+established. Unknown services are only counted, since Unknown means too little evidence, not an
+outage. Collection gaps, such as devices that could not be read or NSO failing to authenticate,
+stay in the report.
+
+| Field | Meaning |
+|---|---|
+| `format_version` | `1`. Raised when a field changes meaning or is removed; new fields can appear without it. |
+| `run_id`, `previous_run_id` | This scan, and the saved scan it was compared with (`null` when there was none). |
+| `scope` | `kind` is `full`, or `services` for a `--service-type`/`--service-id` scan, which lists only those services; `service_type` and `service_id` as given. |
+| `report_url` | The HTML report when `DIAGNOSTIC_REPORT_BASE_URL` is set, otherwise `null`. |
+| `counts.services` | The final service status totals: `up`, `down`, `degraded`, `unknown`. |
+| `new` | Faults open now that the previous scan did not have open; every open fault when there was no previous scan. |
+| `still_open` | Faults open now that the previous scan had open, could not read, or did not record. |
+| `recovered` | Faults open when last read that this scan read clear. |
+| `not_rechecked` | Faults open when last read that this scan did not read. |
+
+Every entry has:
+
+- `key`: the same from scan to scan. `service:<name>` for a service; for routing, the ID the
+  report uses, such as `isis:<device>:<interface>:<device>:<interface>`,
+  `bgp:<address>:<address>:<device>:<device>` or `bgp-outside:<device>:<address>`.
+- `kind`: `service`, `bgp`, `isis` or `outside_bgp`.
+- For a service, `service` and `service_type`. For routing, `ends`: each a `device` with its
+  `interface` (IS-IS) or `address` (BGP). An interface is `null` when its device was not read, and
+  `ends` is empty when the ID cannot be split, as for an IPv6 BGP session.
+
+Entries in `new` and `still_open` add:
+
+- `status`: `down` or `degraded` for a service; `down` or `not established` for routing, with the
+  routing fault's `code`.
+- `previous_scan`: `not open` (the previous scan did not have it open: up, Unknown, or not there
+  yet), `open`, `not read`, `none` (no previous scan) or `unknown` (not recorded).
+- `first_seen_run_id` and `first_seen_exact`: the first scan that saw it, when it has been seen in
+  every scan that read it since, otherwise `null`. `first_seen_exact` false means "or earlier": the
+  saved scans start after it. This is when it was first seen, not when it broke.
+
+Entries in `recovered` and `not_rechecked` add `last_seen_run_id`, and for a service `was`, its
+status when last seen.
+
+A ticketing script would:
+
+1. Open a ticket for each `new` key that has none.
+2. Keep the ticket of each `still_open` key, opening one if it has none.
+3. Close the ticket of each `recovered` key.
+4. Leave every other ticket alone. A fault in `not_rechecked`, or in no list (such as one outside a
+   `--service-type` scan's scope), was not looked at, which is not recovery.
+
+An entry from a saved scan; `salt-data-sw` does not list this adjacency, so its interface is `null`:
+
+```json
+{
+  "key": "isis:salt-data-sw:?:seat-data-sw:HundredGigE0/0/0/23.3000",
+  "kind": "isis",
+  "status": "down",
+  "code": "unidirectional_adjacency",
+  "ends": [
+    {"device": "salt-data-sw", "interface": null},
+    {"device": "seat-data-sw", "interface": "HundredGigE0/0/0/23.3000"}
+  ],
+  "previous_scan": "open",
+  "first_seen_run_id": "20261027T163114Z",
+  "first_seen_exact": false
+}
+```
 
 ## Offline validation
 

@@ -56,6 +56,7 @@ def persist_case(
     case: CaseFile,
     report: str | None = None,
     nso_address: str | None = None,
+    faults: dict[str, Any] | None = None,
 ) -> Path:
     state_dir = Path(state_dir)
     run_dir = run_folder(state_dir, run_id)
@@ -74,6 +75,14 @@ def persist_case(
         report_path.write_text(mask_nso_address(report, nso_address), encoding="utf-8")
         html = render_html_report(report, run_id, case=case_to_dict(case))
         (run_dir / "report.html").write_text(mask_nso_address(html, nso_address), encoding="utf-8")
+    faults_path: Path | None = None
+    if faults is not None:
+        from agent.publish import mask_nso_address
+
+        # For a script to read; its fields are described in docs/DIAGNOSTIC_RUNNER.md.
+        faults_path = run_dir / "faults.json"
+        faults_path.write_text(mask_nso_address(json.dumps(faults, indent=2, default=str), nso_address),
+                               encoding="utf-8")
     latest = state_dir / "latest.json"
     meta: dict[str, Any] = {
         "run_id": run_id,
@@ -83,6 +92,8 @@ def persist_case(
     if report_path is not None:
         meta["report_path"] = str(report_path)
         meta["report_html_path"] = str(run_dir / "report.html")
+    if faults_path is not None:
+        meta["faults_path"] = str(faults_path)
     latest.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return path
 
@@ -90,7 +101,7 @@ def persist_case(
 # A saved scan's folder is named by its run id and holds what ``persist_case`` writes, and the
 # scan's list of MCP calls.
 _RUN_FOLDER = re.compile(r"\d{8}T\d{6}Z")
-_RUN_FILES = ("case.json", "report.md", "report.html", CALLS_FILE)
+_RUN_FILES = ("case.json", "report.md", "report.html", "faults.json", CALLS_FILE)
 
 
 def _run_time(name: str) -> datetime | None:

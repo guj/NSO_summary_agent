@@ -457,7 +457,7 @@ async def _run_after_accounting(
     report_case, case_delta, previous_run_id, open_faults = _compare_with_previous(case, settings, plan)
     report = await _render(args, settings, case, report_case, plan,
                            case_delta=case_delta, previous_run_id=previous_run_id)
-    return _save_and_deliver(args, settings, case, plan, report,
+    return _save_and_deliver(args, settings, case, plan, report, report_case=report_case,
                              case_delta=case_delta, previous_run_id=previous_run_id, open_faults=open_faults)
 
 
@@ -778,8 +778,9 @@ async def _summary(
 def _save_and_deliver(
     args: argparse.Namespace, settings, case: CaseFile, plan: _ScanPlan, report: str,
     *, case_delta: dict[str, Any] | None, previous_run_id: str | None, open_faults: list[dict[str, Any]],
+    report_case: CaseFile | None = None,
 ) -> int:
-    """Save the scan, send its notice and push its metrics; 1 when a channel could not deliver.
+    """Save the scan with its faults.json, send its notice and push its metrics; 1 when a channel could not deliver.
 
     A dry run does none of that and says so. A channel that cannot deliver must not stop
     the others, the saved report or metrics.
@@ -797,19 +798,31 @@ def _save_and_deliver(
 
     from diagnostic_mas.html_report import notification_digest, report_notice
     from diagnostic_mas.open_faults import digest_changes
+    from diagnostic_mas.scan_faults import scan_faults
+    from diagnostic_mas.state_paths import run_folder
 
     state_dir = diagnostic_mas_state_dir(settings)
     nso_address = os.environ.get("NSO_ADDRESS")
     delivery_failures: list[tuple[str, str]] = []
-    out = persist_case(state_dir, run_id=plan.run_id, case=case, report=report, nso_address=nso_address)
+    report_url = None
+    if settings.diagnostic_report_base_url:
+        report_url = (settings.diagnostic_report_base_url.rstrip("/") + "/"
+                      + quote(run_folder(state_dir, plan.run_id).name, safe="") + "/report.html")
+    # The faults the report shows, for a script to read: a service focus lists only its services.
+    # An extra: when it cannot be built, the scan and its report are still saved.
+    try:
+        faults = scan_faults(report_case or case, case_delta, run_id=plan.run_id, previous_run_id=previous_run_id,
+                             service_type=plan.service_type, service_id=plan.service_id, report_url=report_url)
+    except Exception as exc:  # noqa: BLE001
+        faults = None
+        print(f"[faults] faults.json not written ({type(exc).__name__}: "
+              f"{mask_nso_address(str(exc), nso_address)})", file=sys.stderr)
+    out = persist_case(state_dir, run_id=plan.run_id, case=case, report=report, nso_address=nso_address,
+                       faults=faults)
     if settings.runs_keep_days > 0:
         from diagnostic_mas.state_paths import prune_saved_runs
 
         prune_saved_runs(state_dir, run_id=plan.run_id, keep_days=settings.runs_keep_days)
-    report_url = None
-    if settings.diagnostic_report_base_url:
-        report_url = (settings.diagnostic_report_base_url.rstrip("/") + "/"
-                      + quote(out.parent.name, safe="") + "/report.html")
     notice = (notification_digest(report, plan.run_id, changes=list(
                   digest_changes(case_delta, previous_run_id, open_faults)))
               if settings.notification_digest else report_notice(plan.run_id))

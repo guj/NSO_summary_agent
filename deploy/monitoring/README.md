@@ -276,10 +276,10 @@ NSO_ALERT_SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 then run `docker compose up -d` in that folder. `COMPOSE_FILE` is Docker Compose's own setting: it makes
 a plain `docker compose` combine the two files. The webhook can be the one the scans post to. Without it, compose stops
 with a message rather than starting a Grafana that would refuse the alert. Grafana reads the
-alert file when it starts: to change the 48 hours, edit `params: [48]` in
+alert file when it starts: to change the 48 hours, edit `params: [48]` (a number of hours) in
 `grafana/alerting/nso-scan-alerts.yaml` and run `docker compose restart grafana`.
 
-Test it once: set the threshold to `0.5` and restart Grafana. Within about five minutes Slack gets
+Test it once: set the threshold to `0.5` (half an hour) and restart Grafana. Within about five minutes Slack gets
 "No published NSO diagnostic scan", if the last published scan is older than half an hour. Set it
 back to `48` and restart Grafana again; the alert clears at its next check. Grafana's alert list,
 http://localhost:3000/alerting/list (**Alerting → Alert rules**, folder **NSO diagnostic**), shows
