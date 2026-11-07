@@ -94,3 +94,28 @@ def test_a_reader_given_a_diagnosis_without_the_shape_fails_loudly():
 
     with pytest.raises(KeyError):
         _dataplane_dig_subjects(case)
+
+
+def test_a_saved_service_record_is_given_the_record_shape():
+    from diagnostic_mas.case import normalize_service_record
+
+    assert normalize_service_record("l2sts/svc-a", {"devices": ["pe1"], "basic_checks": {"intent": None}}) == {
+        "name": "svc-a", "service_type": "l2sts", "devices": ["pe1"],
+        "basic_checks": {"status": "not_checked", "checks": [], "intent": None}}
+    # Older scans have records without fixed checks: that stays visible, not defaulted.
+    assert normalize_service_record("l2bridge/svc-b", {"name": "svc-b"}) == {
+        "name": "svc-b", "service_type": "l2bridge"}
+    assert normalize_service_record("l3rt/svc-c", "not a record") is None
+
+
+def test_the_delta_gives_hand_made_service_records_the_shape_before_reading_them():
+    full = {"Device filter": "All", "Service type filter": "All", "Service ID filter": "All", "Scope flags": "Default"}
+
+    def scan(records):
+        return {"run_configuration": full,
+                "evidence": [{"kind": "spine", "role": "service", "payload": {"extra": {"services": records}}}]}
+
+    older = scan({"l3rt/kept": {"devices": ["pe1"]}, "l3rt/gone": {"devices": ["pe1"]}})
+    delta = compute_case_delta(older, scan({"l3rt/kept": {"devices": ["pe1"]}}))
+
+    assert delta["services_no_longer_present"] == [{"service": "gone", "service_type": "l3rt", "previous_coverage": ""}]

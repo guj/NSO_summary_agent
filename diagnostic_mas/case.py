@@ -106,6 +106,51 @@ def normalize_diagnosis(raw: Any) -> Diagnosis | None:
     return diagnosis  # type: ignore[return-value]
 
 
+class BasicChecks(TypedDict):
+    """A service's fixed-check result: always a status and the checks. Other fields vary by service type."""
+    status: str  # up, down, degraded, unknown or not_checked
+    checks: list[dict[str, Any]]  # each has check, status and observation; device when known
+    intent: NotRequired[dict[str, Any] | None]  # what NSO's config asks for; missing or None on some
+
+
+class ServiceRecord(TypedDict):
+    """A listed service, keyed ``<service_type>/<name>``; only the fields shaped so far are named here.
+
+    Records also hold devices, device_sync, the status fields and more, not yet given defaults. A record
+    without ``basic_checks`` was not checked (older scans), so it gets none.
+    """
+    name: str
+    service_type: str
+    basic_checks: NotRequired[BasicChecks]
+    presence_recheck: NotRequired[dict[str, Any]]  # set when the service was rechecked as possibly removed
+    live_l2: NotRequired[dict[str, Any]]  # live L2 readings, on l2ptp services only
+
+
+def normalize_service_record(key: str, raw: Any) -> ServiceRecord | None:
+    """A saved or hand-made service record given the record shape; None if it is not one.
+
+    Its name and type come from its ``<service_type>/<name>`` key when it lacks them. The record is
+    returned unchanged, not copied, when it already has the shape.
+    """
+    if not isinstance(raw, dict):
+        return None
+    kind, name = str(key).split("/", 1)[0], str(key).split("/", 1)[-1]
+    fill: dict[str, Any] = {}
+    if not raw.get("name"):
+        fill["name"] = name
+    if not raw.get("service_type"):
+        fill["service_type"] = kind
+    basic = raw.get("basic_checks")
+    drop = "basic_checks" in raw and not isinstance(basic, dict)
+    if isinstance(basic, dict) and (basic.get("status") is None or not isinstance(basic.get("checks"), list)):
+        fill["basic_checks"] = {**basic, "status": basic.get("status") or "not_checked",
+                                "checks": basic.get("checks") if isinstance(basic.get("checks"), list) else []}
+    if not fill and not drop:
+        return raw  # type: ignore[return-value]
+    record = {key: value for key, value in raw.items() if not (drop and key == "basic_checks")}
+    return {**record, **fill}  # type: ignore[return-value]
+
+
 @dataclass
 class Budget:
     max_deep_checks: int

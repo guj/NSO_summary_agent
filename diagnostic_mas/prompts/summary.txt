@@ -159,5 +159,5 @@ Run-to-run evidence discipline:
   session down at a device that answered (configured_no_adjacency,
   unidirectional_adjacency, session_down): name both devices, say when one
   was not read, and, when a drill concluded on it, give its cause in one
-  sentence. It is not a collection gap; unread devices, platform limits and
-  unmatched neighbors are.
+  sentence as the drill's conclusion, not verified. It is not a collection
+  gap; unread devices, platform limits and unmatched neighbors are.

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
-from diagnostic_mas.case import Issue, normalize_diagnosis, normalize_issue
+from diagnostic_mas.case import Issue, ServiceRecord, normalize_diagnosis, normalize_issue, normalize_service_record
 from diagnostic_mas.nso_authentication import authentication_failures
 from nso_facts.topology.routing import unmatched_neighbor_in
 
@@ -136,16 +137,19 @@ def _service_extras(case: dict[str, Any]):
             yield (ev.get("payload") or {}).get("extra") or {}
 
 
+def _records(case: dict[str, Any]) -> Iterator[ServiceRecord]:
+    """Each listed service's record, in the record shape: the one way this module reads records."""
+    for extra in _service_extras(case):
+        for key, raw in (extra.get("services") or {}).items():
+            if (record := normalize_service_record(key, raw)) is not None:
+                yield record
+
+
 def _service_records(case: dict[str, Any]):
     """(name, service type, removed while the scan ran) for each listed service."""
-    for extra in _service_extras(case):
-        for key, record in (extra.get("services") or {}).items():
-            if not isinstance(record, dict):
-                continue
-            name = str(record.get("name") or str(key).split("/", 1)[-1]).strip()
-            kind = str(record.get("service_type") or str(key).split("/", 1)[0]).strip()
-            if name:
-                yield name, kind, (record.get("presence_recheck") or {}).get("outcome") == "absent"
+    for record in _records(case):
+        yield (record["name"], record["service_type"],
+               (record.get("presence_recheck") or {}).get("outcome") == "absent")
 
 
 def _service_inventory(case: dict[str, Any]) -> dict[str, str]:
@@ -502,12 +506,7 @@ def _lane_note(name: str, now: dict[str, tuple[str, str, Any, Any]], down_before
 
 def _fixed_checks(case: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Each listed service's saved fixed-check results, by service name."""
-    out: dict[str, dict[str, Any]] = {}
-    for extra in _service_extras(case):
-        for key, record in (extra.get("services") or {}).items():
-            if isinstance(record, dict) and isinstance(record.get("basic_checks"), dict):
-                out[str(record.get("name") or str(key).split("/", 1)[-1]).strip()] = record["basic_checks"]
-    return out
+    return {record["name"]: record["basic_checks"] for record in _records(case) if "basic_checks" in record}
 
 
 def _observed(check: dict[str, Any]) -> str:
@@ -565,13 +564,9 @@ def _services_on_ports(case: dict[str, Any]) -> dict[tuple[str, str], set[str]]:
     from diagnostic_mas.port_counters import _parent_port
 
     out: dict[tuple[str, str], set[str]] = {}
-    for extra in _service_extras(case):
-        for key, record in (extra.get("services") or {}).items():
-            if not isinstance(record, dict):
-                continue
-            name = str(record.get("name") or str(key).split("/", 1)[-1]).strip()
-            for end in attachments((record.get("basic_checks") or {}).get("intent") or {}):
-                out.setdefault((end["device"], _parent_port(end["ac"])), set()).add(name)
+    for record in _records(case):
+        for end in attachments(record.get("basic_checks", {}).get("intent") or {}):
+            out.setdefault((end["device"], _parent_port(end["ac"])), set()).add(record["name"])
     return out
 
 
@@ -802,13 +797,7 @@ def _passing_this_run(case: dict[str, Any]) -> set[str]:
     from diagnostic_mas.service_final_status import assessment
 
     digs = {dx["subject"]["name"]: dx for dx in case.get("diagnoses") or [] if dx["kind"] == "dataplane"}
-    return {
-        str(record["name"])
-        for extra in _service_extras(case)
-        for record in (extra.get("services") or {}).values()
-        if isinstance(record, dict) and record.get("name")
-        and assessment(record, digs.get(str(record["name"])))[0] == "up"
-    }
+    return {record["name"] for record in _records(case) if assessment(record, digs.get(record["name"]))[0] == "up"}
 
 
 def _judged_services(case: dict[str, Any]) -> dict[str, tuple[str, str, Any]]:
@@ -817,19 +806,15 @@ def _judged_services(case: dict[str, Any]) -> dict[str, tuple[str, str, Any]]:
 
     digs = {dx["subject"]["name"]: dx for dx in case.get("diagnoses") or [] if dx["kind"] == "dataplane"}
     out: dict[str, tuple[str, str, Any]] = {}
-    for extra in _service_extras(case):
-        for record in (extra.get("services") or {}).values():
-            basic = record.get("basic_checks") if isinstance(record, dict) else None
-            if not isinstance(basic, dict) or not record.get("name") or basic.get("status") in {None, "not_checked"}:
-                continue
-            read = (basic.get("status"), sorted(
-                json.dumps([c.get("check"), c.get("status"), c.get("device"), c.get("observation")],
-                           sort_keys=True, default=str)
-                for c in basic.get("checks") or [] if isinstance(c, dict)))
-            name = str(record["name"])
-            # Only an investigation can give a second opinion; a scan that ran none gave no verdict.
-            if name in digs:
-                out[name] = (str(record.get("service_type") or ""), assessment(record, digs[name])[0], read)
+    for record in _records(case):
+        basic, name = record.get("basic_checks"), record["name"]
+        # Only an investigation can give a second opinion; a scan that ran none gave no verdict.
+        if basic is None or basic["status"] == "not_checked" or name not in digs:
+            continue
+        read = (basic["status"], sorted(
+            json.dumps([c["check"], c["status"], c.get("device"), c["observation"]], sort_keys=True, default=str)
+            for c in basic["checks"]))
+        out[name] = (record["service_type"], assessment(record, digs[name])[0], read)
     return out
 
 

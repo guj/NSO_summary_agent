@@ -21,6 +21,8 @@ status, count or phrase in the report means, so read it first.
   wrongly `full`), with new `checked`, `devices` and `ignored_service_types` fields
   ([docs/DIAGNOSTIC_RUNNER.md](docs/DIAGNOSTIC_RUNNER.md), "faults.json: the scan's faults for a
   script").
+- The summary gives an LLM investigation's cause for an IS-IS or BGP fault as that investigation's
+  conclusion, not verified, as the device's block already did; it used to state it as fact.
 
 ## 0.2.0 (November 2026)
 
