@@ -4,15 +4,14 @@ import html
 import json
 from pathlib import Path
 
+from diagnostic_mas.case import service_records
+
 
 def service_topology_data(case):
     if not case:
         return []
-    services = {}
-    for ev in case.get("evidence", []):
-        if ev.get("kind") == "spine" and ev.get("role") == "service":
-            services.update((ev.get("payload", {}).get("extra") or {}).get("services") or {})
-    counts = Counter(str(r.get("name") or k.split("/", 1)[-1]) for k, r in services.items())
+    services = {key: record for _ev, key, record in service_records(case.get("evidence"))}
+    counts = Counter(record["name"] for record in services.values())
     digs = {}
     for d in case.get("diagnoses", []):
         if d.get("kind") == "dataplane":
@@ -35,12 +34,11 @@ def service_topology_data(case):
     for key, record in services.items():
         if (record.get("presence_recheck") or {}).get("outcome") == "absent":
             continue
-        kind = str(record.get("service_type") or key.split("/", 1)[0])
-        name = str(record.get("name") or key.split("/", 1)[-1])
+        kind, name = record["service_type"], record["name"]
         dig = digs.get((kind, name), digs.get((None, name)))
         status, basis = assessment(record, dig)
-        basic = record.get("basic_checks") or {}
-        checks = basic.get("checks") or []
+        basic = record.get("basic_checks") or {}  # older scans have none; reason, intent and the like vary
+        checks = basic.get("checks", [])
         devices = set(record.get("devices") or [])
         attachments = []
         for check in checks:

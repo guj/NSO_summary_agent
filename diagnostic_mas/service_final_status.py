@@ -56,7 +56,7 @@ def assessment(service, dig=None):
 def final_service_assessments(case):
     """Yield (service_type, name, service, final status, reason) for each present service."""
     services = services_from_case(case)
-    names = Counter(str(r.get("name") or k.split("/", 1)[-1]) for k,r in services.items())
+    names = Counter(record["name"] for record in services.values())
     digs = {}
     for dig in case.diagnoses:
         if dig["kind"] != "dataplane":
@@ -65,11 +65,10 @@ def final_service_assessments(case):
         if kind or names.get(name) == 1:
             digs[kind, name] = dig
     from diagnostic_mas.service_presence import disappeared
-    for key, service in services.items():
+    for service in services.values():
         if disappeared(service):
             continue
-        kind = str(service.get("service_type") or key.split("/", 1)[0])
-        name = str(service.get("name") or key.split("/", 1)[-1])
+        kind, name = service["service_type"], service["name"]
         dig = digs.get((kind,name), digs.get((None,name)))
         status, reason = assessment(service, dig)
         yield kind, name, service, status, reason

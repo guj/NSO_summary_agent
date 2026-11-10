@@ -6,6 +6,19 @@ status, count or phrase in the report means, so read it first.
 
 ## Unreleased
 
+### Report meaning
+
+- **Changes since previous run:** a port that a scan read down and then found up again when it
+  read the port's counters is listed once, under "Interfaces up in the previous run, down now",
+  marked "up again later in this scan" with its state changes since the previous scan. It used to
+  be listed under "Links gaining errors while up" as well, which said no service status rested on
+  it although its services could be Down or Degraded because of the flapping.
+- **Changes since previous run:** "up again later in this scan" also marks a sub-interface whose port
+  the later counter read found up after changing state since the previous scan, naming that port
+  ("Bundle-Ether101 up again later in this scan: …"), and a bundle member the later member read
+  found Active. On 10 Nov dall-data-sw's Bundle-Ether101.3000 and its members were left unmarked,
+  and its bundle was listed again under "Links gaining errors while up".
+
 ### Added
 
 - [docs/SERVICE_EXAMPLES.md](docs/SERVICE_EXAMPLES.md): one real service per type (l2bridge, l2sts,
@@ -23,6 +36,42 @@ status, count or phrase in the report means, so read it first.
   script").
 - The summary gives an LLM investigation's cause for an IS-IS or BGP fault as that investigation's
   conclusion, not verified, as the device's block already did; it used to state it as fact.
+- A port investigation with no power reading to go on (a copper cable, or optics not read) says
+  its readings cannot tell which end or the cable is at fault. It used to place the fault beyond
+  the port, and its suggested next step read as if the port's configuration had been ruled out.
+- **Links gaining errors while up** names the services on a port that carries three or fewer, for
+  example "carries 1 service (`l2bridge/link-h4-tofino-…`)". It used to give only the count, so a
+  service listed as no longer failing could not be matched with the flapping port it rides on.
+- An LLM investigation whose conclusion is refused three times in a row stops there; a service
+  dig stopped this way is Unknown, "refused 3 times in a row: no usable cause". The model is now
+  told which field was refused and what it held. On 9 Nov a drill re-sent a conclusion without a
+  usable cause 13 times, until its round limit, told each time only that one was needed.
+- A drill read that the device itself rejected (a node it doesn't have, invalid input) is to be
+  reported as a failed command and corrected, not as a timeout. Ten salt ↔ seat drills asked for
+  salt's NPU counters at a location salt doesn't have, reported a timeout, and told operators to
+  collect the counters by hand with the same command.
+- LLM investigations are told that a hardware-health read includes the NPU's trap counters, totals
+  for the whole NPU rather than per port. On 10 Nov the salt ↔ seat drill held salt's trap counters
+  from its own read, called it a sensor reading, and told operators to collect the counters by hand
+  because they were "not obtainable via MCP".
+- **Services no longer present since the previous run** marks a deleted service that was an open
+  fault, for example "— Down in the previous run", and lists those first; a cut-off list counts the
+  faults it leaves out. The fault ended with the deletion, not a recovery. The summary's input marks
+  them too. On 9 Nov three Down services were deleted and the report gave only their names, while
+  the summary said service status had not changed.
+- An IS-IS adjacency down whose ports the interface read found down and the later counter read found
+  up says so in the Result and its follow-up ("both ends' ports up when read later, at 00:56 UTC;
+  the adjacency was not re-read"), and its Attention line gives the later reading beside the
+  earlier one. It is still counted down and listed in `faults.json`. On 10 Nov dall ↔ losa was
+  counted down while the summary said it had recovered, and its Attention line set "link down"
+  beside "3 of 3 members active", read half an hour apart, without saying so.
+
+### Fixed
+
+- LLM investigations get the readings of an interface-health or hardware-health read. They used to
+  get only the platform name ("ios-xr" or "saos"), and a dig's saved evidence kept only that: 213
+  reads in 51 of the last 53 scans. On 10 Nov the salt ↔ seat drill said its hardware read gave "no
+  fault detail", though that read holds salt's NPU trap counters.
 
 ## 0.2.0 (November 2026)
 

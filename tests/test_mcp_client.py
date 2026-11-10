@@ -1,5 +1,6 @@
 """Tests for MCP client response parsing."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -15,6 +16,7 @@ from nso_facts.mcp_client import (
     mcp_walk_root,
     tool_schema_uses_params_wrapper,
     unwrap_mcp_data,
+    unwrap_mcp_result_text,
 )
 
 
@@ -751,3 +753,31 @@ async def test_fresh_inventory_bypasses_but_preserves_initial_cache():
         assert client.call_tool.await_count==2
     finally:
         stop_mcp_cache()
+
+
+def test_a_reply_whose_platform_sits_beside_its_readings_is_kept_whole():
+    """get_hardware_health's readings (here the NPU trap counters) used to be dropped for its platform."""
+    data = {
+        "device": "salt-data-sw",
+        "platform": "ios-xr",
+        "outcome": "ok",
+        "summary": {"total": 4, "ok": 4, "failed": 0},
+        "temperature": [{"location": "0/RP0/CPU0", "celsius": 38}],
+        "control_plane": [{"trap": "ISIS_OPCODE", "dropped": 12}],
+        "raw": {"control_plane": "ISIS_OPCODE ... 12"},
+    }
+    assert json.loads(unwrap_mcp_result_text({"status": "success", "data": data})) == data
+
+
+@pytest.mark.parametrize(
+    ("data", "body"),
+    [
+        ({"device": "salt-data-sw", "command": "show isis adjacency", "result": "IS-IS fabric-net\nSystem Id"},
+         "IS-IS fabric-net\nSystem Id"),
+        ({"device": "salt-data-sw", "platform": "ios-xr"}, "ios-xr"),
+        ({"path": "tailf-ncs:devices/device=salt-data-sw", "depth": 2, "payload": "router isis fabric-net"},
+         "router isis fabric-net"),
+    ],
+)
+def test_a_reply_field_beside_only_labels_is_still_unwrapped(data, body):
+    assert unwrap_mcp_result_text({"status": "success", "data": data}) == body

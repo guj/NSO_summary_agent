@@ -129,7 +129,7 @@ def open_fault_groups(case: CaseFile, rows: list[dict[str, Any]], *, new: Any = 
     # Services the fixed check decided for one and the same reason are one row.
     from diagnostic_mas.device_health import services_from_case
 
-    records = {str(rec.get("name")): rec for rec in services_from_case(case).values() if isinstance(rec, dict)}
+    records = {rec["name"]: rec for rec in services_from_case(case).values()}
     by_reason: dict[tuple[str, str], list[str]] = {}
     for name, row in left.items():
         reason = decided_reason(records.get(name))

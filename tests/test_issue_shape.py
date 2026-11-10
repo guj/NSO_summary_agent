@@ -119,3 +119,34 @@ def test_the_delta_gives_hand_made_service_records_the_shape_before_reading_them
     delta = compute_case_delta(older, scan({"l3rt/kept": {"devices": ["pe1"]}}))
 
     assert delta["services_no_longer_present"] == [{"service": "gone", "service_type": "l3rt", "previous_coverage": ""}]
+
+
+def _case_listing(records):
+    case = CaseFile(budget=Budget(0, 0))
+    case.evidence.append({"kind": "spine", "role": "service", "payload": {"extra": {"services": records}}})
+    return case
+
+
+def test_every_way_into_service_records_gives_the_record_shape():
+    from diagnostic_mas.dataplane_verify import iter_service_records
+    from diagnostic_mas.device_health import services_from_case
+
+    def listed():
+        return _case_listing({"l2sts/svc-a": {"devices": ["pe1"], "basic_checks": {"status": "down"}},
+                              "l3rt/svc-b": "not a record"})
+
+    shaped = {"name": "svc-a", "service_type": "l2sts", "devices": ["pe1"],
+              "basic_checks": {"status": "down", "checks": []}}
+    assert [record for _, record in iter_service_records(listed())] == [shaped]
+    assert services_from_case(listed()) == {"l2sts/svc-a": shaped}
+
+
+def test_a_record_is_shaped_where_the_case_keeps_it_so_what_a_caller_writes_stays():
+    from diagnostic_mas.case import service_records
+
+    case = _case_listing({"l3rt/svc": {"devices": ["pe1"]}})
+    [(_, key, record)] = service_records(case.evidence)
+    record["dataplane_status"] = "down"
+
+    assert key == "l3rt/svc"
+    assert case.evidence[0]["payload"]["extra"]["services"]["l3rt/svc"] is record

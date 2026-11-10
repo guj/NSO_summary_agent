@@ -553,6 +553,39 @@ def test_changes_section_lists_services_no_longer_present_apart_from_missing_evi
     assert for_summary["newly_missing_evidence"] == []
 
 
+def test_a_deleted_service_that_was_down_is_marked_and_listed_first():
+    from diagnostic_mas.case_delta import compact_delta_for_llm, format_changes_since_previous
+
+    older, newer = _faulty_then_gone()
+    older["evidence"][0]["payload"]["extra"]["services"]["l3rt/also-gone"] = {
+        "name": "also-gone", "service_type": "l3rt", "devices": ["pe1"]}
+    delta = compute_case_delta(older, newer)
+
+    text = "\n".join(format_changes_since_previous(delta, previous_run_id="r1"))
+    gone = text.split("**Services no longer present since the previous run:**\n")[1].split("\n\n")[0]
+
+    assert gone.splitlines() == ["- `l3rt/faulty` — Down in the previous run", "- `l3rt/also-gone`"]
+    summary = compact_delta_for_llm(delta)["services_no_longer_present"]
+    assert summary["services"] == ["faulty (was down)", "also-gone"]
+    assert "(was down)" in summary["note"]
+
+
+def test_a_cut_off_list_of_deleted_services_counts_the_faults_it_leaves_out():
+    from diagnostic_mas.case_delta import format_changes_since_previous
+
+    older, newer = _faulty_then_gone()
+    records = older["evidence"][0]["payload"]["extra"]["services"]
+    for name in ("down-2", "quiet"):
+        records[f"l3rt/{name}"] = {"name": name, "service_type": "l3rt", "devices": ["pe1"]}
+    older["last_known_service_faults"].append({
+        "service": "down-2", "status": "down", "service_type": "l3rt", "last_observed_run_id": "r1"})
+    delta = compute_case_delta(older, newer)
+
+    text = "\n".join(format_changes_since_previous(delta, previous_run_id="r1", persistent_limit=1))
+
+    assert "- …and 2 more (1 Down in the previous run)" in text.splitlines()
+
+
 
 BGP_EDGE = "bgp:10.0.0.1:10.0.1.1:hub-data-sw:pe1-data-sw"
 ISIS_EDGE = "isis:hub-data-sw:HundredGigE0/0/0/1.3000:pe1-data-sw:HundredGigE0/0/0/2.3000"
@@ -944,6 +977,101 @@ def test_changes_section_and_summary_input_list_interfaces_that_went_down():
             "HundredGigE0/0/0/5 (admin-down)") in text
     assert compact_delta_for_llm(delta)["interfaces_lost"]["count"] == 2
 
+
+def _with_counters(case: dict, read_at: str, ports: dict[str, tuple[str, int]]) -> dict:
+    """``case`` plus its later counter read of pe1-data-sw's ports: port -> (state, transitions)."""
+    case["evidence"].append({"kind": "port_counters", "role": "physical", "payload": {"read_at": read_at, "ports": {
+        f"pe1-data-sw:{port}": {"state": state, "transitions": transitions, "cleared": "never", "crc": 0,
+                                "input_errors": 0, "output_errors": 0, "services": 1, "adjacency": False}
+        for port, (state, transitions) in ports.items()}}})
+    return case
+
+
+def _flap_during_the_scan(counter_state: str) -> dict:
+    """The uplink was up; this scan read it down, then read its counters (``counter_state``) after
+    32 more state changes. The access port stayed up and changed state twice."""
+    uplink, access = UPLINK.partition(":")[2], ACCESS.partition(":")[2]
+    older = _with_counters(
+        _interface_scan({UPLINK: ("up", "up"), UPLINK + ".3000": ("up", "up"), ACCESS: ("up", "up")}),
+        "2026-11-07T01:56:00+00:00", {uplink: ("up", 957), access: ("up", 10)})
+    newer = _with_counters(
+        _interface_scan({UPLINK: ("down", "down"), UPLINK + ".3000": ("down", "down"), ACCESS: ("up", "up")}),
+        "2026-11-07T04:32:00+00:00", {uplink: (counter_state, 989), access: ("up", 12)})
+    return compute_case_delta(older, newer)
+
+
+def test_port_read_down_then_up_again_at_its_counter_read_is_listed_once_as_down_with_its_changes():
+    from diagnostic_mas.case_delta import compact_delta_for_llm, format_changes_since_previous
+
+    delta = _flap_during_the_scan("up")
+    text = "\n".join(format_changes_since_previous(delta, previous_run_id="run-1"))
+    summary_input = compact_delta_for_llm(delta)
+    line = ("pe1-data-sw: HundredGigE0/0/0/23 (+1 sub-interface) "
+            "(up again later in this scan: 32 state changes in 2 h 36 min)")
+
+    # A link gaining errors is one still working that no service status rests on: not this one.
+    assert [row["port"] for row in delta["links_gaining_errors"]] == ["HundredGigE0/0/0/5"]
+    assert f"- `{line.replace(': ', '`: ', 1)}" in text
+    assert "**Links gaining errors while up:**\n- `pe1-data-sw` HundredGigE0/0/0/5: 2 state changes" in text
+    assert summary_input["interfaces_lost"]["by_device"] == [line]
+    assert "up again" in summary_input["interfaces_lost"]["note"]
+    assert [link.split(":")[0] for link in summary_input["links_gaining_errors"]["links"]] == [
+        "pe1-data-sw HundredGigE0/0/0/5"]
+
+
+BUNDLE = "pe1-data-sw:Bundle-Ether101"
+MEMBERS = ("FourHundredGigE0/0/0/27", "FourHundredGigE0/0/0/28")
+
+
+def _bundle_flap_during_the_scan() -> dict:
+    """The scan tracks the bundle's sub-interface and members, not the bundle itself (as on dall-data-sw).
+    It read them down; its later counter read found the bundle up after 2 state changes, and its later
+    member read found both members Active."""
+    tracked = [BUNDLE + ".3000"] + [f"pe1-data-sw:{member}" for member in MEMBERS]
+    older = _with_counters(_interface_scan({key: ("up", "up") for key in tracked}),
+                           "2026-11-09T22:52:00+00:00", {"Bundle-Ether101": ("up", 4)})
+    newer = _with_counters(_interface_scan({key: ("down", "down") for key in tracked}),
+                           "2026-11-10T00:56:52+00:00", {"Bundle-Ether101": ("up", 6)})
+    newer["evidence"].append({"kind": "link_optics", "role": "physical", "payload": {
+        "read_at": "2026-11-10T00:56:53+00:00", "ports": {}, "bundles": {BUNDLE: {
+            "active": 2, "configured": 2,
+            "members": [{"port": member, "state": "Active", "note": "Link is Active"} for member in MEMBERS]}}}})
+    return compute_case_delta(older, newer)
+
+
+def test_a_sub_interface_whose_bundle_was_up_again_at_the_counter_read_is_listed_once_as_down():
+    from diagnostic_mas.case_delta import format_changes_since_previous
+
+    delta = _bundle_flap_during_the_scan()
+    text = "\n".join(format_changes_since_previous(delta, previous_run_id="run-1"))
+
+    assert delta["links_gaining_errors"] == []
+    assert ("Bundle-Ether101.3000 (Bundle-Ether101 up again later in this scan: "
+            "2 state changes in 2 h 5 min)") in text
+
+
+def test_bundle_members_active_at_the_later_member_read_are_marked_up_again():
+    delta = _bundle_flap_during_the_scan()
+
+    assert {row["interface"]: "up_again" in row for row in delta["interfaces_lost"]} == {
+        "Bundle-Ether101.3000": True, MEMBERS[0]: True, MEMBERS[1]: True}
+
+
+def test_a_sub_interface_down_under_a_port_that_never_changed_state_is_not_marked_up_again():
+    """Its port up with no state change since the previous scan was never down: the sub-interface's fault is its own."""
+    older = _with_counters(_interface_scan({UPLINK + ".3000": ("up", "up")}),
+                           "2026-11-09T22:52:00+00:00", {"HundredGigE0/0/0/23": ("up", 4)})
+    newer = _with_counters(_interface_scan({UPLINK + ".3000": ("down", "down")}),
+                           "2026-11-10T00:56:52+00:00", {"HundredGigE0/0/0/23": ("up", 4)})
+
+    assert [row.get("up_again") for row in compute_case_delta(older, newer)["interfaces_lost"]] == [None]
+
+
+def test_port_still_down_at_its_counter_read_is_listed_as_down_only():
+    delta = _flap_during_the_scan("down")
+
+    assert [row.get("up_again") for row in delta["interfaces_lost"]] == [None]
+    assert [row["port"] for row in delta["links_gaining_errors"]] == ["HundredGigE0/0/0/5"]
 
 
 LANE0, LANE1 = "HundredGigE0/0/0/64/0", "HundredGigE0/0/0/64/1"

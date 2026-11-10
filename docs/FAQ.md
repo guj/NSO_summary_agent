@@ -181,7 +181,10 @@ other's hellos; one that **does not list it** hears nothing usable: either the d
 (fibre, optic, far transmitter) or it rejects the other's hellos, for example over an IS-IS setting that does not
 match. The port states help tell these apart. "Both routers answered without it; up in the previous scan" means neither
 lists it now. The port states are each end's interface as `show interfaces brief` read it: "link down" is a
-lost link, "shut down by configuration" is a deliberate one.
+lost link, "shut down by configuration" is a deliberate one. When the scan's later counter read found that port
+up, the end adds "…, up when read later, at 00:56 UTC", and the Result and follow-up add "ports up when read
+later; the adjacency was not re-read": the port was up by then, but whether the adjacency came back was not read.
+The adjacency is still counted down.
 
 "LLDP: A → B heard (B's port lists A's port); B → A not heard (A's port lists no LLDP neighbor)" comes from both
 ends' `show lldp neighbors`, read in the same scan. An LLDP entry on a router records frames that router received,
@@ -251,6 +254,11 @@ one could expose session state, and the agent would then use the server's per-ne
   previous scan had on it has since been deleted by its owner; that is not a fault on its own.
   It is marked "already Down in the previous run" when that scan read the interface up and then
   found its services Down: the port failed during that scan, which already reported the loss.
+  It is marked "up again later in this scan" when the scan read it up again when it read its
+  counters, with its state changes since the previous scan: it is flapping. A sub-interface is
+  marked by its port's counters, naming the port ("Bundle-Ether101 up again later in this scan"),
+  when that port changed state since the previous scan; a bundle member, when the later read of
+  its bundle found it Active.
   It also lists the service faults still open, each with the scan that first
   listed it and, for a down link, how long the device says it has been down. With
   `NOTIFICATION_DIGEST=1`, the Slack and email digest starts with the same changes.

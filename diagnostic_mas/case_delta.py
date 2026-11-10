@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
-from diagnostic_mas.case import Issue, ServiceRecord, normalize_diagnosis, normalize_issue, normalize_service_record
+from diagnostic_mas.case import Issue, ServiceRecord, normalize_diagnosis, normalize_issue, service_records
 from diagnostic_mas.nso_authentication import authentication_failures
 from nso_facts.topology.routing import unmatched_neighbor_in
 
@@ -138,11 +139,9 @@ def _service_extras(case: dict[str, Any]):
 
 
 def _records(case: dict[str, Any]) -> Iterator[ServiceRecord]:
-    """Each listed service's record, in the record shape: the one way this module reads records."""
-    for extra in _service_extras(case):
-        for key, raw in (extra.get("services") or {}).items():
-            if (record := normalize_service_record(key, raw)) is not None:
-                yield record
+    """Each listed service's record, in the record shape."""
+    for _ev, _key, record in service_records(case.get("evidence")):
+        yield record
 
 
 def _service_records(case: dict[str, Any]):
@@ -611,11 +610,50 @@ def _interfaces_lost(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[
     return list(rows.values())
 
 
+def _came_back_during_scan(newer: dict[str, Any], gaining: list[dict[str, Any]],
+                           lost: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Mark each lost port that this scan's later reads found up again, under ``up_again``.
+
+    It takes the counters' changes from its row in ``gaining``, and the rest of ``gaining`` is
+    returned: a link gaining errors is one still working that no service status rests on, and a port
+    the scan read down may be why its services are Down or Degraded.
+    A sub-interface whose own port was not read goes by that port's counter read, named under
+    ``up_again["port"]``, if the port changed state since the previous scan; otherwise its fault is its own.
+    A bundle member that the later member read found Active is marked with no counter changes.
+    """
+    from diagnostic_mas.port_counters import _parent_port, _saved
+
+    read_up = {key for key, reading in (_saved(newer).get("ports") or {}).items()
+               if isinstance(reading, dict) and reading.get("state") == "up"}
+    counted = {f"{row['device']}:{row['port']}": row for row in gaining}
+    optics = [ev.get("payload") or {} for ev in newer.get("evidence") or []
+              if isinstance(ev, dict) and ev.get("kind") == "link_optics"]
+    active = {f"{bundle.partition(':')[0]}:{member.get('port')}"
+              for bundle, info in ((optics[-1] if optics else {}).get("bundles") or {}).items() if isinstance(info, dict)
+              for member in info.get("members") or [] if isinstance(member, dict) and member.get("state") == "Active"}
+    for row in lost:
+        key = f"{row['device']}:{row['interface']}"
+        port = f"{row['device']}:{_parent_port(row['interface'])}"
+        bounced = port != key and port in read_up and (counted.get(port) or {}).get("state_changes")
+        if key in read_up or bounced:
+            changes = counted.pop(key if key in read_up else port, {})
+            row["up_again"] = {name: changes[name] for name in ("gained", "state_changes", "bounced", "minutes")
+                               if name in changes} | ({} if key in read_up else {"port": port.partition(":")[2]})
+        elif key in active:
+            row["up_again"] = {}
+    return list(counted.values())
+
+
 def _interface_lines(rows: list[dict[str, Any]], *, per_device: int = 6) -> list[str]:
+    from diagnostic_mas.port_counters import _changes, _took
+
     by_device: dict[str, list[str]] = {}
     for row in rows:
         n, deleted = row["sub_interfaces"], row.get("services_deleted") or 0
         down, riders = row.get("services_down_before") or 0, row.get("services_on_port") or 0
+        again = row.get("up_again")
+        changes = ", ".join(part for part in _changes({"gained": {}, "state_changes": 0} | again, bounced="")
+                            if part) if again else ""
         note = (" (admin-down)" if row["now"] == "admin-down" else "") + (
             f" (+{n} sub-interface{'s' if n != 1 else ''})" if n else "") + (
             " (its service was deleted)" if deleted == 1
@@ -624,13 +662,26 @@ def _interface_lines(rows: list[dict[str, Any]], *, per_device: int = 6) -> list
             else " (its service was already Down in the previous run)" if down == riders == 1
             else f" (its {down} services were already Down in the previous run)" if down == riders
             else f" ({down} of its {riders} services {'was' if down == 1 else 'were'} "
-                 "already Down in the previous run)")
+                 "already Down in the previous run)") + (
+            "" if again is None
+            else f" ({again['port'] + ' ' if again.get('port') else ''}up again later in this scan"
+                 + (f": {changes}{_took(again)}" if changes else "") + ")")
         by_device.setdefault(row["device"], []).append(row["interface"] + note)
     return [
         f"`{device}`: " + ", ".join(names[:per_device])
         + (f", +{len(names) - per_device} more" if len(names) > per_device else "")
         for device, names in by_device.items()
     ]
+
+
+def _gone_faults_first(delta: CaseDelta) -> list[tuple[dict[str, str], str]]:
+    """Services no longer present, each with the status of its open fault in the previous run ("" if none).
+
+    Those that were open faults come first, so a cut-off list still shows them.
+    """
+    was = {row["service"]: row.get("was") or "" for row in delta.get("service_faults_no_longer_present") or []}
+    rows = [(row, was.get(row["service"], "")) for row in delta.get("services_no_longer_present") or []]
+    return sorted(rows, key=lambda pair: not pair[1])
 
 
 def _cleared_line(row: dict[str, str]) -> str:
@@ -1161,6 +1212,8 @@ def compute_case_delta(
         gone=_services_no_longer_present(older, newer),
     )
     history = service_fault_history(older, newer)
+    interfaces_lost = _interfaces_lost(older, newer)
+    links_gaining_errors = _came_back_during_scan(newer, _links_gaining_errors(older, newer), interfaces_lost)
     new_problems, recovered, persistent, out_of_scope = _sorted_issues(
         pair, pending_services={r["service"] for r in history if not r["rechecked"]})
     coverage_changes, coverage_gaps = _coverage_changes(pair)
@@ -1185,14 +1238,14 @@ def compute_case_delta(
             _ended_fault(name, row) for name, row in sorted(pair.old_history.items()) if name in pair.gone
         ],
         "status_changed_on_unchanged_checks": _status_changed_on_unchanged_checks(older, newer),
-        "links_gaining_errors": _links_gaining_errors(older, newer),
+        "links_gaining_errors": links_gaining_errors,
         # Devices the previous scan recorded NSO failing to authenticate to, to tell new ones apart.
         "authentication_failed_before": sorted(authentication_failures(older)),
         "sessions_receiving_fewer_prefixes": _sessions_receiving_fewer_prefixes(older, newer),
         "routing_sessions_lost": _routing_sessions_lost(older, newer) + _outside_sessions_lost(older, newer),
         "routing_sessions_regained": _routing_sessions_regained(older, newer),
         "adjacencies_changed_between_scans": _adjacencies_changed_between(older, newer),
-        "interfaces_lost": _interfaces_lost(older, newer),
+        "interfaces_lost": interfaces_lost,
         "services_no_longer_present": [
             {"service": name, "service_type": kind,
              "previous_coverage": pair.old_cov.get(name, "")}
@@ -1596,14 +1649,17 @@ def format_changes_since_previous(
             lines.append(f"- `{subj}` — {detail} ({kind})")
     lines.append("")
 
-    gone = list(delta.get("services_no_longer_present") or [])
+    gone = _gone_faults_first(delta)
     if gone:
         lines.append("**Services no longer present since the previous run:**")
-        for row in gone[:persistent_limit]:
-            lines.append(f"- `{row['service_type']}/{row['service']}`")
+        for row, was in gone[:persistent_limit]:
+            lines.append(f"- `{row['service_type']}/{row['service']}`"
+                         + (f" — {was.capitalize()} in the previous run" if was else ""))
         extra = len(gone) - persistent_limit
         if extra > 0:
-            lines.append(f"- …and {extra} more")
+            left_out = Counter(was for _row, was in gone[persistent_limit:] if was)
+            faults = " and ".join(f"{n} {was.capitalize()}" for was, n in sorted(left_out.items()))
+            lines.append(f"- …and {extra} more" + (f" ({faults} in the previous run)" if faults else ""))
         lines.append("")
 
     lines.append("**Persistent problems:**")
@@ -1653,7 +1709,7 @@ def compact_delta_for_llm(delta: CaseDelta | None) -> dict[str, Any] | None:
             )
         return out
 
-    gone = [row["service"] for row in delta.get("services_no_longer_present") or []]
+    gone = [f"{row['service']} (was {was})" if was else row["service"] for row, was in _gone_faults_first(delta)]
     lost = [_routing_session_line(row).replace("`", "")
             for row in delta.get("routing_sessions_lost") or []]
     regained = [_routing_session_line(row).replace("`", "")
@@ -1699,7 +1755,9 @@ def compact_delta_for_llm(delta: CaseDelta | None) -> dict[str, Any] | None:
                      "deleted by its owner; the change most likely follows the deletion and is "
                      "not evidence of a fault on its own. \"already Down in the previous run\" "
                      "means that run read the port up, then found its services Down: the loss "
-                     "was already reported then and is not new."),
+                     "was already reported then and is not new. \"up again later in this scan\" "
+                     "means this scan read it up when it read its counters: it changed state during "
+                     "the scan, and the counts after it are its changes since the previous scan."),
         }} if interfaces else {}),
         **({"routing_sessions_lost": {
             "count": len(lost),
@@ -1737,7 +1795,10 @@ def compact_delta_for_llm(delta: CaseDelta | None) -> dict[str, Any] | None:
             "count": len(gone),
             "services": gone[:20],
             "note": ("Not present in NSO any more since the previous run. "
-                     "Routine; not a coverage gap, a fault or a recovery."),
+                     "Routine; not a coverage gap, a fault or a recovery."
+                     + (" One marked (was down) or (was degraded) was an open fault in the previous run: "
+                        "its fault ended with the deletion, so the Down or Degraded count fell without "
+                        "any service recovering." if delta.get("service_faults_no_longer_present") else "")),
         }} if gone else {}),
         "newly_failed_services": list(delta.get("newly_failed_services") or [])[:20],
         "recovered_devices": list(delta.get("recovered_devices") or [])[:20],

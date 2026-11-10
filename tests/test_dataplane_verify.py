@@ -3037,6 +3037,25 @@ def test_clip_dataplane_unwraps_mcp_envelope_and_preserves_newlines():
     assert out.count("\n") >= 3
 
 
+def test_a_dig_reads_the_whole_interface_health_reply_not_just_its_platform():
+    """get_interface_health puts ``platform`` beside its readings; the dig used to get only "ios-xr"."""
+    from diagnostic_mas.dataplane_verify import clip_dataplane_tool_content
+
+    reply = {
+        "status": "success",
+        "data": {
+            "device": "star-data-sw",
+            "platform": "ios-xr",
+            "outcome": "ok",
+            "summary": {"total": 1, "ok": 1, "failed": 0, "down": 0},
+            "interfaces": [{"name": "BVI50000", "admin_status": "up", "oper_status": "up", "read_ok": True}],
+            "raw": {"detail": "BVI50000 is up, line protocol is up \r\n  Interface state transitions: 43\r\n"},
+        },
+    }
+    out = clip_dataplane_tool_content("get_interface_health", json.dumps(reply), service_name="net-public-x")
+    assert json.loads(out) == reply["data"]
+
+
 def test_clip_dataplane_marks_truncation_clearly():
     from diagnostic_mas.dataplane_verify import clip_dataplane_tool_content
 
@@ -3354,7 +3373,8 @@ async def test_a_refused_conclude_dataplane_is_logged_with_the_unusable_fields(c
     refused = [line for line in capsys.readouterr().err.splitlines() if "rejected" in line]
     assert len(refused) == 1
     assert refused[0].startswith(
-        "[dataplane] rejected conclude_dataplane: no usable dataplane_status, cause;")
+        "[dataplane] rejected conclude_dataplane: no usable dataplane_status ('partial' is not one "
+        "of degraded, down, unknown, up), cause (missing; sent: dataplane_status, observed);")
     assert '"dataplane_status": "partial"' in refused[0]
 
 

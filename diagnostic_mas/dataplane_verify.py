@@ -17,14 +17,16 @@ from typing import Any
 
 from agent.config import Settings
 from agent.summarize import FABRIC_CHAT_TIMEOUT_SEC, llm_timeout_seconds, llm_error_category
-from diagnostic_mas.case import Budget, CaseFile, DrillSession, add_evidence, evidence_ids_after
+from diagnostic_mas.case import Budget, CaseFile, DrillSession, add_evidence, evidence_ids_after, service_records
 from diagnostic_mas.deep_checks import DATAPLANE_ALLOWLIST
 from diagnostic_mas.drill import (
+    REFUSED_CONCLUSIONS_LIMIT,
     _message_to_dict,
     _quarantined_device_map,
     _snip_llm_content_for_log,
     conclusion_rejection,
     execute_one_drill_call,
+    refused_conclusion_reply,
     rejected_call_log_line,
 )
 from diagnostic_mas.tool_context import BatchProgress, result_error, tool_catalog
@@ -301,21 +303,8 @@ def _spine_extra(ev: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def iter_service_records(case: CaseFile) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    """Return (spine_evidence, service_record) for each instance in spine extra."""
-    out: list[tuple[dict[str, Any], dict[str, Any]]] = []
-    for ev in case.evidence:
-        if ev.get("kind") != "spine" or ev.get("role") != "service":
-            continue
-        extra = _spine_extra(ev)
-        if not extra:
-            continue
-        services = extra.get("services")
-        if not isinstance(services, dict):
-            continue
-        for _key, rec in services.items():
-            if isinstance(rec, dict) and rec.get("name"):
-                out.append((ev, rec))
-    return out
+    """Return (spine_evidence, service_record) for each named service, in the record shape."""
+    return [(ev, rec) for ev, _key, rec in service_records(case.evidence) if rec["name"]]
 
 
 def _live_l2_clearly_up(record: dict[str, Any]) -> bool:
@@ -361,14 +350,15 @@ def service_needs_investigation(record: dict[str, Any]) -> bool:
 def init_service_coverage(case: CaseFile) -> None:
     """Mark every matched service as basic_passed or needing investigation."""
     for _ev, rec in iter_service_records(case):
-        name = str(rec.get("name") or "").strip()
+        name = rec["name"].strip()
         if not name:
             continue
-        if (rec.get("basic_checks") or {}).get("status") == "not_checked":
+        basic = rec.get("basic_checks")
+        if basic and basic["status"] == "not_checked":
             case.service_coverage[name] = "collection_concluded"
         elif service_needs_investigation(rec):
             case.service_coverage[name] = "needs_investigation"
-        elif (rec.get("basic_checks") or {}).get("status") == "down":
+        elif basic and basic["status"] == "down":
             # A fault this run's own readings show in full: Down, with nothing left to investigate.
             case.service_coverage[name] = "fixed_check_decided"
         else:
@@ -478,13 +468,13 @@ def select_dataplane_candidates(
     eligible: list[tuple[dict[str, Any], dict[str, Any]]] = []
     quarantined = _quarantined_device_map()
     for ev, rec in iter_service_records(case):
-        if str(rec.get("name") or "") in exclude:
+        if rec["name"] in exclude:
             continue
         devices = _service_devices(rec)
         if devices and all(d in quarantined for d in devices):
             continue
         basic = rec.get("basic_checks")
-        if isinstance(basic, dict):
+        if basic is not None:
             if explicit_service or basic.get("needs_investigation"):
                 eligible.append((ev, rec))
             continue
@@ -585,11 +575,11 @@ def apply_coverage_after_candidate_select(
     }
     selected_types.discard(None)
     for _ev, rec in iter_service_records(case):
-        name = str(rec.get("name") or "").strip()
+        name = rec["name"].strip()
         if not name or name in selected:
             continue
         cov = case.service_coverage.get(name)
-        stem = typed_dataplane_prompt_stem(str(rec.get("service_type") or ""))
+        stem = typed_dataplane_prompt_stem(rec["service_type"])
         if cov == "needs_investigation":
             if _collection_already_unhealthy(rec):
                 case.service_coverage[name] = "collection_concluded"
@@ -2093,6 +2083,9 @@ class _Dig:
     # conclude_dataplane weigh that result.
     await_conclusion: bool = False
     stop_reason: str = "investigation ended without a conclusion"
+    # Refused conclusions since the last read that ran, and the fields the last one lacked.
+    refused_in_a_row: int = 0
+    last_refused: str = ""
     partial_results: list[dict[str, Any]] = field(default_factory=list)
     # The current batch only: reset when each reply arrives.
     batch_responses: list[tuple[str, str]] = field(default_factory=list)
@@ -2432,16 +2425,14 @@ async def _handle_call(dig: _Dig, call: Any, finish_reason: Any) -> None:
             await _conclude(dig, finding)
             dig.tool_reply(call, json.dumps({"ok": True, "recorded": True}))
             return
-        _log(rejected_call_log_line(
-            fn_name, raw_args,
-            conclusion_rejection(
-                args, bad_json=bad_json,
-                required=("dataplane_status", "observed", "cause"),
-                choices={"dataplane_status": _DATAPLANE_STATUSES},
-            ),
-            finish_reason=finish_reason,
-        ))
-        dig.tool_reply(call, "ERROR: conclude_dataplane needs dataplane_status + observed + cause")
+        required = ("dataplane_status", "observed", "cause")
+        why = conclusion_rejection(args, bad_json=bad_json, required=required,
+                                   choices={"dataplane_status": _DATAPLANE_STATUSES})
+        _log(rejected_call_log_line(fn_name, raw_args, why, finish_reason=finish_reason))
+        dig.tool_reply(call, refused_conclusion_reply(fn_name, why, required))
+        dig.refused_in_a_row += 1
+        # The report gives the stop reason; what each field held stays in the log.
+        dig.last_refused = re.sub(r" \([^)]*\)", "", why)
     elif fn_name != "mcp_call":
         _log(rejected_call_log_line(fn_name, raw_args, "unknown function", finish_reason=finish_reason))
         dig.tool_reply(call, f"ERROR: unknown function {fn_name!r}; use mcp_call or conclude_dataplane")
@@ -2524,6 +2515,7 @@ async def _run_mcp_call(
                                 "elapsed_seconds": round(elapsed, 3),
                                 "output_excerpt": result_text[:1500]})
     dig.tool_reply(call, clip_dataplane_tool_content(tool_name, result_text, service_name=dig.service_name))
+    dig.refused_in_a_row = 0
     # Last debit may leave remaining==0 — still need an eval round.
     if dig.session.tools_used >= dig.session.max_tools:
         dig.await_conclusion = True
@@ -2532,6 +2524,11 @@ async def _run_mcp_call(
 def _after_batch(dig: _Dig, round_i: int) -> bool:
     """Steer the model after its batch of calls; False when the dig stops here."""
     if dig.concluded:
+        return False
+    if dig.refused_in_a_row >= REFUSED_CONCLUSIONS_LIMIT:
+        dig.stop_reason = (f"the model's conclusion was refused {dig.refused_in_a_row} times in a row: "
+                           f"{dig.last_refused}")
+        _log(f"stop: {dig.stop_reason}")
         return False
     if dig.conclude_only:
         dig.stop_reason = "model did not conclude after no-progress stop"

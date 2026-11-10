@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from diagnostic_mas.case import CaseFile, DrillSession, add_evidence, open_issue, set_issue_status
+from diagnostic_mas.case import CaseFile, DrillSession, add_evidence, open_issue, service_records, set_issue_status
 from nso_facts.mcp_client import successful_live_devices
 from nso_facts.topology.interfaces import has_own_port, interfaces_match
 from nso_facts.topology.underlay import router_clock
@@ -111,10 +111,10 @@ def _faulted_links(record: dict[str, Any], down: dict[str, list[str]]) -> set[tu
     Whether those down interfaces leave the service Down or Degraded is ``_still_carries``.
     """
     links: set[tuple[str, str]] = set()
-    basic = record.get("basic_checks") or {}
-    if basic.get("status") != "down":
+    basic = record.get("basic_checks")
+    if basic is None or basic["status"] != "down":
         return links
-    for check in basic.get("checks") or []:
+    for check in basic["checks"]:
         if check.get("status") != "fault":
             continue
         device = str(check.get("device") or "")
@@ -129,10 +129,7 @@ def _faulted_links(record: dict[str, Any], down: dict[str, list[str]]) -> set[tu
 
 
 def _records(case: CaseFile):
-    for ev, extra in _service_spines(case):
-        for record in (extra.get("services") or {}).values():
-            if isinstance(record, dict) and record.get("name"):
-                yield ev, record
+    return ((ev, record) for ev, _key, record in service_records(case.evidence) if record["name"])
 
 
 def port_targets(case: CaseFile) -> list[dict[str, Any]]:
@@ -141,7 +138,7 @@ def port_targets(case: CaseFile) -> list[dict[str, Any]]:
     ports: dict[tuple[str, str], dict[str, list[str]]] = {}
     for _ev, record in _records(case):
         for device, link in _faulted_links(record, down):
-            ports.setdefault((device, port_of(link)), {}).setdefault(link, []).append(str(record["name"]))
+            ports.setdefault((device, port_of(link)), {}).setdefault(link, []).append(record["name"])
     targets = [
         {"device": device, "port": port,
          "links": {link: sorted(names) for link, names in sorted(links.items())}}
@@ -480,7 +477,7 @@ def _explain_services(case: CaseFile, concluded: dict[tuple[str, str], dict[str,
             f"Port {f['port']} was investigated "
             + (f"by LLM {earlier_when(f)}, not rechecked this scan" if f.get("earlier") else "once")
             + f": {short_cause(f, 240)}" for f in findings)
-        carries = _still_carries(record.get("basic_checks") or {})
+        carries = _still_carries(record["basic_checks"])  # its faulted links make it a checked, Down service
         _record_dataplane_finding(case, record, {
             "dataplane_status": "degraded" if carries else "down",
             "cause": (f"Attached link {where} is down"
@@ -578,9 +575,9 @@ def _dependents(case: CaseFile, device: str):
     diagnosed = {dx["subject"]["name"] for dx in case.diagnoses if dx["kind"] == "dataplane"}
     for ev, record in _records(case):
         devices = {str(d) for d in record.get("devices") or []}
-        status = (record.get("basic_checks") or {}).get("status")
-        if (device in devices and len(devices) > 1 and status in {"down", "unknown"}
-                and str(record["name"]) not in diagnosed):
+        basic = record.get("basic_checks")
+        if (device in devices and len(devices) > 1 and basic and basic["status"] in {"down", "unknown"}
+                and record["name"] not in diagnosed):
             yield ev, record
 
 
@@ -642,7 +639,7 @@ async def run_device_investigations(
                 "observed": (
                     f"This scan: {device} answered the routing queries, reported {n} BGP "
                     f"session{'s' if n != 1 else ''} down and none up, and no adjacency up. The fixed check "
-                    f"for this service was {(record.get('basic_checks') or {}).get('status')}. This service "
+                    f"for this service was {record['basic_checks']['status']}. This service "
                     f"was not investigated individually; the readings are in the cut-off finding under {device}."),
                 "fix_suggestion": payload.get("fix_suggestion"),
                 "confidence": str(payload.get("confidence") or "medium"),

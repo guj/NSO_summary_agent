@@ -4,6 +4,7 @@ import html
 import json
 import re
 from agent.markdown_channels import markdown_to_html
+from diagnostic_mas.case import service_records
 
 
 def _plain_body(md: str) -> str:
@@ -147,13 +148,8 @@ def _routing_finding_details(case: dict | None) -> dict[str, str]:
 
 def _check_sources(case: dict | None) -> dict[str, list[dict]]:
     """Service name -> its fixed-check verdicts, in the order the report lists them."""
-    found: dict[str, list[dict]] = {}
-    for ev in (case or {}).get("evidence") or []:
-        if ev.get("kind") == "spine" and ev.get("role") == "service":
-            for record in (((ev.get("payload") or {}).get("extra") or {}).get("services") or {}).values():
-                if isinstance(record, dict):
-                    found[str(record.get("name"))] = list((record.get("basic_checks") or {}).get("checks") or [])
-    return found
+    return {record["name"]: list(record["basic_checks"]["checks"]) if "basic_checks" in record else []
+            for _ev, _key, record in service_records((case or {}).get("evidence"))}
 
 
 def _source_item(source: dict) -> str:
@@ -193,11 +189,7 @@ def _technician_lines(finding: dict, evidence: list) -> list[str]:
 
     if "link_descriptions" not in finding and "commands" not in finding:
         return []
-    records = {}
-    for ev in evidence:
-        if ev.get("kind") == "spine" and ev.get("role") == "service":
-            services = ((ev.get("payload") or {}).get("extra") or {}).get("services") or {}
-            records = {str(r.get("name")): r for r in services.values() if isinstance(r, dict)}
+    records = {record["name"]: record for _ev, _key, record in service_records(evidence)}
     described, ages = finding.get("link_descriptions") or {}, finding.get("link_ages") or {}
     lines = ["  For the technician:"]
     for link, names in (finding.get("links") or {}).items():

@@ -178,11 +178,18 @@ def unwrap_mcp_data(result: Any) -> dict[str, Any]:
     return root if isinstance(root, dict) else {}
 
 
+_REPLY_BODY_KEYS = ("result", "output", "text", "stdout", "config", "payload", "state", "platform")
+# Keys that only say what a reply is about. A body field is unwrapped only beside these.
+_REPLY_LABELS = frozenset({"status", "device", "command", "path", "depth"})
+
+
 def unwrap_mcp_result_text(value: Any) -> str:
     """Extract human-readable tool body (CLI text or pretty JSON).
 
     Unwraps common MCP envelopes (``status``/``data``/``result``/``output``/…)
     and normalizes newlines. Does not clip — callers apply their own limits.
+    A body field that sits beside readings rather than labels (get_hardware_health's
+    ``platform`` next to its counters) is not unwrapped: the whole dict is returned.
     """
     if value is None:
         return ""
@@ -212,19 +219,10 @@ def unwrap_mcp_result_text(value: Any) -> str:
             )
             if err is not None:
                 return unwrap_mcp_result_text(err)
-        for key in (
-            "result",
-            "output",
-            "text",
-            "stdout",
-            "config",
-            "payload",
-            "state",
-            "platform",
-        ):
-            if key in value and value[key] is not None:
-                return unwrap_mcp_result_text(value[key])
-        if "data" in value and value["data"] is not None:
+        body = next((key for key in _REPLY_BODY_KEYS if value.get(key) is not None), None)
+        if body is not None and set(value) - {body} <= _REPLY_LABELS:
+            return unwrap_mcp_result_text(value[body])
+        if body is None and value.get("data") is not None:
             return unwrap_mcp_result_text(value["data"])
         return json.dumps(value, indent=2, default=str, ensure_ascii=False)
     if isinstance(value, (list, tuple)):

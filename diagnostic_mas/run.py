@@ -701,7 +701,7 @@ def _scoped_to_services(
         return case, case_delta
     from diagnostic_mas.dataplane_verify import iter_service_records
 
-    names = {str(rec.get("name") or "") for _, rec in iter_service_records(case)}
+    names = {rec["name"] for _, rec in iter_service_records(case)}
     report_case = copy(case)
     report_case.last_known_service_faults = [
         row for row in case.last_known_service_faults if row.get("service") in names

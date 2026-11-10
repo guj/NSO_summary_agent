@@ -539,13 +539,57 @@ async def test_a_refused_drill_call_is_logged_with_its_reason_and_arguments(caps
     assert concluded is True
     refused = [line for line in capsys.readouterr().err.splitlines() if "rejected" in line]
     assert len(refused) == 3
-    assert refused[0].startswith("[drill] rejected conclude_investigation: no usable cause;")
+    assert refused[0].startswith(
+        "[drill] rejected conclude_investigation: no usable cause (missing; sent: observed);")
     assert "finish_reason=tool_calls" in refused[0]
     assert '"observed": "cape LSP absent"' in refused[0]
     assert refused[1].startswith("[drill] rejected exec_show: unknown function;")
     assert refused[2].startswith(
         "[drill] rejected conclude_investigation: arguments are not valid JSON;")
     assert "finish_reason=length" in refused[2]
+
+
+@pytest.mark.asyncio
+async def test_three_refused_conclusions_in_a_row_end_the_drill(capsys):
+    # As the salt-seat drill on 9 Nov 2026: each conclusion came without a usable cause, the
+    # model was told only that observed and cause were needed, and it tried 13 times.
+    from diagnostic_mas.case import DrillSession
+    from diagnostic_mas.drill import llm_drill_tool_loop
+
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0, max_drill_issues=1, max_tools_per_drill=12))
+    open_issue(case, code="unidirectional_adjacency", message="IS-IS adjacency down", evidence_ids=[],
+               layer="underlay", edge_id="isis:salt", devices=["salt-data-sw"])
+    issue = case.issues[0]
+
+    def reply(arguments):
+        call = type("Call", (), {"id": "c", "function": type(
+            "Fn", (), {"name": "conclude_investigation", "arguments": json.dumps(arguments)})()})()
+        message = type("Msg", (), {"content": None, "tool_calls": [call]})()
+        return type("Resp", (), {"choices": [type("Choice", (), {"message": message, "finish_reason": "tool_calls"})()]})()
+
+    replies = [reply({"observed": "seat lists salt as Init", "cause": ""}) for _ in range(4)]
+    replies.append(reply({"observed": "seat lists salt as Init", "cause": "not established"}))
+    asked = []
+
+    class FakeOAI:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kwargs):
+                    asked.append([dict(m) for m in kwargs["messages"]])
+                    return replies.pop(0)
+
+    _, concluded = await llm_drill_tool_loop(
+        object(), type("S", (), {"fabric_api_key": "k", "fabric_model": "m"})(), case,
+        device_names={"salt-data-sw"}, focus_issue=issue,
+        session=DrillSession(max_tools=12, issue_id=issue["id"]), openai_client=FakeOAI())
+
+    assert concluded is False and len(asked) == 3
+    told = [m["content"] for m in asked[1] if m["role"] == "tool"]
+    assert told == ["ERROR: conclude_investigation refused: no usable cause (empty). Send it again with "
+                    "observed, cause as non-empty text. If the readings do not establish a cause, say "
+                    "that in cause."]
+    assert "stopped after 3 refused conclusions in a row" in capsys.readouterr().err
 
 
 @pytest.mark.asyncio

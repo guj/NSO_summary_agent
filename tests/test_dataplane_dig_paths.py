@@ -263,8 +263,40 @@ async def test_a_conclusion_whose_arguments_are_not_json_is_refused(mcp, capsys)
 
     assert ok is True and case.diagnoses[-1]["status"] == "unknown"
     refused = next(m for m in llm.requests[1]["messages"] if m["role"] == "tool")
-    assert refused["content"] == "ERROR: conclude_dataplane needs dataplane_status + observed + cause"
+    assert refused["content"] == (
+        "ERROR: conclude_dataplane refused: arguments are not valid JSON. Send it again with "
+        "dataplane_status, observed, cause as non-empty text. If the readings do not establish a "
+        "cause, say that in cause.")
     assert "rejected conclude_dataplane" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_three_refused_conclusions_in_a_row_end_the_dig(mcp, capsys):
+    # As the salt-seat drill on 9 Nov 2026, which tried 13 times until its round limit.
+    no_cause = {"dataplane_status": "unknown", "observed": "AC up on amst-data-sw"}
+    llm = ScriptedLLM(*(_reply(_call("conclude_dataplane", no_cause, f"c{n}")) for n in range(4)), _concludes())
+
+    ok, case, _session = await _dig(llm, max_tools=10)
+
+    assert ok is True and len(llm.requests) == 3
+    told = next(m for m in llm.requests[1]["messages"] if m["role"] == "tool")["content"]
+    assert told.startswith("ERROR: conclude_dataplane refused: no usable cause (missing; sent: dataplane_status, observed).")
+    assert _payload(case, "dataplane_incomplete")["dataplane_status"] == "unknown"
+    assert ("the model's conclusion was refused 3 times in a row: no usable cause"
+            in json.dumps(_payload(case, "dataplane_incomplete")))
+    assert "stop: the model's conclusion was refused 3 times in a row" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_a_read_between_refused_conclusions_starts_the_count_again(mcp):
+    no_cause = {"dataplane_status": "unknown", "observed": "AC up on amst-data-sw"}
+    refused = lambda n: _reply(_call("conclude_dataplane", no_cause, f"c{n}"))
+    llm = ScriptedLLM(refused(1), refused(2), _reply(_mcp("exec_show", {"device_name": "amst-data-sw"})),
+                      refused(3), refused(4), _concludes())
+
+    ok, case, _session = await _dig(llm, max_tools=10)
+
+    assert len(llm.requests) == 6 and case.diagnoses[-1]["status"] == "unknown"
 
 
 @pytest.mark.asyncio

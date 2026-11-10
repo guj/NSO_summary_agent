@@ -498,6 +498,11 @@ digs off), taking eligible services in turns across types, most suspicious first
 `--max-dataplane-per-category N` also limits each service type. `--max-deep-checks` and `--max-handoffs` default
 to zero; these older mechanisms are separate from dataplane digs and issue drills.
 
+A refused conclusion (a required field missing, empty or not text) is answered with the field
+and what it held, and the investigation, whether a dig, a drill or a port or device
+investigation, stops after three in a row instead of running on to its round limit. The log
+line `rejected conclude_…: no usable cause (missing; sent: observed)` shows what was sent.
+
 ## Reports and topology
 
 Saved reports live under `state/diagnostic_mas/runs/<run-id>/` by default:

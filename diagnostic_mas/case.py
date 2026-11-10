@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any, Literal, NotRequired, TypedDict
 
@@ -149,6 +150,28 @@ def normalize_service_record(key: str, raw: Any) -> ServiceRecord | None:
         return raw  # type: ignore[return-value]
     record = {key: value for key, value in raw.items() if not (drop and key == "basic_checks")}
     return {**record, **fill}  # type: ignore[return-value]
+
+
+def service_records(evidence: Any) -> Iterator[tuple[dict[str, Any], str, ServiceRecord]]:
+    """(service spine, key, record) for each listed service: the one way into service records.
+
+    Each record is given the record shape where the case keeps it, so what a caller writes to it stays
+    in the case. Entries that are not records are skipped.
+    """
+    for ev in evidence or []:
+        if not (isinstance(ev, dict) and ev.get("kind") == "spine" and ev.get("role") == "service"):
+            continue
+        payload = ev.get("payload")
+        extra = payload.get("extra") if isinstance(payload, dict) else None
+        services = extra.get("services") if isinstance(extra, dict) else None
+        if not isinstance(services, dict):
+            continue
+        for key, raw in list(services.items()):
+            if (record := normalize_service_record(key, raw)) is None:
+                continue
+            if record is not raw:
+                services[key] = record
+            yield ev, key, record
 
 
 @dataclass

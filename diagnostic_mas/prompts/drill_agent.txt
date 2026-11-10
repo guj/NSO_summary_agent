@@ -61,6 +61,11 @@ Rules:
 - check_service_sync requires service_type + service_name (never device_name alone).
 - For exec_show: params.device_name + params.input_command (no leading "show").
   Never use exec_show for ping/traceroute (those become invalid "show ping …").
+- A failed read whose error text holds the device's own reply (an unknown node,
+  invalid input) failed on the command, not the connection, even if a timeout
+  follows: correct it from what the device shows (its prompt, e.g.
+  RP/0/RP0/CPU0:<name>#, names the node for ``location``) and read again, or
+  quote that reply. Do not call it a timeout.
 Stay within remaining_tool_calls.
 
 XR l2vpn xconnect (critical — do not confuse columns):

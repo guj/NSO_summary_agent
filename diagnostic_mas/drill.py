@@ -46,6 +46,10 @@ DRILL_MCP_CALL_TOOL = {
             "not show commands). "
             "check_service_sync requires service_type + service_name "
             "(never device_name alone). "
+            "get_hardware_health (params.device_name) returns temperature, fan "
+            "and power sensors and, on IOS XR, control_plane: the NPU's trap "
+            "counters (packets accepted and dropped per trap type, running "
+            "totals for the whole NPU, not per port). "
             "Do not call tools against devices listed in unavailable_devices."
         ),
         "parameters": {
@@ -997,6 +1001,30 @@ def _snip_llm_content_for_log(content: Any, *, limit: int = 240) -> str:
     return text[: max(0, limit - 3)].rstrip() + "..."
 
 
+# A model told which field it got wrong usually fixes it at once; one that keeps
+# sending the same refused conclusion only spends rounds (13 in the salt-seat drill
+# of 9 Nov 2026), so an investigation stops after this many in a row.
+REFUSED_CONCLUSIONS_LIMIT = 3
+
+_NOT_TEXT = {list: "an array", dict: "an object", bool: "true/false", int: "a number", float: "a number"}
+
+
+def _field_problem(args: dict[str, Any], key: str, allowed: frozenset[str] | None) -> str | None:
+    """What is wrong with one required conclusion field, or None when it can be used."""
+    if key not in args:
+        return f"missing; sent: {', '.join(map(str, args)) or 'nothing'}"
+    value = args[key]
+    if value is None:
+        return "null"
+    if not isinstance(value, str):
+        return f"{_NOT_TEXT.get(type(value), type(value).__name__)}, not text"
+    if not value.strip():
+        return "empty"
+    if allowed is not None and value.strip().lower() not in allowed:
+        return f"{value.strip()[:40]!r} is not one of {', '.join(sorted(allowed))}"
+    return None
+
+
 def conclusion_rejection(
     args: Any,
     *,
@@ -1004,20 +1032,20 @@ def conclusion_rejection(
     required: tuple[str, ...],
     choices: Mapping[str, frozenset[str]] | None = None,
 ) -> str:
-    """Why a conclude call's arguments were refused, in words for the log."""
+    """Why a conclude call's arguments were refused, naming each unusable field and what it held."""
     if bad_json:
         return "arguments are not valid JSON"
     if not isinstance(args, dict):
         return "arguments are not a JSON object"
-    unusable = []
-    for key in required:
-        value = args.get(key)
-        usable = isinstance(value, str) and bool(value.strip())
-        if usable and choices and key in choices:
-            usable = value.strip().lower() in choices[key]
-        if not usable:
-            unusable.append(key)
+    unusable = [f"{key} ({problem})" for key in required
+                if (problem := _field_problem(args, key, (choices or {}).get(key)))]
     return f"no usable {', '.join(unusable)}" if unusable else "arguments refused"
+
+
+def refused_conclusion_reply(fn_name: str, why: str, required: tuple[str, ...]) -> str:
+    """What the model is told when its conclusion is refused: what was wrong, and what to send."""
+    return (f"ERROR: {fn_name} refused: {why}. Send it again with {', '.join(required)} as non-empty "
+            "text. If the readings do not establish a cause, say that in cause.")
 
 
 def rejected_call_log_line(
@@ -1222,6 +1250,7 @@ async def llm_drill_tool_loop(
     )
     max_rounds = remaining + 2
     concluded = False
+    refused_in_a_row = 0  # refused conclusions since the last read that ran
     # After the last mcp_call depletes the budget, allow one more LLM turn so
     # conclude_investigation can evaluate that result (do not break on remaining==0).
     await_conclusion = False
@@ -1313,22 +1342,12 @@ async def llm_drill_tool_loop(
                     _log_drill(f"conclude: {finding.get('cause', '')[:100]}")
                     concluded = True
                 else:
-                    _log_drill(rejected_call_log_line(
-                        fn_name, raw_args,
-                        conclusion_rejection(
-                            args, bad_json=bad_json, required=("observed", "cause")),
-                        finish_reason=finish_reason,
-                    ))
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": call.id,
-                            "content": (
-                                "ERROR: conclude_investigation needs "
-                                "observed + cause strings"
-                            ),
-                        }
-                    )
+                    required = ("observed", "cause")
+                    why = conclusion_rejection(args, bad_json=bad_json, required=required)
+                    _log_drill(rejected_call_log_line(fn_name, raw_args, why, finish_reason=finish_reason))
+                    messages.append({"role": "tool", "tool_call_id": call.id,
+                                     "content": refused_conclusion_reply(fn_name, why, required)})
+                    refused_in_a_row += 1
                 continue
 
             if fn_name != "mcp_call":
@@ -1407,11 +1426,15 @@ async def llm_drill_tool_loop(
                     "content": result_text,
                 }
             )
+            refused_in_a_row = 0
             # Last debit may leave remaining==0 — still need an eval round.
             if session.tools_used >= session.max_tools:
                 await_conclusion = True
 
         if concluded:
+            break
+        if refused_in_a_row >= REFUSED_CONCLUSIONS_LIMIT:
+            _log_drill(f"issue={edge} stopped after {refused_in_a_row} refused conclusions in a row")
             break
 
     if not concluded:

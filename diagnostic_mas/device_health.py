@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from diagnostic_mas.case import CaseFile
+from diagnostic_mas.case import CaseFile, ServiceRecord, service_records
 from nso_facts.topology.physical import build_operational_physical_layer
 from nso_report.devices import device_detail_lines as _device_detail_lines
 
@@ -137,11 +137,9 @@ def fleet_maps_from_case(
     )
 
 
-def services_from_case(case: CaseFile) -> dict[str, Any]:
-    svc = _spine_payload(case, "service")
-    extra = svc.get("extra") if isinstance(svc.get("extra"), dict) else {}
-    services = extra.get("services")
-    return services if isinstance(services, dict) else {}
+def services_from_case(case: CaseFile) -> dict[str, ServiceRecord]:
+    """Key -> record for each service the scan listed, in the record shape."""
+    return {key: record for _ev, key, record in service_records(case.evidence)}
 
 
 def device_detail_lines(

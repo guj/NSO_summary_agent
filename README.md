@@ -638,7 +638,8 @@ sync passes, and inconclusive rechecks do not clear those findings. A completed
 current dataplane pass clears the historical fault, and so does a pass of the
 service's own operational checks in the current run; current faults refresh it.
 A fault is dropped when a full, unfiltered scan no longer lists the service; the
-report then lists it under services no longer present.
+report then lists it first under services no longer present, marked with its
+status in the previous run ("Down in the previous run").
 Historical findings are reported separately and do not alter current-run service
 counts or masquerade as fresh evidence. Old cases without the field are supported.
 Dry-runs can show history from the last published case but do not persist updates.
@@ -671,13 +672,18 @@ The next scan subtracts, and **Changes since previous run** lists a port under *
 gaining errors while up** when it is up now and its CRC, input-error or output-error
 count grew, or its state-transition count grew (it went down and came back). The list is
 ordered by size: most errors gained first, then links that only changed state. The Slack and
-email digest carries the three largest, one per line.
+email digest carries the three largest, one per line. Each line says what the port carries and,
+for three services or fewer, names them, so a service that passed its check can be matched
+with a port that kept going down and coming back.
 
 This is a lead, never a status: no service changes state because of it. Drops alone are
-not listed. A port is not compared when it was not read in both scans, when its counters
-were cleared in between, or when a counter went back. A read that fails leaves the port
-without a reading and is not a fault. The first scan after enabling this has nothing to
-subtract.
+not listed. A port that this scan's interface read found down and its counter read found up
+again is listed under **Interfaces up in the previous run, down now** instead, marked "up again
+later in this scan" with its changes: it changed state during the scan, and its services may be
+Down or Degraded because of it. A port is not compared when it was not read in both scans,
+when its counters were cleared in between, or when a counter went back. A read that fails
+leaves the port without a reading and is not a fault. The first scan after enabling this has
+nothing to subtract.
 
 A link seen before says how long and how often, for example "listed in every scan since
 27 Oct or earlier (28)". The same clause follows an IS-IS adjacency that changed state between

@@ -192,6 +192,50 @@ def test_the_parent_port_stands_in_for_an_unread_sub_interface():
     assert f"{NEWY} {NEWY_IF} up; {RUTG} {RUTG_IF} not read." in _attention(case, NEWY)
 
 
+def _with_later_counter_read(ports: dict[tuple[str, str], dict], counted: dict[str, str]) -> CaseFile:
+    """``ports`` as the interface read found them, then the counter read at 00:56 UTC: device -> port state."""
+    case = _with_ports(ports)
+    add_evidence(case, {"kind": "port_counters", "role": "physical", "layer": "physical", "payload": {
+        "read_at": "2026-11-10T00:56:52.932068+00:00",
+        "ports": {f"{device}:{port}": {"state": state}
+                  for device, (port, state) in {NEWY: ("HundredGigE0/0/0/19", counted.get(NEWY)),
+                                                RUTG: ("HundredGigE0/0/0/23", counted.get(RUTG))}.items()
+                  if state}}})
+    return case
+
+
+DOWN = {"admin": "down", "oper": "down"}
+LATER = "up when read later, at 00:56 UTC"
+
+
+def test_a_port_read_down_then_up_by_the_later_counter_read_says_both_with_the_time():
+    case = _with_later_counter_read({(NEWY, NEWY_IF): DOWN, (RUTG, RUTG_IF): DOWN}, {NEWY: "up", RUTG: "up"})
+
+    assert (f"Ports as read this scan: {NEWY} {NEWY_IF} link down (not shut down), HundredGigE0/0/0/19 {LATER}; "
+            f"{RUTG} {RUTG_IF} link down (not shut down), HundredGigE0/0/0/23 {LATER}.") in _attention(case, NEWY)
+
+
+def test_the_result_and_follow_up_say_the_ports_were_up_later_and_the_adjacency_not_re_read():
+    case = _with_later_counter_read({(NEWY, NEWY_IF): DOWN, (RUTG, RUTG_IF): DOWN}, {NEWY: "up", RUTG: "up"})
+    pair = f"`{NEWY}` ↔ `{RUTG}` (both ends' ports {LATER}; the adjacency was not re-read)"
+
+    assert f"1 IS-IS adjacency down: {pair}." in format_result_line(case)
+    assert f"Investigate 1 IS-IS adjacency down: {pair} (each router's view" in "\n".join(
+        format_followup_operator(case))
+
+
+@pytest.mark.parametrize("ports,counted", [
+    ({(NEWY, NEWY_IF): DOWN, (RUTG, RUTG_IF): DOWN}, {NEWY: "up", RUTG: "down"}),   # one end still down
+    ({(NEWY, NEWY_IF): DOWN, (RUTG, RUTG_IF): DOWN}, {NEWY: "up"}),                 # one end's port not read
+    ({(NEWY, NEWY_IF): {"admin": "up", "oper": "up"}, (RUTG, RUTG_IF): {"admin": "up", "oper": "up"}},
+     {NEWY: "up", RUTG: "up"}),                                                     # never read down
+])
+def test_no_later_reading_is_claimed_unless_every_port_read_down_was_read_up(ports, counted):
+    case = _with_later_counter_read(ports, counted)
+
+    assert f"1 IS-IS adjacency down: `{NEWY}` ↔ `{RUTG}`." in format_result_line(case)
+
+
 def test_the_run_comparison_shows_why_it_is_down():
     def scan(state: dict) -> dict:
         return {"device_names": [NEWY, RUTG],

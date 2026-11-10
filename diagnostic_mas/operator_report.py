@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from datetime import datetime, timezone
 from typing import Any
 
 from diagnostic_mas.case import CaseFile
@@ -484,8 +485,9 @@ def _port_words(state: dict[str, Any] | None) -> str:
     return "not read"
 
 
-def _adjacency_ports(case: CaseFile, edge_id: str) -> str | None:
-    """Each end's interface as this scan read it, for an ``isis:devA:ifA:devB:ifB`` adjacency."""
+def _adjacency_ends(case: CaseFile, edge_id: str) -> list[tuple[str, str | None, str, str]] | None:
+    """Each end of an ``isis:devA:ifA:devB:ifB`` adjacency as (device, interface, how it is named, its state
+    in words as this scan's interface read found it); None for another edge."""
     parts = edge_id.split(":")
     if len(parts) != 5 or parts[0] != "isis":
         return None
@@ -500,13 +502,54 @@ def _adjacency_ports(case: CaseFile, edge_id: str) -> str | None:
     for (device, interface), other in (((parts[1], parts[2]), parts[3]), ((parts[3], parts[4]), parts[1])):
         if interface == "?":
             named = far_port(case, edge_id, device)
-            ends.append(f"{device} {named} (named by {other}'s LLDP) {_port_words(states.get((device, named)))}"
-                        if named else f"{device} interface not known")
+            ends.append((device, named, f"{named} (named by {other}'s LLDP)" if named else "interface not known",
+                         _port_words(states.get((device, named))) if named else ""))
             continue
         # A sub-interface that was not read shares its parent port's link.
         state = states.get((device, interface)) or states.get((device, interface.split(".", 1)[0]))
-        ends.append(f"{device} {interface} {_port_words(state)}")
-    return "Ports as read this scan: " + "; ".join(ends) + "."
+        ends.append((device, interface, interface, _port_words(state)))
+    return ends
+
+
+def _read_up_later(case: CaseFile, device: str, interface: str | None, words: str) -> tuple[str, str] | None:
+    """(port, "00:56 UTC") when the interface read found this end not up and the scan's later counter read
+    found its port up."""
+    from diagnostic_mas.port_counters import KIND, _parent_port
+
+    if not interface or words in {"up", "not read", ""}:
+        return None
+    read = next((ev.get("payload") or {} for ev in reversed(case.evidence)
+                 if isinstance(ev, dict) and ev.get("kind") == KIND), {})
+    port = _parent_port(interface)
+    if ((read.get("ports") or {}).get(f"{device}:{port}") or {}).get("state") != "up" or not read.get("read_at"):
+        return None
+    return port, f"{datetime.fromisoformat(read['read_at']).astimezone(timezone.utc):%H:%M} UTC"
+
+
+def _adjacency_ports(case: CaseFile, edge_id: str) -> str | None:
+    """Each end's interface as this scan read it, for an ``isis:devA:ifA:devB:ifB`` adjacency, and its port
+    as the later counter read found it when that read found up an end read down."""
+    ends = _adjacency_ends(case, edge_id)
+    if ends is None:
+        return None
+    said = []
+    for device, interface, named, words in ends:
+        later = _read_up_later(case, device, interface, words)
+        port = "" if later is None or later[0] == interface else f"{later[0]} "
+        said.append(f"{device} {named} {words}".rstrip()
+                    + (f", {port}up when read later, at {later[1]}" if later else ""))
+    return "Ports as read this scan: " + "; ".join(said) + "."
+
+
+def _ports_up_later_note(case: CaseFile, edge_id: str) -> str | None:
+    """For an adjacency an end of which the interface read found down: the later counter read found every
+    such end's port up. The adjacency itself is not read again."""
+    down = [end for end in _adjacency_ends(case, edge_id) or [] if end[3] not in {"up", "not read", ""}]
+    later = [_read_up_later(case, *end[:2], end[3]) for end in down]
+    if not down or not all(later):
+        return None
+    whose = "both ends' ports" if len(down) == 2 else f"{down[0][0]}'s port"
+    return f"{whose} up when read later, at {later[0][1]}; the adjacency was not re-read"
 
 
 def _isis_adjacencies_down_text(case: CaseFile, *, limit: int) -> str | None:
@@ -517,6 +560,8 @@ def _isis_adjacencies_down_text(case: CaseFile, *, limit: int) -> str | None:
             continue
         parts = str(issue.get("edge_id") or "").split(":")
         label = f"`{parts[1]}` ↔ `{parts[3]}`" if len(parts) == 5 else f"`{issue.get('edge_id')}`"
+        note = _ports_up_later_note(case, str(issue.get("edge_id") or ""))
+        label += f" ({note})" if note else ""
         if label not in pairs:
             pairs.append(label)
     if not pairs:
@@ -813,17 +858,10 @@ def _failing_verification_endpoints(rec: dict[str, Any]) -> tuple[str, ...]:
 
 def _iter_service_records(case: CaseFile) -> list[tuple[str, dict[str, Any]]]:
     """(name, record) for flat service map entries."""
-    out: list[tuple[str, dict[str, Any]]] = []
     from diagnostic_mas.service_presence import disappeared
-    for key, rec in services_from_case(case).items():
-        if disappeared(rec):
-            continue
-        if not isinstance(rec, dict):
-            continue
-        name = str(rec.get("name") or key.split("/", 1)[-1]).strip()
-        if name:
-            out.append((name, rec))
-    return out
+
+    return [(rec["name"].strip(), rec) for rec in services_from_case(case).values()
+            if not disappeared(rec) and rec["name"].strip()]
 
 
 def _service_status_counts(case: CaseFile) -> dict[str, int]:
@@ -1678,9 +1716,8 @@ def format_services_operator(
         up_omitted = sum(
             1
             for name, rec in _iter_service_records(case)
-            if name not in shown_names
-            and (rec.get("basic_checks") or {}).get("status") == "up"
-            and (rec.get("basic_checks") or {}).get("sync_ready") is True
+            if name not in shown_names and (basic := rec.get("basic_checks"))
+            and basic["status"] == "up" and basic.get("sync_ready") is True
         )
         grouped_unknown = sum(
             c for _e, _r, c in _incomplete_checks_by_endpoint_reason(case)

@@ -253,10 +253,9 @@ def render_report(
             from diagnostic_mas.service_presence import disappeared
             if disappeared(record):
                 continue
-            basic = record.get("basic_checks")
-            if isinstance(basic, dict):
-                status = basic.get("status", "unknown")
-                bucket = basic_counts.setdefault(record.get("service_type", "service"), {})
+            if basic := record.get("basic_checks"):
+                status = basic["status"]
+                bucket = basic_counts.setdefault(record["service_type"], {})
                 bucket[status] = bucket.get(status, 0) + 1
         for service_type, bucket in sorted(basic_counts.items()):
             lines.append(f"**{service_type} basic operational checks:** " + " · ".join(

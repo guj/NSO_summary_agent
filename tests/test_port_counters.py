@@ -186,6 +186,29 @@ def test_line_says_what_rides_on_the_port():
         "1 state change in 43 min")
 
 
+def _with_services(scan: dict, *services: dict) -> dict:
+    scan["evidence"].append({"kind": "spine", "role": "service", "layer": "services", "payload": {"extra": {
+        "services": {f"l3rt/{s['name']}": s for s in services}}}})
+    return scan
+
+
+def test_line_names_the_services_on_a_port_that_carries_a_few():
+    # As fiu-data-sw's lanes on 7 Nov 2026: each carried one service, which passed its check while the
+    # lane kept going down and coming back. The line has to say which service that was.
+    lane, busy = "HundredGigE0/0/0/24/1", "HundredGigE0/0/0/13"
+    access = {"adjacency": False, "device_services": 0}
+    before = _counters(EARLIER, **{lane: _reading(services=1, **access), busy: _reading(services=4, **access)})
+    now = _with_services(
+        _counters(LATER, **{lane: _reading(transitions=46, services=1, **access),
+                            busy: _reading(transitions=46, services=4, **access)}),
+        _service("c", RUTG, lane, 0), *(_service(name, RUTG, busy, 2100 + n) for n, name in enumerate("defg")))
+
+    lines = {row["port"]: gain_line(row) for row in links_gaining_errors(before, now)}
+    assert lines[lane].endswith("; carries 1 service (`l3rt/c`)")
+    # More than three stay a count.
+    assert lines[busy].endswith("; carries 4 services")
+
+
 def test_port_that_flapped_and_came_back_is_a_lead_too():
     rows = _gains(_reading(), _reading(transitions=30))
 

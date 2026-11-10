@@ -10,7 +10,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from diagnostic_mas.case import CaseFile, add_evidence
+from diagnostic_mas.case import CaseFile, add_evidence, service_records
 from nso_facts.mcp_client import call_mcp
 from nso_facts.topology.interfaces import interface_variants, interfaces_match
 
@@ -57,28 +57,30 @@ def _parent_port(interface: str) -> str:
     return max(interface_variants(name) or {name}, key=len)
 
 
-def counter_targets(case: CaseFile) -> dict[tuple[str, str], dict[str, Any]]:
-    """(device, port) -> what rides on it, for every port under a service attachment or an IS-IS adjacency."""
+def _riders(evidence: Any) -> tuple[dict[tuple[str, str], set[str]], dict[str, set[str]]]:
+    """The services attached to each (device, port), and to each device, by service key (``l2bridge/<name>``)."""
     from diagnostic_mas.operational_checks.probe import attachments
 
     riders: dict[tuple[str, str], set[str]] = {}
     on_device: dict[str, set[str]] = {}
+    for _ev, key, record in service_records(evidence):
+        intent = (record.get("basic_checks") or {}).get("intent")  # older scans have no fixed checks
+        for end in attachments(intent or {}):
+            riders.setdefault((end["device"], _parent_port(end["ac"])), set()).add(key)
+            on_device.setdefault(end["device"], set()).add(key)
+    return riders, on_device
+
+
+def counter_targets(case: CaseFile) -> dict[tuple[str, str], dict[str, Any]]:
+    """(device, port) -> what rides on it, for every port under a service attachment or an IS-IS adjacency."""
+    riders, on_device = _riders(case.evidence)
     adjacent: set[tuple[str, str]] = set()
     for ev in case.evidence:
-        if ev.get("kind") != "spine":
-            continue
-        payload = ev.get("payload") or {}
-        if ev.get("role") == "service":
-            for record in ((payload.get("extra") or {}).get("services") or {}).values():
-                intent = (record.get("basic_checks") or {}).get("intent") if isinstance(record, dict) else None
-                for end in attachments(intent or {}):
-                    riders.setdefault((end["device"], _parent_port(end["ac"])), set()).add(str(record.get("name")))
-                    on_device.setdefault(end["device"], set()).add(str(record.get("name")))
-        elif ev.get("role") == "isis":
+        if ev.get("kind") == "spine" and ev.get("role") == "isis":
             from diagnostic_mas.link_lldp import edge_ports
 
             # An end whose port IS-IS leaves unknown counts when the other end's LLDP named it.
-            for edge in payload.get("operational_edges") or []:
+            for edge in (ev.get("payload") or {}).get("operational_edges") or []:
                 adjacent.update((device, port) for device, port in edge_ports(case, str((edge or {}).get("id") or ""))
                                 if port)
     # Services attach to access ports, not to an uplink: an uplink says how many its device holds.
@@ -214,6 +216,7 @@ def _compared(older: dict[str, Any], newer: dict[str, Any]):
     """(``device:port``, its row or None when nothing changed) for each port the two scans can be compared on."""
     before, now = _saved(older), _saved(newer)
     far_ends = _far_ends(newer)
+    riders = _riders(newer.get("evidence"))[0]
     try:
         elapsed = (datetime.fromisoformat(now["read_at"]) - datetime.fromisoformat(before["read_at"])).total_seconds()
     except (KeyError, TypeError, ValueError):
@@ -254,9 +257,10 @@ def _compared(older: dict[str, Any], newer: dict[str, Any]):
             continue
         device, _, port = key.partition(":")
         far = far_ends.get((device, port)) if reading.get("adjacency") else None
+        names = sorted(riders.get((device, port), ()))
         yield key, {"device": device, "port": port, "description": reading.get("description") or "",
                     "gained": gained, "state_changes": state_changes, **({"bounced": True} if bounced else {}),
-                    **({"far_end": far} if far else {}),
+                    **({"far_end": far} if far else {}), **({"service_names": names} if names else {}),
                     "minutes": round(elapsed / 60) if elapsed is not None else None,
                     "services": int(reading.get("services") or 0), "adjacency": bool(reading.get("adjacency")),
                     "device_services": int(reading.get("device_services") or 0)}
@@ -280,9 +284,12 @@ def gain_line(row: dict[str, Any]) -> str:
     parts = _changes(row, bounced="went down and came back since the previous scan (count not reported)")
     services = row["services"]
     far = row.get("far_end") or {}
+    # A few services are named, so a reader can match them with the service lists; more stay a count.
+    names = row.get("service_names") or []
+    named = f" ({', '.join(f'`{name}`' for name in names)})" if 0 < len(names) <= 3 and len(names) == services else ""
     carries = " and ".join(part for part in (
         "an IS-IS adjacency" if row["adjacency"] and not far else "",
-        f"{services} service{'' if services == 1 else 's'}" if services else "") if part)
+        f"{services} service{'' if services == 1 else 's'}{named}" if services else "") if part)
     held = row.get("device_services") or 0
     described = f' ("{row["description"]}")' if row.get("description") else ""
     if far:
