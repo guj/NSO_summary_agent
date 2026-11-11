@@ -18,6 +18,24 @@ status, count or phrase in the report means, so read it first.
   ("Bundle-Ether101 up again later in this scan: …"), and a bundle member the later member read
   found Active. On 10 Nov dall-data-sw's Bundle-Ether101.3000 and its members were left unmarked,
   and its bundle was listed again under "Links gaining errors while up".
+- **Investigated by LLM on (day):** an earlier scan's finding on an IS-IS adjacency or BGP session
+  says "investigated again this scan, no conclusion" when this scan's investigation read it again
+  but ended without a conclusion. "Not rechecked this scan" now means it was not read again. On
+  10 Nov the wash-data-sw ↔ cien-data-sw investigation was stopped after three refused conclusions,
+  and the device blocks said the earlier finding was not rechecked.
+
+- **LLM investigations** (new Result line): how the scan's LLM work went. **Complete**: every
+  investigation the LLM started reached a conclusion and it wrote the Summary. **Partial**: some did
+  not, counted with the reason. **Unavailable**: no LLM request succeeded. **Skipped**: the LLM was
+  not used. **Halted**: the provider's spend limit was reached. Service, routing and port
+  investigations are counted together; a conclusion is still "not verified". Slack and email carry
+  the line unless it is Complete ([docs/FAQ.md](docs/FAQ.md), "What does the 'LLM investigations'
+  line in the Result mean?").
+- A service the fixed check found Down or Degraded, whose LLM investigation did not finish, says so
+  in its own block ("Down by the fixed check — the LLM investigation did not finish") and in the
+  summary written without the LLM. It was already counted Down, but its block and that summary said
+  "dataplane=unknown; unresolved", "Unknown category" and "Service forwarding status remains
+  unknown".
 
 ### Added
 
@@ -54,6 +72,43 @@ status, count or phrase in the report means, so read it first.
   for the whole NPU rather than per port. On 10 Nov the salt ↔ seat drill held salt's trap counters
   from its own read, called it a sensor reading, and told operators to collect the counters by hand
   because they were "not obtainable via MCP".
+- Drills no longer go to collection errors or to a device with no IS-IS or BGP in its NSO
+  configuration: the issue already gives the error, and a drill's finding on them appeared in no
+  device block. After the 10 Nov scans with `--max-drill-issues 20` had investigated every IS-IS and
+  BGP issue, these would have taken both drill slots in every later scan at the default of 2.
+- An l3rt investigation whose gateway is a BVI reads both the bridge-domain of the service's port and
+  the one the BVI is bound to, and names both when they differ. On 10 Nov one read only the port's
+  bridge-domain and suggested adding the service's gateway to another service's bridge-domain; the
+  scan before had found the gateway in the service's own bridge-domain, with no port in it.
+- A device block's "Next:" after an LLM investigation of an IS-IS adjacency or BGP session is the
+  investigation's first step, which it now gives in one sentence; the full suggested fix stays in
+  the HTML report. It used to be the opening of the full fix, and on 10 Nov six of eight showed only
+  a sentence such as "No config change is indicated", leaving out the steps that followed: a
+  shut/no-shut needing approval and a maintenance window on salt-data-sw, and restoring NSO's
+  connection to cape-data-sw first. Findings from earlier scans still show the fix's opening.
+- An LLM investigation of an IS-IS adjacency or BGP session is told the platform of an end whose
+  platform exposes no IS-IS or BGP state (a Ciena on SAOS), and gives commands and configuration
+  only in a platform's own syntax, describing the check otherwise. On 10 Nov the star-data-sw →
+  cape-data-sw investigation gave IOS XR commands and `router isis` configuration for cape-data-sw,
+  as earlier ones had for cien-data-sw.
+- An LLM investigation of an IS-IS adjacency or BGP session says a device "could not be read"
+  where it used to call it "quarantined", the agent's own word for a device a scan stops reading
+  after a failed read, and no longer names its input fields. On 10 Nov two findings' "Next:" began
+  "Get cien-data-sw out of quarantine", which is nothing an admin can do.
+- A failed LLM request is shown by the kind of error ("provider connection error", "provider timed
+  out"), never by the provider's own text, which stays in the scan's log. The summary-failure line,
+  the Run details notes and a service's block used to print that text, and with publishing on it
+  went to Slack and email: on 4 Nov a model server's address and port, and for a spend-limit halt
+  the provider's message naming the user and the amounts.
+- A port or device investigation that did not finish says why when a request failed or its
+  conclusion was refused ("investigation did not finish: the LLM request failed (provider
+  connection error)"), and "its 1 service was left to its own investigation" no longer reads
+  "were … their".
+- An LLM investigation's "Next:" for an IS-IS adjacency or BGP session ends "(human must approve any
+  config change)" when the investigation flagged its fix as needing approval and the step does not
+  already say so, as a service's Next action does, including on a later scan's "Investigated by LLM
+  on (day)" line. Findings from scans before this change have no marker. On 10 Nov the salt-data-sw
+  ↔ seat-data-sw "Next:" was a shut/no-shut on salt-data-sw with no word on approval.
 - **Services no longer present since the previous run** marks a deleted service that was an open
   fault, for example "— Down in the previous run", and lists those first; a cut-off list counts the
   faults it leaves out. The fault ended with the deletion, not a recovery. The summary's input marks

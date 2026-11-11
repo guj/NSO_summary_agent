@@ -180,9 +180,12 @@ def narrative_from_dataplane_findings(case: CaseFile) -> str:
         _incomplete_dig_stop_kind,
     )
 
+    from diagnostic_mas.service_final_status import retained_fault_cause, retained_faults
+
     findings = _dataplane_conclusion_rows(case)
     if not findings:
         return ""
+    retained_by_name = retained_faults(case)
     blocks: list[str] = []
     for p in findings:
         name = p.get("name") or "?"
@@ -190,7 +193,12 @@ def narrative_from_dataplane_findings(case: CaseFile) -> str:
         dp = p.get("dataplane_status") or "?"
         title = f"{stype} {name}".strip() if stype else str(name)
         complete = p.get("complete", True)
-        if complete is False:
+        # Counted Down or Degraded on the fixed check alone: say that, not "unknown".
+        retained = retained_by_name.get(str(name)) if complete is False else None
+        if retained:
+            p = {**p, "cause": retained_fault_cause(p.get("cause"), retained)}
+            head = f"- **{title}** — {retained.capitalize()} by the fixed check (LLM investigation did not finish)"
+        elif complete is False:
             head = f"- **{title}** — dataplane={dp} (incomplete; unresolved)"
         else:
             head = f"- **{title}** — dataplane={dp}"
@@ -593,11 +601,13 @@ def _llm_summary(
     return ((resp.choices[0].message.content or "") if resp.choices else "").strip()
 
 
-def _format_summary_llm_failure(settings: Settings, exc: BaseException) -> str:
+def _format_summary_llm_failure(settings: Settings, category: str) -> str:
+    """The report's line for a failed summary request: the error's kind, never the provider's text."""
     from agent.summarize import llm_timeout_seconds
+    from diagnostic_mas.llm_status import error_phrase
 
     return (
-        f"LLM summary failed: {exc} "
+        f"LLM summary failed: {error_phrase(category)} "
         f"(final summary chat; model={settings.fabric_model!r}; "
         f"timeout={llm_timeout_seconds(settings):g}s)"
     )
@@ -620,7 +630,11 @@ async def summary_narrative(
     With ``deterministic_summary=True``, restate dataplane diagnoses/findings
     with no final chat (fallback to the template if none are ready).
     """
+    from diagnostic_mas.llm_status import EMPTY, NOT_REQUESTED, WRITTEN, error_category, note_summary_failed
+
     deterministic = narrative_from_dataplane_findings(case)
+    if not skip_llm:
+        case.llm_status["summary"] = NOT_REQUESTED
 
     if deterministic_summary:
         if deterministic:
@@ -659,10 +673,15 @@ async def summary_narrative(
                 previous_run_id=previous_run_id,
             )
         if text:
+            case.llm_status["summary"] = WRITTEN
             return scrub_internal_ids(text)
+        case.llm_status["summary"] = EMPTY
     except Exception as exc:  # noqa: BLE001
-        note = _format_summary_llm_failure(settings, exc)
-        print(note, file=sys.stderr)
+        category = error_category(exc)
+        note_summary_failed(case, category)
+        note = _format_summary_llm_failure(settings, category)
+        # The provider's own text stays in the log.
+        print(f"{note}: {exc}", file=sys.stderr)
         # The note is a paragraph of its own, not the tail of the last finding.
         if deterministic:
             return scrub_internal_ids(deterministic) + "\n\n" + note

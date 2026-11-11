@@ -2318,7 +2318,10 @@ async def test_a_failed_summary_chat_is_noted_on_its_own_line(capsys):
     text = await summary_narrative(case, S(), skip_llm=False, llm_summary_fn=refused)  # type: ignore[arg-type]
     body, _, note = text.rpartition("\n\n")
     assert "attachment down" in body
-    assert note.startswith("LLM summary failed: upstream connect error")
+    # The error's kind, never its text: that can hold a model server's address.
+    assert note.startswith("LLM summary failed: provider runtime error (final summary chat;")
+    assert "upstream connect error" not in text
+    assert case.llm_status == {"summary": "failed", "summary_error": "RuntimeError"}
 
 
 def test_record_dataplane_finding_dual_writes_diagnosis():

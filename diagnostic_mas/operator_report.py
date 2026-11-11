@@ -666,6 +666,9 @@ def _routing_finding_lines(case: CaseFile, device: str) -> list[str]:
     from diagnostic_mas.port_investigation import brief, short_cause
 
     open_faults = {str(i.get("edge_id")): i for i in case.issues if isinstance(i, dict) and is_problem(i)}
+    # Issues this scan's drill read again; one that kept an earlier finding ended without a conclusion.
+    read_again = {str(ev["payload"].get("issue_edge_id") or "") for ev in case.evidence
+                  if ev.get("kind") == "drill" and isinstance(ev.get("payload"), dict)}
     lines = []
     for edge, (a, b), finding in _routing_findings(case):
         if device not in (a, b):
@@ -675,12 +678,16 @@ def _routing_finding_lines(case: CaseFile, device: str) -> list[str]:
         when, rechecked = "", ""
         if finding.get("earlier"):
             when = f" on {run_day(finding['run_id'])}" if finding.get("run_id") else " in an earlier scan"
-            rechecked = "not rechecked this scan; "
+            rechecked = ("investigated again this scan, no conclusion; " if edge in read_again
+                         else "not rechecked this scan; ")
         line = (f"**Investigated by LLM{when}** ({rechecked}confidence {finding.get('confidence') or 'not given'}; "
                 f"not verified): {what} {a} ↔ {b}{f' ({age})' if age else ''} — "
                 f"{scrub_internal_ids(short_cause(finding, 500))}")
-        # Room for the evidence sentence and the first step: these findings write long sentences.
-        then = scrub_internal_ids(brief(finding.get("fix_suggestion"), 360))
+        # The one-sentence next step; a finding without one (older scans) by the start of its fix.
+        then = scrub_internal_ids(brief(finding.get("next_step") or finding.get("fix_suggestion"), 360))
+        # As on a service's Next action: a change the finding is flagged for needs a person's approval.
+        if then and finding.get("fix_requires_human_approval") and not _mentions_human_approval(then):
+            then += " (human must approve any config change)."
         lines.append(line + (f" Next: {then}" if then else ""))
     return lines
 
@@ -1247,6 +1254,16 @@ def format_devices_operator(case: CaseFile) -> list[str]:
     return lines
 
 
+def _unfinished(finding: dict[str, Any], n: int) -> str:
+    """An investigation that did not finish: why, when that was recorded, and what became of its services."""
+    from diagnostic_mas.llm_status import NO_CONCLUSION, stop_phrase
+
+    why = finding.get("stopped")
+    reason = f": {stop_phrase(why, finding.get('stopped_error'))}" if why and why != NO_CONCLUSION else ""
+    return (f"investigation did not finish{reason}; its {n} service{'s were' if n != 1 else ' was'} "
+            f"left to {'their' if n != 1 else 'its'} own investigation")
+
+
 def _port_finding_lines(case: CaseFile, device: str) -> list[str]:
     """One line per port investigated on this device, or explained by an earlier scan's finding."""
     from diagnostic_mas.port_investigation import device_findings, earlier_when, port_findings, short_cause
@@ -1265,8 +1282,7 @@ def _port_finding_lines(case: CaseFile, device: str) -> list[str]:
             cause = scrub_internal_ids(short_cause(finding, 300))
             lines.append(f"**Cut off:** {cause} ({services} that use another device; investigated once)")
         else:
-            lines.append("**Cut off:** investigation did not finish; "
-                         f"its {services} were left to their own investigation")
+            lines.append(f"**Cut off:** {_unfinished(finding, n)}")
     for finding in port_findings(case):
         if finding.get("device") != device:
             continue
@@ -1295,8 +1311,7 @@ def _port_finding_lines(case: CaseFile, device: str) -> list[str]:
             attached = f"{dated}{services} attached" if dated else f"{services} attached; investigated once"
             lines.append(f"**Port {finding.get('port')}:** {cause} ({attached})")
         else:
-            lines.append(f"**Port {finding.get('port')}:** investigation did not finish; "
-                         f"its {services} were left to their own investigation")
+            lines.append(f"**Port {finding.get('port')}:** {_unfinished(finding, n)}")
     return lines
 
 
@@ -1752,6 +1767,9 @@ def format_services_operator(
             return ["(none)"]
         return lines
 
+    from diagnostic_mas.service_final_status import retained_fault_cause, retained_faults
+
+    retained_by_name = retained_faults(case)
     for name, rec in rows:
         stype = str(rec.get("service_type") or "").upper() or "SERVICE"
         title = f"{stype} · {name}"
@@ -1768,7 +1786,12 @@ def format_services_operator(
         if dx:
             complete = dx.get("complete", True)
             status = str(dx.get("dataplane_status") or "?").lower()
-            if complete is False:
+            # Counted Down or Degraded on the fixed check alone: the block must say so too.
+            retained = retained_by_name.get(name) if complete is False else None
+            if retained:
+                lines.append(f"**Result:** {retained.capitalize()} by the fixed check — "
+                             "the LLM investigation did not finish")
+            elif complete is False:
                 lines.append(_incomplete_result_line(dx))
             elif status in {"up", "ok"}:
                 lines.append(f"**Result:** {RESULT_PE_SIDE_PASSED}")
@@ -1783,6 +1806,8 @@ def format_services_operator(
                 lines.append(f"**Coverage:** {_coverage_label(cov)}")
             obs = scrub_internal_ids(str(dx.get("observed") or "").strip())
             cause = scrub_internal_ids(str(dx.get("cause") or "").strip())
+            if retained:
+                cause = retained_fault_cause(cause, retained)
             # Essential evidence beside the finding; collector/device detail later.
             if obs:
                 lines.append("")
@@ -1792,7 +1817,7 @@ def format_services_operator(
                     lines.append("")
                 lines.append(f"**Cause:** {cause}")
             from diagnostic_mas.unknown_breakdown import category_for, CATEGORIES
-            if complete is False or status == "unknown":
+            if (complete is False or status == "unknown") and not retained:
                 lines.append("")
                 lines.append(f"**Unknown category:** {CATEGORIES[category_for(dx)]}")
             structured_gap = dx.get("verification_gap")
@@ -2807,6 +2832,11 @@ def _result_parts(case: CaseFile) -> list[tuple[str, str, Any]]:
         out.append(("NSO connection", f"NSO failed to authenticate to {len(devices)} device"
                     f"{'s' if len(devices) != 1 else ''}{_TAG} at least once this scan ({reasons}): {shown}.",
                     _authentication_tag(devices)))
+    from diagnostic_mas.llm_status import llm_result_text
+
+    llm = llm_result_text(case)
+    if llm:
+        out.append(("LLM investigations", llm, None))
     for code, protocol in (("unknown_neighbor_address", "BGP"), ("unknown_neighbor_system_id", "IS-IS")):
         n = codes[code]
         if n:

@@ -20,8 +20,12 @@ from diagnostic_mas.case import (
     debit_drill,
 )
 from diagnostic_mas.deep_checks import DRILL_ALLOWLIST
+from diagnostic_mas.llm_status import NO_CONCLUSION, PROVIDER_ERROR, REFUSED, note_stop
 from multi_agent.base import gate_plan
 from multi_agent.deep_checks import run_deep_checks
+from nso_facts.topology.graph import ends_from_edge_id
+from nso_facts.topology.routing import bgp_state_not_exposed
+from nso_facts.topology.underlay import isis_state_not_exposed
 
 _PROMPTS = Path(__file__).resolve().parent / "prompts"
 _JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
@@ -101,6 +105,14 @@ DRILL_CONCLUDE_TOOL = {
                     "description": (
                         "Suggested verify/fix command or config change; "
                         "null/omit if unknown"
+                    ),
+                },
+                "next_step": {
+                    "type": "string",
+                    "description": (
+                        "The first step a person should take, in one sentence of at most "
+                        "200 characters (what needs no change belongs in fix_suggestion); "
+                        "shown where the report has room for one line"
                     ),
                 },
                 "fix_requires_human_approval": {
@@ -256,7 +268,8 @@ def previous_findings(previous_case: dict[str, Any] | None) -> dict[str, dict[st
         payload = ev.get("payload") if isinstance(ev, dict) and ev.get("kind") == "drill_finding" else None
         edge = str((payload or {}).get("issue_edge_id") or "")
         if edge.startswith(_CARRIED_ISSUES) and payload.get("cause"):
-            out[edge] = {key: payload[key] for key in ("cause", "headline", "confidence", "fix_suggestion", "observed")
+            out[edge] = {key: payload[key] for key in ("cause", "headline", "confidence", "fix_suggestion",
+                                                        "next_step", "fix_requires_human_approval", "observed")
                          if payload.get(key)} | dated
     return out
 
@@ -400,6 +413,11 @@ _DRILL_SKIP_CODES = frozenset(
         "outside_bgp_session_not_established",  # the far end is not in NSO to read
         "port_down",  # has its own investigation, before the service digs
         "device_cut_off",
+        # The error text already says why, and a finding on these shows in no device block. Never
+        # carried, they would always outrank routing Issues a full scan has just concluded on.
+        "collection_error",
+        "no_configured_isis",
+        "no_configured_bgp",
     }
 )
 
@@ -503,6 +521,20 @@ def select_drill_issues(case: CaseFile, *, limit: int) -> list[dict[str, Any]]:
     return drillable[:limit]
 
 
+def _platform_notes(case: CaseFile, issue: dict[str, Any]) -> dict[str, str]:
+    """The scan's own message, which names the platform, for each of the Issue's devices whose
+    platform exposes no IS-IS or BGP state; one per device."""
+    ends = ends_from_edge_id(issue.get("edge_id")) or ()
+    devices = {str(d) for d in issue.get("devices") or [] if d} | {end["device"] for end in ends if end}
+    notes: dict[str, str] = {}
+    for other in case.issues:
+        if isis_state_not_exposed(other) or bgp_state_not_exposed(other):
+            device, _, message = str(other.get("message") or "").partition(": ")
+            if device in devices:
+                notes.setdefault(device, message)
+    return notes
+
+
 def compact_drill_context(
     case: CaseFile,
     *,
@@ -544,11 +576,14 @@ def compact_drill_context(
     }
     if focus_issue is not None:
         out["prior_exploration"] = prior_exploration_for_issue(case, focus_issue)
+        notes = _platform_notes(case, focus_issue)
+        if notes:
+            out["platform_notes"] = notes
         live = _issue_live_devices(focus_issue)
         out["focus_live_devices"] = live
         if focus_issue.get("devices") and not live:
             out["availability_note"] = (
-                "All listed endpoints for this Issue are quarantined this run; "
+                "None of this Issue's listed endpoints can be read this scan; "
                 "do not call MCP on them — conclude with uncertainty from "
                 "existing Evidence."
             )
@@ -959,9 +994,10 @@ def parse_drill_finding(data: Any) -> dict[str, Any] | None:
     state = str(data.get("session_state") or "").strip().lower()
     if state in {"established", "not_established", "unknown"}:
         finding["session_state"] = state
-    headline = " ".join(str(data.get("headline") or "").split())
-    if headline:
-        finding["headline"] = headline
+    for key in ("headline", "next_step"):
+        line = " ".join(str(data.get(key) or "").split())
+        if line:
+            finding[key] = line
     return finding
 
 
@@ -990,13 +1026,13 @@ def _log_drill(msg: str) -> None:
     print(f"[drill] {msg}", file=sys.stderr)
 
 
-def _snip_llm_content_for_log(content: Any, *, limit: int = 240) -> str:
-    """Single-line preview of LLM output for stderr diagnostics."""
+def _snip_llm_content_for_log(content: Any, *, limit: int | None = 240) -> str:
+    """Single-line preview of LLM output for stderr diagnostics; ``limit=None`` keeps all of it."""
     if content is None:
         return ""
     text = str(content).replace("\r", " ").replace("\n", "\\n")
     text = re.sub(r"[ \t]{2,}", " ", text).strip()
-    if len(text) <= limit:
+    if limit is None or len(text) <= limit:
         return text
     return text[: max(0, limit - 3)].rstrip() + "..."
 
@@ -1048,15 +1084,14 @@ def refused_conclusion_reply(fn_name: str, why: str, required: tuple[str, ...]) 
             "text. If the readings do not establish a cause, say that in cause.")
 
 
-def rejected_call_log_line(
-    fn_name: str, raw_args: Any, why: str, *, finish_reason: Any = None, limit: int = 160,
-) -> str:
-    """One stderr line for an LLM tool call the loop refused without running it."""
+def rejected_call_log_line(fn_name: str, raw_args: Any, why: str, *, finish_reason: Any = None) -> str:
+    """One stderr line for an LLM tool call the loop refused without running it, with its whole
+    arguments: refusals are rare, and only the whole text shows where a missing field went."""
     text = raw_args if isinstance(raw_args, str) else json.dumps(raw_args, default=str)
     bits = [f"rejected {fn_name or '<no name>'}: {why}"]
     if finish_reason is not None and str(finish_reason).strip():
         bits.append(f"finish_reason={finish_reason!s}")
-    bits.append(f"args ({len(text)} chars)={_snip_llm_content_for_log(text, limit=limit)!r}")
+    bits.append(f"args ({len(text)} chars)={_snip_llm_content_for_log(text, limit=None)!r}")
     return "; ".join(bits)
 
 
@@ -1232,7 +1267,7 @@ async def llm_drill_tool_loop(
                 "Batch mcp_call tools when you need multiple facts at once "
                 "(e.g. both service endpoints). "
                 "Use available_devices / focus_live_devices only — never call "
-                "tools on unavailable_devices (quarantined). "
+                "tools on unavailable_devices. "
                 "check_service_sync needs service_type + service_name; "
                 "never ping/traceroute via exec_show. "
                 "Use prior_exploration (diagnoses, already_run_probes, "
@@ -1299,7 +1334,8 @@ async def llm_drill_tool_loop(
                     f"LLM budget exceeded — stopping further drills: {exc}"
                 )
                 break
-            _log_drill(f"LLM error [{llm_error_category(exc)}]: {exc}")
+            session.stopped, session.stopped_error = PROVIDER_ERROR, llm_error_category(exc)
+            _log_drill(f"LLM error [{session.stopped_error}]: {exc}")
             break
         message = response.choices[0].message
         finish_reason = getattr(response.choices[0], "finish_reason", None)
@@ -1434,10 +1470,12 @@ async def llm_drill_tool_loop(
         if concluded:
             break
         if refused_in_a_row >= REFUSED_CONCLUSIONS_LIMIT:
+            session.stopped = REFUSED
             _log_drill(f"issue={edge} stopped after {refused_in_a_row} refused conclusions in a row")
             break
 
     if not concluded:
+        session.stopped = session.stopped or NO_CONCLUSION
         _log_drill(f"issue={edge} ended without conclude_investigation")
     return session.tools_used - before, concluded
 
@@ -1617,6 +1655,7 @@ async def run_drill_phase(
         )
         before = session.tools_used
         concluded = False
+        edge = str(issue.get("edge_id") or issue.get("id") or "")
         try:
             _n, concluded = await llm_drill_tool_loop(
                 client,
@@ -1634,11 +1673,15 @@ async def run_drill_phase(
             if is_provider_budget_exceeded(exc) or getattr(
                 case, "llm_halt_reason", None
             ):
+                note_stop(case, "routing", edge, NO_CONCLUSION)
                 break
         if getattr(case, "llm_halt_reason", None):
+            if not concluded:
+                note_stop(case, "routing", edge, NO_CONCLUSION)
             break
         if not concluded:
             case.budget.drill_issues_unconcluded += 1
+            note_stop(case, "routing", edge, session.stopped or NO_CONCLUSION, session.stopped_error)
         if not concluded and session.tools_used <= before:
             await run_heuristic_drill_fallback(
                 client,

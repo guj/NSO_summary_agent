@@ -677,10 +677,9 @@ def _incomplete_verify_cause(stop_reason: str | None = None) -> str:
         why = reason.rstrip(".")
     else:
         why = "verification ended without conclude_dataplane"
-    return (
-        f"Dataplane verification incomplete because {why}. "
-        "Service forwarding status remains unknown."
-    )
+    from diagnostic_mas.service_final_status import STATUS_UNKNOWN_SENTENCE
+
+    return f"Dataplane verification incomplete because {why}. {STATUS_UNKNOWN_SENTENCE}"
 
 
 def _incomplete_verify_observed(stop_reason: str | None = None) -> str:
@@ -2326,7 +2325,8 @@ def _halt_on_provider_budget(
         return
     msg = provider_budget_message(exc)
     mark_case_llm_halt(dig.case, f"provider budget_exceeded: {msg}")
-    dig.stop_reason = f"provider LLM budget exceeded: {msg}"
+    # The provider's own message stays in the log and the halt reason; the report gets only this.
+    dig.stop_reason = "the provider's LLM spend limit was reached"
     _log(f"LLM budget exceeded after {elapsed:.2f}s — stopping further LLM requests: {exc}")
     _dump_failed_request(dig, exc, elapsed, round_i, tools_payload)
     if not dig.concluded:
@@ -2528,6 +2528,7 @@ def _after_batch(dig: _Dig, round_i: int) -> bool:
     if dig.refused_in_a_row >= REFUSED_CONCLUSIONS_LIMIT:
         dig.stop_reason = (f"the model's conclusion was refused {dig.refused_in_a_row} times in a row: "
                            f"{dig.last_refused}")
+        dig.investigation.refused_conclusions = dig.refused_in_a_row
         _log(f"stop: {dig.stop_reason}")
         return False
     if dig.conclude_only:

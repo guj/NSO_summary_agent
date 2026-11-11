@@ -87,3 +87,7 @@ async def test_dataplane_phase_halts_on_provider_budget(monkeypatch):
         if cov == "llm_budget_exceeded"
     ]
     assert len(halted) >= 4
+    # The provider's own message (it can name a user or an address) stays out of what the report shows.
+    shown = " ".join(f"{dx.get('observed')} {dx.get('cause')}" for dx in case.diagnoses)
+    assert "the provider's LLM spend limit was reached" in shown
+    assert "User=x" not in shown and "Spend=" not in shown

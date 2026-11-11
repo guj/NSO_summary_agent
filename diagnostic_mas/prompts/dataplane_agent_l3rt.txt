@@ -91,9 +91,11 @@ Establish service intent:
 - Discover routing context and interface identifiers from service intent
   and returned evidence. Never assume the service name is a VRF or guess
   BVI numbers. If a hypothesis is unsupported, change the investigation
-  path. Use a known service address or prefix to inspect routing, or
-  follow the attachment circuit's bridge-domain binding to its gateway
-  interface.
+  path. Use a known service address or prefix to inspect routing.
+  When the gateway sits on a bridge-domain (a BVI), follow the binding
+  both ways: from the attachment circuit's bridge-domain to its gateway
+  interface, and from the gateway interface to the bridge-domain it is
+  bound to. When these are different bridge-domains, read and name both.
 - Identify participating devices, interfaces/subinterfaces, VLANs,
   IP addresses, prefixes, and VRF or global routing context.
 - Assign a role to each supplied service device: local attachment/gateway

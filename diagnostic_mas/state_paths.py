@@ -41,6 +41,8 @@ def case_to_dict(case: CaseFile) -> dict[str, Any]:
         "earlier_port_findings": dict(case.earlier_port_findings),
         "llm_usage": dict(case.llm_usage),
         "mcp_calls": dict(case.mcp_calls),
+        # The provider's own halt message stays in the log: the saved case keeps only that it halted.
+        "llm_status": dict(case.llm_status) | ({"halted": True} if case.llm_halt_reason else {}),
     }
 
 

@@ -236,10 +236,17 @@ async def _run(args: argparse.Namespace) -> int:
     # --skip-llm needs no LLM key and makes no request to the LLM endpoint.
     settings = load_settings(require_llm_key=not args.skip_llm)
     force_skip_llm = False
+    llm_skipped = "the scan ran with --skip-llm" if args.skip_llm else None
     if not args.skip_llm:
         # Before the first request, so the scan's cost includes the start-up probe.
         print(begin_llm_accounting(settings), file=sys.stderr)
-        _, force_skip_llm = prepare_fabric_llm(settings)
+        key, force_skip_llm = prepare_fabric_llm(settings)
+        if force_skip_llm:
+            llm_skipped = ("the LLM key was refused (HTTP 401/403)" if getattr(key, "auth_invalid", False)
+                           else "the LLM key has expired" if getattr(key, "is_expired", False)
+                           else "the LLM key's budget was already spent")
+        elif not settings.fabric_api_key:
+            llm_skipped = "no LLM key is set"
     skip_llm = bool(args.skip_llm or force_skip_llm or not settings.fabric_api_key)
     dry_run = resolve_dry_run(
         settings=settings,
@@ -284,6 +291,8 @@ async def _run(args: argparse.Namespace) -> int:
     case.run_configuration = capture_run_configuration(
         args, settings, case.budget, skip_llm=skip_llm, dry_run=dry_run
     )
+    if skip_llm:
+        case.llm_status["skipped"] = llm_skipped or "the LLM was not used"
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     t0 = time.monotonic()
     start_mcp_accounting()
@@ -753,8 +762,9 @@ async def _summary(
     narrative = ""
     reporting_notes: list[str] = []
     if getattr(case, "llm_halt_reason", None):
+        # The provider's own message is in the log; the report names only what happened.
         reporting_notes.append(
-            f"Provider LLM halted: {case.llm_halt_reason}. "
+            "Provider LLM halted: its spend limit was reached. "
             "Completed digs preserved; further LLM requests skipped."
         )
     if plan.skip_llm:
@@ -770,7 +780,12 @@ async def _summary(
             previous_run_id=previous_run_id,
         )
     except Exception as exc:  # noqa: BLE001
-        reporting_notes.append(f"Final LLM summary failed: {exc}")
+        from diagnostic_mas.llm_status import error_category, error_phrase, note_summary_failed
+
+        category = error_category(exc)
+        note_summary_failed(case, category)
+        print(f"[summary] final LLM summary failed [{category}]: {exc}", file=sys.stderr)
+        reporting_notes.append(f"Final LLM summary failed: {error_phrase(category)}")
         narrative = ""
     # After the last request: what the scan used, and its cost when the provider reports it.
     case.llm_usage = report_case.llm_usage = end_llm_accounting(settings)

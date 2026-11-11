@@ -53,13 +53,16 @@ class Investigation:
         self.rounds = 0
         self.round_limit = 0
         self.stop_reason = "no_conclusion"
+        # A failed request's category (never its text), and refused conclusions in a row at the stop.
+        self.llm_error: str | None = None
+        self.refused_conclusions = 0
 
     def llm(self, create, **kwargs):
         started = time.monotonic()
         self.llm_requests += 1
         try:
             result = create(**kwargs)
-            self.stop_reason = "no_conclusion"
+            self.stop_reason, self.llm_error = "no_conclusion", None
             return result
         except Exception as exc:
             self.stop_reason = (
@@ -67,6 +70,9 @@ class Investigation:
                 or "timeout" in type(exc).__name__.lower()
                 else "provider_failure"
             )
+            from agent.summarize import llm_error_category
+
+            self.llm_error = llm_error_category(exc)
             raise
         finally:
             self.llm_seconds += time.monotonic() - started
@@ -101,7 +107,8 @@ class Investigation:
             "tools_remaining": max(0, tool_limit-tools_used),
             "rounds_used": self.rounds, "rounds_allowed": self.round_limit,
             "stop_reason": self.stop_reason,
-        }
+        } | ({"llm_error": self.llm_error} if self.llm_error else {}
+             ) | ({"refused_conclusions": self.refused_conclusions} if self.refused_conclusions else {})
 
 
 def fallback_gap(metrics):

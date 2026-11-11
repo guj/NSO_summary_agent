@@ -855,6 +855,36 @@ def test_compact_drill_context_lists_unavailable(monkeypatch):
     assert ctx["focus_live_devices"] == ["atla-data-sw"]
 
 
+def test_a_drill_is_given_the_platform_of_an_end_whose_state_its_platform_does_not_expose():
+    from diagnostic_mas.drill import compact_drill_context
+    from nso_facts.topology.routing import NOT_EXPOSED as BGP_NOT_EXPOSED
+    from nso_facts.topology.underlay import NOT_EXPOSED as ISIS_NOT_EXPOSED
+
+    def unread(device, layer, wording):
+        return {"id": f"is_{device}_{layer}", "code": "collection_error", "layer": layer, "status": "open",
+                "message": f"{device}: {wording} (device '{device}' runs saos, whose NED models config only)"}
+
+    star_cape = {"id": "is_20", "code": "configured_no_session", "layer": "routing", "status": "open",
+                 "message": "BGP star-data-sw (idle) ↔ cape-data-sw (unknown)",
+                 "edge_id": "bgp:10.129.128.1:10.148.128.1:star-data-sw:cape-data-sw"}
+    salt_seat = {"id": "is_6", "code": "unidirectional_adjacency", "layer": "underlay", "status": "open",
+                 "message": "IS-IS adjacency down", "devices": ["salt-data-sw", "seat-data-sw"],
+                 "edge_id": "isis:salt-data-sw:?:seat-data-sw:HundredGigE0/0/0/23.3000"}
+    case = CaseFile(
+        budget=Budget(max_deep_checks=0, max_handoffs=0),
+        device_names=["cape-data-sw", "cien-data-sw", "salt-data-sw", "seat-data-sw", "star-data-sw"],
+        issues=[unread("cape-data-sw", "underlay", ISIS_NOT_EXPOSED),
+                unread("cien-data-sw", "underlay", ISIS_NOT_EXPOSED),
+                unread("cape-data-sw", "routing", BGP_NOT_EXPOSED),
+                star_cape, salt_seat],
+    )
+
+    ctx = compact_drill_context(case, focus_issue=star_cape, remaining_tools=12)
+    assert ctx["platform_notes"] == {
+        "cape-data-sw": f"{ISIS_NOT_EXPOSED} (device 'cape-data-sw' runs saos, whose NED models config only)"}
+    assert "platform_notes" not in compact_drill_context(case, focus_issue=salt_seat, remaining_tools=12)
+
+
 @pytest.mark.asyncio
 async def test_acceptance_l2_dn_pinned_summary(monkeypatch):
     """Drill phase + pinned summary for L2 DN (mocked)."""
@@ -1615,6 +1645,28 @@ def test_a_routing_issue_without_a_device_list_still_outranks_one_the_previous_s
     assert [i["edge_id"] for i in select_drill_issues(case, limit=2)] == [star_cape, star_cien]
 
 
+def test_collection_errors_and_missing_config_do_not_take_slots_from_routing_issues():
+    """Their error text already says why; a drill finding on them shows in no device block."""
+    from diagnostic_mas.drill import select_drill_issues
+
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0, max_drill_issues=2, max_tools_per_drill=12))
+    star_cape = "bgp:10.0.0.1:10.0.0.2:star-data-sw:cape-data-sw"
+    open_issue(case, code="collection_error", severity="medium", layer="underlay", evidence_ids=[],
+               message="brist-data-sw: check_isis_adjacencies failed: RESTCONF 500: Device brist-data-sw is southbound locked")
+    open_issue(case, code="no_configured_isis", severity="low", layer="underlay", evidence_ids=[],
+               message="scm-data-sw: no IS-IS interfaces found in NSO config")
+    open_issue(case, code="no_configured_bgp", severity="low", layer="routing", evidence_ids=[],
+               message="scm-data-sw: no BGP neighbors found in NSO config")
+    open_issue(case, code="unidirectional_adjacency", message="IS-IS adjacency down", evidence_ids=[],
+               severity="high", layer="underlay", devices=["salt-data-sw", "seat-data-sw"], edge_id=SALT_SEAT)
+    open_issue(case, code="configured_no_session", message="BGP down", evidence_ids=[],
+               severity="high", layer="routing", edge_id=star_cape)
+    # The previous scan concluded on every routing Issue, as a scan with enough slots does.
+    case.previous_findings = {edge: {"cause": "an earlier cause", "run_id": SCAN_24} for edge in (SALT_SEAT, star_cape)}
+
+    assert [i["edge_id"] for i in select_drill_issues(case, limit=2)] == [SALT_SEAT, star_cape]
+
+
 # Drill slots rotate, so a routing finding has to outlast the scans that leave its Issue alone.
 SCAN_24, SCAN_25, SCAN_26 = "20261030T221052Z", "20261031T181418Z", "20261101T120000Z"
 STAR_CIEN = "bgp:10.0.0.1:10.0.0.3:star-data-sw:cien-data-sw"
@@ -1690,3 +1742,43 @@ def test_a_routing_findings_headline_is_carried_to_the_next_scan():
         "issue_edge_id": SALT_SEAT, "cause": "a long cause", "headline": "Salt drops seat's hellos."}}]}
 
     assert previous_findings(scan)[SALT_SEAT]["headline"] == "Salt drops seat's hellos."
+
+
+def test_a_refused_conclusion_is_logged_whole_on_one_line():
+    from diagnostic_mas.drill import rejected_call_log_line
+
+    observed = "Read live from dall-data-sw.\n" * 120 + "Cause: cien-data-sw originates no LSP."
+    line = rejected_call_log_line("conclude_investigation", json.dumps({"observed": observed}),
+                                  "no usable cause (missing; sent: observed)", finish_reason="tool_calls")
+
+    assert line.endswith('Cause: cien-data-sw originates no LSP."}\'')
+    assert "\n" not in line
+
+
+def test_drill_finding_keeps_its_next_step_on_one_line():
+    from diagnostic_mas.drill import parse_drill_finding
+
+    base = {"observed": "o", "cause": "c"}
+    assert parse_drill_finding(base | {"next_step": " Shut and re-enable\nHu0/0/0/21 on salt-data-sw. "})[
+        "next_step"] == "Shut and re-enable Hu0/0/0/21 on salt-data-sw."
+    assert "next_step" not in parse_drill_finding(base | {"next_step": "  "})
+    assert "next_step" not in parse_drill_finding(base)
+
+
+def test_a_routing_findings_next_step_is_carried_to_the_next_scan():
+    from diagnostic_mas.drill import previous_findings
+
+    scan = {"run_id": "20261102T165258Z", "evidence": [{"kind": "drill_finding", "payload": {
+        "issue_edge_id": SALT_SEAT, "cause": "a long cause", "next_step": "Read salt's punt counters."}}]}
+
+    assert previous_findings(scan)[SALT_SEAT]["next_step"] == "Read salt's punt counters."
+
+
+def test_a_routing_findings_approval_flag_is_carried_to_the_next_scan():
+    from diagnostic_mas.drill import previous_findings
+
+    scan = {"run_id": "20261110T205113Z", "evidence": [{"kind": "drill_finding", "payload": {
+        "issue_edge_id": SALT_SEAT, "cause": "a long cause", "next_step": "Shut and re-enable Hu0/0/0/21.",
+        "fix_requires_human_approval": True}}]}
+
+    assert previous_findings(scan)[SALT_SEAT]["fix_requires_human_approval"] is True

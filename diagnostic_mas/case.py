@@ -207,6 +207,10 @@ class DrillSession:
     tools_used: int = 0
     issue_id: str | None = None
     issue_edge_id: str | None = None
+    # Why the LLM loop ended without a conclusion (see diagnostic_mas.llm_status), and for a failed
+    # request the error's category, never its text.
+    stopped: str | None = None
+    stopped_error: str | None = None
 
 
 @dataclass
@@ -248,6 +252,9 @@ class CaseFile:
     llm_usage: dict[str, Any] = field(default_factory=dict)
     # MCP calls of the scan: all, from cache, and those made during LLM investigations.
     mcp_calls: dict[str, Any] = field(default_factory=dict)
+    # How the LLM work went, for the Result's "LLM investigations" line: why it was skipped, why a
+    # routing investigation stopped without a conclusion, and how the summary request ended.
+    llm_status: dict[str, Any] = field(default_factory=dict)
     llm_halt_reason: str | None = None
     _evidence_seq: int = 0
     _issue_seq: int = 0

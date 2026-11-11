@@ -74,6 +74,23 @@ def final_service_assessments(case):
         yield kind, name, service, status, reason
 
 
+# What an unfinished investigation's cause ends with; untrue of a service the fixed check found faulted.
+STATUS_UNKNOWN_SENTENCE = "Service forwarding status remains unknown."
+
+
+def retained_faults(case):
+    """Services counted Down or Degraded on the fixed check alone, their LLM investigation unfinished:
+    name → that status."""
+    return {name: status for _kind, name, _service, status, reason in final_service_assessments(case)
+            if status in ("down", "degraded") and reason.endswith("LLM incomplete; retained")}
+
+
+def retained_fault_cause(cause, status):
+    """An unfinished investigation's cause, saying the fixed check's result stands."""
+    return str(cause or "").replace(
+        STATUS_UNKNOWN_SENTENCE, f"The fixed check found the service {status.capitalize()}; that result stands.")
+
+
 def final_service_counts(case):
     rows = {}
     for kind, _name, _service, status, reason in final_service_assessments(case):

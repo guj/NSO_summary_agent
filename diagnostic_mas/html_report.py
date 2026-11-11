@@ -229,6 +229,10 @@ def notification_digest(report: str, run_id: str, *, changes: list[str] | None =
         lines.append('**Result:** ' + counts[1].rstrip('.') + '.')
     else:
         lines.append((coverage or result)[:850])
+    # LLM work that did not complete changes how far the report can be relied on: say so here too.
+    llm = re.search(r'^- (\*\*LLM investigations:\*\* (?!Complete)\S.*)$', report, re.M)
+    if llm:
+        lines.append(llm[1][:400])
     if changes:
         lines += ['', *changes]
     section = re.search(r'^## Recommended follow-up\s*\n(.*?)(?=^## |\Z)', report, re.M | re.S)

@@ -43,6 +43,25 @@ its service was deleted; `not_rechecked` means it was not looked at. Nothing
 here reads the file yet. The fields are in the
 [runner guide](DIAGNOSTIC_RUNNER.md#faultsjson-the-scans-faults-for-a-script).
 
+### What does the "LLM investigations" line in the Result mean?
+
+It says how the scan's LLM work went, so you know how far the report rests on it:
+
+- **Complete:** every investigation the LLM started reached a conclusion, and it wrote the Summary.
+- **Partial:** some did not. The line counts them and says why: the request failed (the kind of
+  error, such as "provider connection error"), the conclusion was refused repeatedly, or the
+  investigation ended without one. It also says when there is no LLM summary.
+- **Unavailable:** no LLM request succeeded.
+- **Skipped:** the LLM was not used (`--skip-llm`, or its key was refused, expired or out of budget
+  when the scan started).
+- **Halted:** the provider's spend limit was reached during the scan.
+
+Investigations are counted together: services, routing (IS-IS and BGP) and ports. A conclusion is
+still the LLM's and "not verified". "Fixed-check results stand" means the service counts and
+faults from the program's own checks are unaffected: a service those checks found Down is still
+counted and shown as Down when its investigation did not finish. The provider's own error text is
+never shown; it is in the scan's log. Slack and email carry the line unless it is Complete.
+
 ### What does "NSO failed to authenticate" mean?
 
 NSO reached the device but the login failed, in NSO's own words such as `SSH host key mismatch`:

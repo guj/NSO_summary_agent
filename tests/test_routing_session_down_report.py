@@ -193,6 +193,24 @@ def test_an_earlier_scans_finding_is_shown_dated_while_its_issue_waits_for_a_dri
     assert "an LLM investigation's finding is in the devices' blocks" in "\n".join(format_followup_operator(case))
 
 
+def test_an_earlier_finding_says_this_scans_drill_read_the_issue_again_without_a_conclusion():
+    from diagnostic_mas.case import add_evidence
+
+    case = _investigated()
+    case.evidence = [ev for ev in case.evidence if ev["payload"]["issue_edge_id"] != ISIS_EDGE]
+    case.previous_findings = {
+        ISIS_EDGE: {"cause": "Seat's hellos never reach salt.", "confidence": "medium", "run_id": "20261030T221052Z"},
+    }
+    add_evidence(case, {"kind": "drill", "role": "drill", "payload": {
+        "check": "exec_show", "args": {"device_name": SALT, "input_command": "isis adjacency"},
+        "issue_edge_id": ISIS_EDGE, "result": "no seat entry", "error": None}})
+
+    block = _device_block(format_devices_operator(case), SALT)
+    assert ("**Investigated by LLM on 30 Oct** (investigated again this scan, no conclusion; confidence medium; "
+            f"not verified): IS-IS adjacency {SALT} ↔ {SEAT} — Seat's hellos never reach salt.") in block
+    assert "not rechecked this scan" not in block
+
+
 def test_a_finding_is_shown_by_its_headline_when_it_has_one():
     case = _investigated()
     long_cause = "Seat's hellos never reach salt's VLAN 3000 sub-interface. " + "More reasoning. " * 40
@@ -200,6 +218,41 @@ def test_a_finding_is_shown_by_its_headline_when_it_has_one():
 
     block = _device_block(format_devices_operator(case), SALT)
     assert f"IS-IS adjacency {SALT} ↔ {SEAT} — Salt drops seat's hellos. Next: Read the punt counters." in block
+
+
+def test_a_finding_is_shown_with_its_next_step_rather_than_the_start_of_its_fix():
+    case = _investigated()
+    fix = ("No config change is indicated — both sub-interfaces' running configurations already match. "
+           "With approval, in a maintenance window, shut and re-enable HundredGigE0/0/0/21 on salt-data-sw.")
+    _finding(case, ISIS_EDGE, "Seat's hellos never reach salt.", fix,
+             next_step="Shut and re-enable salt-data-sw HundredGigE0/0/0/21 in a maintenance window, with approval.")
+
+    block = _device_block(format_devices_operator(case), SALT)
+    assert ("Seat's hellos never reach salt. Next: Shut and re-enable salt-data-sw HundredGigE0/0/0/21 "
+            "in a maintenance window, with approval.") in block
+    assert "No config change" not in block
+
+
+def test_a_findings_next_step_says_a_change_needs_human_approval_unless_it_already_does():
+    case = _investigated()
+    shut = "In a maintenance window, shut and re-enable salt-data-sw HundredGigE0/0/0/21."
+    _finding(case, ISIS_EDGE, "Seat's hellos never reach salt.", shut, next_step=shut)
+    _finding(case, BGP_EDGE, "10.148.128.1 is not in star's routing table.", "Read cape's loopback.",
+             next_step="Re-add cape's loopback to IS-IS, with human approval.", session_state="not_established")
+
+    assert f"Next: {shut} (human must approve any config change)." in _device_block(format_devices_operator(case), SALT)
+    block = _device_block(format_devices_operator(case), STAR)
+    assert "Next: Re-add cape's loopback to IS-IS, with human approval." in block
+    assert block.count("human must approve") == 0
+
+
+def test_a_finding_not_flagged_for_approval_gets_no_approval_note():
+    case = _investigated()
+    _finding(case, ISIS_EDGE, "Seat's hellos never reach salt.", "Read the punt counters.",
+             next_step="Read salt's punt counters.", fix_requires_human_approval=False)
+
+    block = _device_block(format_devices_operator(case), SALT)
+    assert "Next: Read salt's punt counters." in block and "human must approve" not in block
 
 
 def test_a_finding_whose_headline_is_too_long_is_shown_by_its_cut_cause():

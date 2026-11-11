@@ -269,7 +269,7 @@ async def test_a_provider_budget_halt_skips_later_llm_phases_and_is_noted_in_the
     assert "autonomous" not in phases.names() and "drill" not in phases.names()
     assert "[llm] provider budget exceeded — skipping autonomous/drill/summary LLM" in capsys.readouterr().err
     assert phases.of("render_report")["reporting_notes"] == [
-        "Provider LLM halted: budget_exceeded: over budget. Completed digs preserved; further LLM requests skipped."]
+        "Provider LLM halted: its spend limit was reached. Completed digs preserved; further LLM requests skipped."]
     assert run_mod.summary_narrative.await_args.kwargs["deterministic_summary"] is True
 
 
@@ -282,7 +282,7 @@ async def test_a_failed_summary_is_noted_in_the_report(tmp_path, monkeypatch):
 
     render = phases.of("render_report")
     assert render["summary"] is None
-    assert render["reporting_notes"] == ["Final LLM summary failed: bad gateway"]
+    assert render["reporting_notes"] == ["Final LLM summary failed: provider runtime error"]
 
 
 @pytest.mark.asyncio

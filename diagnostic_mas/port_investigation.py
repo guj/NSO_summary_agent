@@ -421,6 +421,11 @@ async def _investigate(
                                                           "confidence")},
                        finding_evidence_id=found.get("id"))
         set_issue_status(case, issue_id, "explained")
+    else:
+        # Why it did not finish; a failed request by its category, never its text.
+        payload["stopped"] = session.stopped or "no_conclusion"
+        if session.stopped_error:
+            payload["stopped_error"] = session.stopped_error
     add_evidence(case, {"kind": kind, "role": "port", "layer": layer, "payload": payload})
     return payload
 
