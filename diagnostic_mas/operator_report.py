@@ -893,8 +893,13 @@ def _verification_unknown_by_endpoints(
     Returns (endpoint_tuple, count) sorted by count descending, then device name.
     Empty endpoint tuple means sync unknown without per-device sync failure detail.
     """
+    from diagnostic_mas.service_final_status import final_unknown_records
+
+    unknown = final_unknown_records(case)
     groups: Counter[tuple[str, ...]] = Counter()
     for _name, rec in _iter_service_records(case):
+        if id(rec) not in unknown:
+            continue                     # a Down or Degraded finding on such a device is counted as that, not as unknown
         sys = str(rec.get("system_status") or "").lower()
         status = str(rec.get("status") or "").lower()
         eps = _failing_verification_endpoints(rec)
@@ -914,10 +919,13 @@ def _verification_unknown_involvement_by_device(case: CaseFile) -> Counter[str]:
     A multi-endpoint service increments each failing endpoint once. Counts
     overlap across devices and must not be summed to get distinct services.
     """
+    from diagnostic_mas.service_final_status import final_unknown_records
+
+    unknown = final_unknown_records(case)
     counts: Counter[str] = Counter()
     for _name, rec in _iter_service_records(case):
         eps = _failing_verification_endpoints(rec)
-        if not eps:
+        if not eps or id(rec) not in unknown:
             continue
         for device in eps:
             counts[str(device)] += 1
@@ -960,8 +968,13 @@ def _service_impact(total: int, unknown: int) -> str:
 
 def _verification_unknown_service_names(case: CaseFile) -> set[str]:
     """Service names included in endpoint-sync unknown grouping."""
+    from diagnostic_mas.service_final_status import final_unknown_records
+
+    unknown = final_unknown_records(case)
     names: set[str] = set()
     for name, rec in _iter_service_records(case):
+        if id(rec) not in unknown:
+            continue
         sys = str(rec.get("system_status") or "").lower()
         status = str(rec.get("status") or "").lower()
         eps = _failing_verification_endpoints(rec)
@@ -1028,8 +1041,13 @@ def _incomplete_checks_by_endpoint_reason(
     case: CaseFile,
 ) -> list[tuple[tuple[str, ...], str, int]]:
     """Group sync-layer unknowns by (endpoints, reason) for compact Services."""
+    from diagnostic_mas.service_final_status import final_unknown_records
+
+    unknown = final_unknown_records(case)
     groups: Counter[tuple[tuple[str, ...], str]] = Counter()
     for _name, rec in _iter_service_records(case):
+        if id(rec) not in unknown:
+            continue
         sys = str(rec.get("system_status") or "").lower()
         status = str(rec.get("status") or "").lower()
         device_sync = rec.get("device_sync")

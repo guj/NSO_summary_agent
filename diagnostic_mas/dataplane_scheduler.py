@@ -144,6 +144,7 @@ def isolate_case(case):
     child.diagnoses = list(case.diagnoses)
     child.issues = deepcopy(case.issues)
     child.service_coverage = dict(case.service_coverage)
+    child.llm_exchanges, child.llm_texts = [], {}          # this worker's conversations; merged back below
     return child, len(child.evidence), len(child.diagnoses)
 
 
@@ -166,6 +167,8 @@ def merge_case(parent, child, evidence_start, diagnosis_start, name):
             issue.update(updates[issue['id']])
     if name in child.service_coverage:
         parent.service_coverage[name] = child.service_coverage[name]
+    parent.llm_exchanges.extend(child.llm_exchanges)
+    parent.llm_texts.update(child.llm_texts)
     parent.budget.dataplane_tools_used += child.budget.dataplane_tools_used
     if child.llm_halt_reason:
         mark_case_llm_halt(parent, child.llm_halt_reason)

@@ -107,24 +107,48 @@ def _unfinished(outcomes: list[tuple[bool, str, str | None]]) -> str:
     return "; ".join(bits)
 
 
-def llm_result_text(case: CaseFile) -> str | None:
-    """The Result's "LLM investigations" text; None for a case saved before this was recorded."""
+def llm_outcome(case: CaseFile) -> dict[str, Any] | None:
+    """How the scan's LLM work went: its state and how many investigations reached a conclusion.
+
+    The state is complete, partial, unavailable, skipped or halted; None for a case saved before this
+    was recorded. The Result line and the pushed metrics both come from this.
+    """
     status = getattr(case, "llm_status", None) or {}
     halted = bool(getattr(case, "llm_halt_reason", None) or status.get("halted"))
     if not status and not halted:
         return None
     if status.get("skipped"):
-        return f"Skipped — {status['skipped']}."
+        return {"state": "skipped", "done": 0, "total": 0}
     outcomes = _outcomes(case)
     total, done = len(outcomes), sum(1 for reached, _, _ in outcomes if reached)
-    counted = (f"{done} of {total} investigation{'s' if total != 1 else ''} reached a conclusion"
-               if total else "no investigation was needed")
-    stands = " Fixed-check results stand."
+    counts = {"done": done, "total": total}
     if halted:
-        return f"Halted — the provider's spend limit was reached; {counted}; no LLM summary.{stands}"
+        return {"state": "halted", **counts}
     summary = status.get("summary")
     provider_failed = [error for reached, why, error in outcomes if not reached and why == PROVIDER_ERROR]
     if summary == FAILED and not done and len(provider_failed) == total:
+        return {"state": "unavailable", **counts}
+    complete = done == total and summary in (WRITTEN, NOT_REQUESTED)
+    return {"state": "complete" if complete else "partial", **counts}
+
+
+def llm_result_text(case: CaseFile) -> str | None:
+    """The Result's "LLM investigations" text; None for a case saved before this was recorded."""
+    outcome = llm_outcome(case)
+    if outcome is None:
+        return None
+    status = case.llm_status
+    if outcome["state"] == "skipped":
+        return f"Skipped — {status['skipped']}."
+    outcomes = _outcomes(case)
+    total, done = outcome["total"], outcome["done"]
+    counted = (f"{done} of {total} investigation{'s' if total != 1 else ''} reached a conclusion"
+               if total else "no investigation was needed")
+    stands = " Fixed-check results stand."
+    if outcome["state"] == "halted":
+        return f"Halted — the provider's spend limit was reached; {counted}; no LLM summary.{stands}"
+    summary = status.get("summary")
+    if outcome["state"] == "unavailable":
         return (f"Unavailable — no LLM request succeeded ({error_phrase(status.get('summary_error'))})."
                 f"{stands}")
     summary_text = {
@@ -133,9 +157,9 @@ def llm_result_text(case: CaseFile) -> str | None:
         EMPTY: "no LLM summary (empty reply)",
         FAILED: f"no LLM summary ({error_phrase(status.get('summary_error'))})",
     }.get(summary, "LLM summary not recorded")
-    complete = done == total and summary in (WRITTEN, NOT_REQUESTED)
+    provider_failed = [error for reached, why, error in outcomes if not reached and why == PROVIDER_ERROR]
     unfinished = _unfinished(outcomes)
-    return (f"{'Complete' if complete else 'Partial'} — {counted}"
+    return (f"{'Complete' if outcome['state'] == 'complete' else 'Partial'} — {counted}"
             + (f" ({unfinished})" if unfinished else "")
             + f"; {summary_text}."
             + (stands if provider_failed or summary == FAILED else ""))

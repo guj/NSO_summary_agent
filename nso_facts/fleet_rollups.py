@@ -219,6 +219,22 @@ def fleet_device_sync_breakdown(
     return total, "—", 0, 0
 
 
+def fleet_drift_and_locked(fleet_sync: Any, out_of_sync: int) -> tuple[int, int]:
+    """(devices out of sync, devices locked): NSO's summary counts a southbound-locked device as out of sync.
+
+    A locked device has not drifted: its lock is someone's maintenance or a fault, and nothing was read from
+    it. When the per-device results are present they decide: "out-of-sync" is drift, "locked" is locked.
+    Without them the summary stands and nothing is called locked.
+    """
+    data = (fleet_sync.get("data") if isinstance(fleet_sync, dict) else None) or {}
+    devices = data.get("devices") if isinstance(data, dict) else None
+    results = [str(d.get("result") or "").lower().replace("_", "-").replace(" ", "-")
+               for d in devices if isinstance(d, dict)] if isinstance(devices, list) else []
+    if not any(results):
+        return out_of_sync, 0
+    return results.count("out-of-sync"), results.count("locked")
+
+
 def mismatch_by_edge_id(topology: Any) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for issue in operational_issues(topology):

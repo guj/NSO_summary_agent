@@ -10,11 +10,11 @@ def disappeared(record):
     return (record.get("presence_recheck") or {}).get("outcome") == "absent"
 
 
-async def _fresh_presence(client, record):
-    """("present" | "absent" | "unknown", reason) from a fresh, uncached listing of the service's type."""
-    outcome, reason = "unknown", "Fresh inventory query did not establish service presence"
+async def _fresh_names(client, service_type):
+    """(names listed now, or None when the listing cannot be trusted, reason): a fresh, uncached listing."""
+    reason = "Fresh inventory query did not establish service presence"
     try:
-        result = await call_mcp(client, "get_services", {"service_type":record["service_type"]}, bypass_cache=True)
+        result = await call_mcp(client, "get_services", {"service_type":service_type}, bypass_cache=True)
         data = result.get("data") if isinstance(result, dict) else None
         rows = data.get("services") if isinstance(data, dict) else None
         # Never interpret malformed, partial, paginated or failed output as absence.
@@ -22,11 +22,19 @@ async def _fresh_presence(client, record):
                  and isinstance(rows, list) and all(isinstance(r, dict) and instance_name(r) for r in rows)
                  and not any(data.get(k) for k in ("partial", "truncated", "has_more", "next_cursor", "next")))
         if valid:
-            outcome = "present" if any(instance_name(r) == record["name"] for r in rows) else "absent"
-            reason = "Exact service ID " + ("present" if outcome == "present" else "absent") + " in fresh service-type inventory"
+            return {instance_name(r) for r in rows}, ""
     except Exception as exc:
         reason = "Fresh inventory query failed: " + type(exc).__name__
-    return outcome, reason
+    return None, reason
+
+
+async def _fresh_presence(client, record):
+    """("present" | "absent" | "unknown", reason) from a fresh, uncached listing of the service's type."""
+    names, reason = await _fresh_names(client, record["service_type"])
+    if names is None:
+        return "unknown", reason
+    outcome = "present" if record["name"] in names else "absent"
+    return outcome, "Exact service ID " + outcome + " in fresh service-type inventory"
 
 
 def _record_check(case, record, outcome, reason):
@@ -57,6 +65,52 @@ async def gone_before_investigation(client, case, record):
     _record_check(case, record, outcome, reason)
     _mark_gone(case, record)
     return True
+
+
+async def keep_services_still_listed(client, case, ranked, *, limit):
+    """The first ``limit`` of the ranked (spine, record) pairs that NSO still lists.
+
+    Owners delete services while a scan runs, so some chosen ones are gone by their turn. Each is
+    recorded as no longer present, as when found gone at its own investigation, and the next ranked
+    one takes its place: the cap is a ceiling and its slots should not go empty. Each service type is
+    listed once; a listing that cannot be trusted keeps its candidates.
+    """
+    listings, kept = {}, []
+    for ev, record in ranked:
+        if len(kept) >= limit:
+            break
+        kind = record["service_type"]
+        if kind not in listings:
+            listings[kind] = (await _fresh_names(client, kind))[0]
+        names = listings[kind]
+        if names is not None and record["name"] not in names:
+            _record_check(case, record, "absent", "Exact service ID absent in fresh service-type inventory")
+            _mark_gone(case, record)
+            continue
+        kept.append((ev, record))
+    return kept
+
+
+async def recheck_reported_faults(client, case):
+    """Take out of the report each service reported Down or Degraded that NSO no longer lists.
+
+    A service found faulted by its fixed check is not investigated, so nothing else asks whether its
+    owner has since deleted it, and it would stay an open fault until the next full scan. One fresh
+    listing per service type that has such a service settles it, taken at the end of the scan. A listing
+    that cannot be trusted keeps the fault; services reported Up or Unknown are not rechecked.
+    """
+    from diagnostic_mas.service_final_status import final_service_assessments
+
+    faulted = [(kind, service) for kind, _name, service, status, _reason in final_service_assessments(case)
+               if status in ("down", "degraded")]
+    listings = {}
+    for kind, service in faulted:
+        if kind not in listings:
+            listings[kind] = (await _fresh_names(client, kind))[0]
+        names = listings[kind]
+        if names is not None and service["name"] not in names:
+            _record_check(case, service, "absent", "Exact service ID absent in fresh service-type inventory at the end of the scan")
+            _mark_gone(case, service)
 
 
 async def reconcile_presence(client, case, record, finding):

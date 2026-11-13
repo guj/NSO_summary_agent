@@ -75,8 +75,8 @@ def test_the_services_line_says_which_services_newly_failed():
     carried = format_result_section(case, Newness(services={"b1": Seen(CARRIED, OLD, True)}))
     new = format_result_section(case, Newness(services={"b3": Seen(NEW)}))
 
-    assert _line(carried, "Services") == "- **Services:** 0 OpUp, 0 Down, 0 Degraded, 3 Unknown (none newly failed)."
-    assert _line(new, "Services") == "- **Services:** 0 OpUp, 0 Down, 0 Degraded, 3 Unknown (1 newly failed: `b3`)."
+    assert _line(carried, "Services") == "- **Services:** 0 OpUp, 3 Down, 0 Degraded, 0 Unknown (none newly failed)."
+    assert _line(new, "Services") == "- **Services:** 0 OpUp, 3 Down, 0 Degraded, 0 Unknown (1 newly failed: `b3`)."
 
 
 def test_follow_up_items_say_new_or_the_day_they_were_first_seen():

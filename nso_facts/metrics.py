@@ -11,6 +11,7 @@ from typing import Any, Protocol
 
 from nso_facts.fleet_rollups import (
     fleet_device_sync_breakdown,
+    fleet_drift_and_locked,
     fleet_infra_alert_counts,
     fleet_inventory_review_count,
     fleet_routing_totals,
@@ -120,7 +121,7 @@ def build_phase1_metrics(
     )
     devices_total = _intish(total) if total != "—" else 0
     devices_in_sync = _intish(in_sync) if in_sync != "—" else 0
-    devices_out = _intish(out_of_sync)
+    devices_out, devices_locked = fleet_drift_and_locked(fleet_sync, _intish(out_of_sync))
     devices_err = _intish(sync_error)
 
     isis_up, isis_down = _layer_up_down(topology, "underlay")
@@ -149,6 +150,8 @@ def build_phase1_metrics(
         g("nso_fleet_devices_out_of_sync", float(devices_out)),
         "# TYPE nso_fleet_devices_sync_error gauge",
         g("nso_fleet_devices_sync_error", float(devices_err)),
+        "# TYPE nso_fleet_devices_locked gauge",
+        g("nso_fleet_devices_locked", float(devices_locked)),
         "# TYPE nso_isis_adjacencies_up gauge",
         g("nso_isis_adjacencies_up", float(isis_up)),
         "# TYPE nso_isis_adjacencies_down gauge",
@@ -177,6 +180,8 @@ def build_phase1_metrics(
         g("nso_inventory_review_devices", float(inventory_review)),
     ]
 
+    lines += _device_infra_lines(system_health, g)
+
     lines += _attempt_lines(ts, success=success, nso_unreachable=False, pipeline=pipeline)
 
     not_covered = snapshot.get("devices_not_covered")
@@ -190,6 +195,10 @@ def build_phase1_metrics(
         lines.append("# TYPE nso_scan_info gauge")
         lines.append(g("nso_scan_info", 1.0, {
             "run_id": str(scan["run_id"]), "report_url": str(scan.get("report_url") or "")}))
+
+    llm = snapshot.get("llm")
+    if isinstance(llm, dict) and llm.get("state") in LLM_STATES:
+        lines += _llm_lines(llm, g)
 
     service_status = snapshot.get("service_status")
     if isinstance(service_status, dict):
@@ -252,6 +261,24 @@ def build_phase1_metrics(
     return lines
 
 
+# The value of ``nso_llm_state``: how the scan's LLM work went.
+LLM_STATES = ("complete", "partial", "unavailable", "skipped", "halted")
+
+
+def _llm_lines(llm: dict[str, Any], g: Any) -> list[str]:
+    """The scan's LLM state, investigation counts, usage, spend and model, where each is known."""
+    lines = ["# TYPE nso_llm_state gauge", g("nso_llm_state", float(LLM_STATES.index(llm["state"])))]
+    for name, key in (("nso_llm_investigations_done", "done"), ("nso_llm_investigations_total", "total"),
+                      ("nso_llm_requests", "requests"), ("nso_llm_input_tokens", "input_tokens"),
+                      ("nso_llm_output_tokens", "output_tokens"), ("nso_llm_cost_usd", "cost"),
+                      ("nso_llm_budget_left_usd", "budget_left"), ("nso_llm_budget_max_usd", "budget_max")):
+        if isinstance(llm.get(key), (int, float)):
+            lines += [f"# TYPE {name} gauge", g(name, float(llm[key]))]
+    if llm.get("model"):
+        lines += ["# TYPE nso_llm_info gauge", g("nso_llm_info", 1.0, {"model": str(llm["model"])})]
+    return lines
+
+
 def format_exposition(lines: list[str]) -> str:
     return "\n".join(lines) + "\n"
 
@@ -267,10 +294,39 @@ def pushgateway_url(settings: MetricsSettings) -> str | None:
     return f"{base}/metrics/job/{job}/instance/{instance}"
 
 
+# The value of ``nso_scan_last_attempt_state``: how the latest scan attempt ended.
+ATTEMPT_STATES = ("ok", "failed", "nso_unreachable")
+
+
+def _device_infra_lines(system_health: Any, g) -> list[str]:
+    """CPU (5 minutes) and memory use per device, so a dashboard can show the busiest one.
+
+    A device whose read failed, or that gave no reading of that kind, has no series.
+    """
+    cpu: list[str] = []
+    memory: list[str] = []
+    for device, entry in sorted((system_health if isinstance(system_health, dict) else {}).items()):
+        if not isinstance(entry, dict) or entry.get("error"):
+            continue
+        labels = {"device": str(device)}
+        five = (entry.get("cpu") or {}).get("five_min") if isinstance(entry.get("cpu"), dict) else None
+        used = (entry.get("memory") or {}).get("used_pct") if isinstance(entry.get("memory"), dict) else None
+        try:
+            if five is not None:
+                cpu.append(g("nso_device_cpu_five_min_percent", float(five), labels))
+            if used is not None:
+                memory.append(g("nso_device_memory_used_percent", float(used), labels))
+        except (TypeError, ValueError):
+            continue
+    return ((["# TYPE nso_device_cpu_five_min_percent gauge", *cpu] if cpu else [])
+            + (["# TYPE nso_device_memory_used_percent gauge", *memory] if memory else []))
+
+
 def _attempt_lines(
     timestamp_seconds: float, *, success: bool, nso_unreachable: bool, pipeline: str
 ) -> list[str]:
     """How the latest scan attempt ended, whether or not it produced a report."""
+    state = "nso_unreachable" if nso_unreachable else "ok" if success else "failed"
     return [
         "# TYPE nso_scan_last_attempt_timestamp_seconds gauge",
         _gauge("nso_scan_last_attempt_timestamp_seconds", float(timestamp_seconds),
@@ -280,6 +336,8 @@ def _attempt_lines(
         "# TYPE nso_scan_last_attempt_nso_unreachable gauge",
         _gauge("nso_scan_last_attempt_nso_unreachable", 1.0 if nso_unreachable else 0.0,
                pipeline=pipeline),
+        "# TYPE nso_scan_last_attempt_state gauge",
+        _gauge("nso_scan_last_attempt_state", float(ATTEMPT_STATES.index(state)), pipeline=pipeline),
     ]
 
 

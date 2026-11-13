@@ -950,9 +950,10 @@ def prefix_drop_line(row: dict[str, Any]) -> str:
 
 
 def _links_gaining_errors(older: dict[str, Any], newer: dict[str, Any]) -> list[dict[str, Any]]:
+    from diagnostic_mas.link_optics import with_optics
     from diagnostic_mas.port_counters import links_gaining_errors
 
-    return links_gaining_errors(older, newer)
+    return with_optics(links_gaining_errors(older, newer), newer)
 
 
 def _service_issue_faults(case: dict[str, Any]) -> dict[str, dict[str, Any]]:

@@ -29,6 +29,9 @@ def _queries(panels: list) -> list[str]:
 def test_dashboard_queries_only_metrics_a_scan_pushes():
     snapshot = metrics_snapshot_from_case(scan_case(), run_id="run-1", report_url="",
                                           links_gaining_errors=LINKS)
+    # A series exists only for a device that gave a reading, so the sample scan needs one.
+    snapshot["system_health"] = {**(snapshot.get("system_health") or {}),
+                                 "salt-data-sw": {"cpu": {"five_min": 10}, "memory": {"used_pct": 20.0}}}
     pushed = {
         re.match(r"[a-z0-9_]+", line).group(0)
         for line in build_phase1_metrics(snapshot, success=True, duration_seconds=1.0,

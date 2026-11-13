@@ -2,7 +2,7 @@
 import ipaddress
 import re
 from .bridge import collect
-from .probe import attachments, cef_ready, interface_state, safe
+from .probe import attachments, cef_ready, first_line, interface_found, members_view, interface_state, safe, state_line
 
 
 def route_prefix(text, target):
@@ -18,6 +18,45 @@ def route_prefix(text, target):
         return str(network) if address in network else None
     except ValueError:
         return None
+
+
+def _rib_found(route, target, lookup):
+    """Why a route reply does not give the customer prefix a route of its own."""
+    entries = re.findall(r"Routing entry for ([0-9a-fA-F:./]+)", route)
+    if not entries:
+        return first_line(route) or "empty reply"
+    if len(entries) > 1:
+        return f"{len(entries)} routing entries in the reply: " + ", ".join(entries)
+    try:
+        if ipaddress.ip_network(entries[0], strict=False).prefixlen == 0 and target not in {"0.0.0.0/0", "::/0"}:
+            return f"only the default route {entries[0]} covers it"
+    except ValueError:
+        pass
+    return f"the reply is for {entries[0]}, which does not contain {lookup}"
+
+
+def _route_found(route, gateway):
+    """How a route reply says the prefix is reached, for a binding that is not the gateway."""
+    lines = [l.strip() for l in route.splitlines() if "Known via" in l or "directly connected" in l or re.match(r"\s+\*?\s*[0-9a-fA-F:.]+, from ", l)]
+    return "; ".join(lines[:3] or [first_line(route) or "empty reply"]) + f" (expected directly connected via {gateway})"
+
+
+def _cef_found(cef, prefix, gateway, connected):
+    """Why a CEF reply is not an installed entry for the prefix."""
+    headers = re.findall(r"^([0-9a-fA-F:.]+/\d+), version ", cef, re.M)
+    try:
+        wanted = ipaddress.ip_network(prefix, strict=False)
+        listed = any(ipaddress.ip_network(h, strict=False) == wanted for h in headers)
+    except ValueError:
+        listed = False
+    if not listed:
+        return f"no CEF entry for {prefix} in the reply" + (f" (it begins: {first_line(cef)})" if first_line(cef) else "")
+    bad = re.search(r"unresolved|drop adjacency|discard|Null0|punt", cef, re.I)
+    if bad:
+        return f"the CEF entry for {prefix} shows {bad[0]}"
+    if connected and gateway not in cef:
+        return f"the CEF entry for {prefix} does not name {gateway}"
+    return f"the CEF entry for {prefix} has no installed next hop"
 
 
 def gateway_owners(instances):
@@ -46,12 +85,18 @@ async def check(instance, probe):
     domain = domains.get(local)
     bvis = set(re.findall(r"AC: (BVI\d+), state is", domain["detail"])) if domain else set()
     if len(bvis) != 1:
+        members = re.findall(r"^\s+AC: ([^,\s]+),", domain["detail"], re.M) if domain else []
+        name = ":".join(domain["identity"]) if domain else ""
+        why = ("the bridge-domain could not be read for the attachment" if not domain else
+               f"no BVI among the members of {name}" + (f" ({', '.join(members)})" if members else "") if not bvis else
+               f"{len(bvis)} BVIs among the members of {name}: {', '.join(sorted(bvis))}")
         probe.check("gateway_identity", "unknown", "One exact gateway binding not established; direct/routed variants need investigation", local,
-                    read=domain["read"] if domain else None)
+                    read=domain["read"] if domain else None, shown=members_view(domain["detail"]) if domain else None, found=why)
         return
     gateway = bvis.pop()
     text = await probe.show(local, f"interfaces {gateway}")
-    probe.check("gateway", interface_state(text, gateway), gateway, local, read=text)
+    probe.check("gateway", interface_state(text, gateway), gateway, local, read=text, matched=state_line(text, gateway),
+                found=interface_found(text, gateway))
     config = await probe.show(local, f"running-config interface {gateway}")
     if not re.search(rf"^interface {re.escape(gateway)}\s*$", config, re.M):
         probe.check("routing_context", "unknown", "Scoped gateway configuration unavailable", local, read=config)
@@ -75,7 +120,10 @@ async def check(instance, probe):
                 # Exact configured address, not a similarly named gateway.
                 addresses = re.findall(r"\b[0-9a-fA-F:.]+(?:/\d+)?", config)
                 present = any(value.split("/")[0] == str(net.ip) for value in addresses)
-                probe.check("gateway_address", "pass" if present else "unknown", str(net), local, read=config)
+                lines = [l.strip() for l in config.splitlines() if re.match(r"\s*ipv[46] address ", l)]
+                probe.check("gateway_address", "pass" if present else "unknown", str(net), local, read=config,
+                            found=f"{net.ip} is not configured on {gateway}; " + (f"configured: {'; '.join(lines)}" if lines else
+                                                                                "the configuration has no address line"))
             except (ValueError, KeyError, TypeError):
                 probe.check("gateway_intent", "unknown", f"IPv{version} gateway prefix incomplete", local)
     external = instance.get("external-access") or {}
@@ -120,7 +168,8 @@ async def check(instance, probe):
                 # Default-only coverage is not evidence of the customer return route.
                 if prefix and ipaddress.ip_network(prefix).prefixlen == 0 and target not in {"0.0.0.0/0", "::/0"}:
                     prefix = None
-                probe.check("rib", "pass" if prefix else "unknown", f"IPv{version} {target} in {context or 'global'}", dev, read=route)
+                probe.check("rib", "pass" if prefix else "unknown", f"IPv{version} {target} in {context or 'global'}", dev, read=route,
+                            found=_rib_found(route, target, lookup))
                 if not prefix:
                     continue
                 cef = await probe.show(dev, f"cef {ctx}{'ipv6 ' if version == 6 else ''}{prefix}")
@@ -139,11 +188,12 @@ async def check(instance, probe):
                                     dev, conclusive=True, read=route)
                     else:
                         probe.check("gateway_route_binding", "pass" if connected else "unknown", f"{prefix} bound to {gateway}", dev,
-                                    read=route)
+                                    read=route, found=_route_found(route, gateway))
                         if others and connected:
                             probe.check("gateway_shared", "pass",
                                         f"{shared}; {prefix} is bound to this service's {gateway}", dev, read=route)
                 ok = cef_ready(cef, prefix, connected=connected)
                 if connected:
                     ok = ok and gateway in cef
-                probe.check("fib", "pass" if ok else "unknown", f"IPv{version} {prefix} in {context or 'global'}", dev, read=cef)
+                probe.check("fib", "pass" if ok else "unknown", f"IPv{version} {prefix} in {context or 'global'}", dev, read=cef,
+                            found=_cef_found(cef, prefix, gateway, connected))

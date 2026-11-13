@@ -155,7 +155,9 @@ def _issue_brief(i: dict[str, Any]) -> dict[str, Any]:
     if isinstance(i.get("live_l2"), dict):
         brief["live_l2"] = i["live_l2"]
     if isinstance(i.get("basic_checks"), dict):
-        brief["basic_checks"] = i["basic_checks"]
+        from diagnostic_mas.operational_checks.common import checks_for_llm
+
+        brief["basic_checks"] = checks_for_llm(i["basic_checks"])
     if i.get("system_status"):
         brief["system_status"] = i.get("system_status")
     if i.get("dataplane_status"):
@@ -1078,10 +1080,50 @@ def conclusion_rejection(
     return f"no usable {', '.join(unusable)}" if unusable else "arguments refused"
 
 
-def refused_conclusion_reply(fn_name: str, why: str, required: tuple[str, ...]) -> str:
+def refused_conclusion_reply(fn_name: str, why: str, required: tuple[str, ...], *, markup: bool = False) -> str:
     """What the model is told when its conclusion is refused: what was wrong, and what to send."""
-    return (f"ERROR: {fn_name} refused: {why}. Send it again with {', '.join(required)} as non-empty "
-            "text. If the readings do not establish a cause, say that in cause.")
+    reply = (f"ERROR: {fn_name} refused: {why}. Send it again with {', '.join(required)} as non-empty "
+             "text. If the readings do not establish a cause, say that in cause.")
+    if markup:
+        reply += (' Your text contained <parameter name="…"> markup: a field closed with the wrong tag took '
+                  "in the fields after it. Send each field as its own field.")
+    return reply
+
+
+# A field the model closed with the wrong tag (``</observed>`` for ``</parameter>``) takes in the fields
+# after it: ``observed`` = ``…locked".</observed><parameter name="cause">The adjacency died…`` (11 Nov).
+_SWALLOWED_FIELD = re.compile(r'\s*</[A-Za-z_]+>\s*<parameter name="([A-Za-z_]+)">\s*')
+_TRAILING_CLOSE = re.compile(r'\s*</[A-Za-z_]+>\s*$')
+
+
+def has_field_markup(args: Any) -> bool:
+    return isinstance(args, dict) and any(isinstance(v, str) and '<parameter name="' in v for v in args.values())
+
+
+def unfold_swallowed_fields(args: Any, fields: Mapping[str, Any]) -> tuple[Any, list[str]]:
+    """``args`` with fields that a wrongly closed field swallowed split back out; and their names.
+
+    Only the tool's own field names are split out, and a field the model also sent stays as sent.
+    """
+    if not has_field_markup(args):
+        return args, []
+    out, recovered = dict(args), []
+    for key, value in args.items():
+        if not isinstance(value, str):
+            continue
+        parts = _SWALLOWED_FIELD.split(value)
+        names = parts[1::2]
+        if not names or any(name not in fields for name in names):
+            continue
+        out[key] = _TRAILING_CLOSE.sub("", parts[0]).strip()
+        for name, text in zip(names, parts[2::2]):
+            text = _TRAILING_CLOSE.sub("", text).strip()
+            if (fields.get(name) or {}).get("type") == "boolean":
+                text = text.lower() == "true"
+            if name not in args and name not in recovered:
+                out[name] = text
+                recovered.append(name)
+    return out, recovered
 
 
 def rejected_call_log_line(fn_name: str, raw_args: Any, why: str, *, finish_reason: Any = None) -> str:
@@ -1365,6 +1407,10 @@ async def llm_drill_tool_loop(
                 bad_json = True
 
             if fn_name == "conclude_investigation":
+                args, recovered = unfold_swallowed_fields(
+                    args, DRILL_CONCLUDE_TOOL["function"]["parameters"]["properties"])
+                if recovered:
+                    _log_drill(f"repaired {fn_name}: {', '.join(recovered)} was inside another field")
                 finding = parse_drill_finding(args)
                 if finding:
                     record_drill_finding(case, finding, session=session)
@@ -1382,7 +1428,8 @@ async def llm_drill_tool_loop(
                     why = conclusion_rejection(args, bad_json=bad_json, required=required)
                     _log_drill(rejected_call_log_line(fn_name, raw_args, why, finish_reason=finish_reason))
                     messages.append({"role": "tool", "tool_call_id": call.id,
-                                     "content": refused_conclusion_reply(fn_name, why, required)})
+                                     "content": refused_conclusion_reply(fn_name, why, required,
+                                                                         markup=has_field_markup(args))})
                     refused_in_a_row += 1
                 continue
 
@@ -1477,6 +1524,12 @@ async def llm_drill_tool_loop(
     if not concluded:
         session.stopped = session.stopped or NO_CONCLUSION
         _log_drill(f"issue={edge} ended without conclude_investigation")
+    from diagnostic_mas.llm_exchanges import record_exchange
+
+    record_exchange(case, kind=account, messages=messages, model=getattr(settings, "fabric_model", None),
+                    subject={"issue_id": focus_issue.get("id"), "edge_id": focus_issue.get("edge_id"),
+                             "code": focus_issue.get("code")},
+                    outcome={"concluded": concluded, "stopped": session.stopped})
     return session.tools_used - before, concluded
 
 

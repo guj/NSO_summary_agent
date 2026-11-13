@@ -1083,7 +1083,7 @@ def test_operator_services_from_diagnosis():
     assert "## Services" in text
     # Per-type summary table restored at top of Services
     assert "| Service type | Total | OpUp | Down | Degraded | Unknown |" in text
-    assert "Sync out/unknown has final status Unknown" in text
+    assert "cannot be OpUp" in text and "a Down or Degraded finding still counts" in text
     assert "| l2ptp" in text
     assert text.index("## Services") < text.index("| l2ptp")
     assert text.index("| l2ptp") < text.index(

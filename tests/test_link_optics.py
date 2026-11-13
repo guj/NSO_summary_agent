@@ -197,3 +197,267 @@ async def test_a_bundle_that_cannot_be_read_says_so():
     assert optics_line(case, BUNDLE_EDGE) == (
         f"Bundle members, each end on its own: {ATLA} Bundle-Ether100: members not read; "
         f"{WASH} Bundle-Ether101: members not read. Member optics not read.")
+
+
+# --- links that are up but gaining errors: the light at both ends, so "CRC rising" comes with a reading ---------
+
+def _port(**changed) -> dict:
+    return {"state": "up", "transitions": 26, "cleared": "never", "description": "", "input_errors": 0, "crc": 0,
+            "output_errors": 0, "input_drops": 0, "output_drops": 0, "services": 0, "adjacency": True,
+            "device_services": 21} | changed
+
+
+def _gaining_case(*, crc: int = 843) -> CaseFile:
+    """An IS-IS adjacency that is up; the rutg end gained ``crc`` errors since the previous scan."""
+    case = CaseFile(budget=Budget(0, 0))
+    key = lambda device, port: f"{device}:{port}"
+    case.previous_port_counters = {"read_at": "2026-10-22T16:00:00+00:00", "ports": {
+        key(NEWY, "HundredGigE0/0/0/19"): _port(), key(RUTG, "HundredGigE0/0/0/23"): _port()}}
+    case.evidence = [
+        {"id": "ev_1", "kind": "spine", "role": "isis", "payload": {"operational_edges": [{"id": EDGE}]}},
+        {"id": "ev_2", "kind": "port_counters", "role": "physical", "payload": {
+            "read_at": "2026-10-22T19:00:00+00:00", "ports": {
+                key(NEWY, "HundredGigE0/0/0/19"): _port(), key(RUTG, "HundredGigE0/0/0/23"): _port(crc=crc)}}}]
+    return case
+
+
+def _scans(case: CaseFile) -> tuple[dict, dict]:
+    older = {"evidence": [{"kind": "port_counters", "payload": case.previous_port_counters}]}
+    return older, {"evidence": case.evidence}
+
+
+@pytest.mark.asyncio
+async def test_a_link_gaining_errors_has_both_ends_read_even_though_it_is_up():
+    case, asked = _gaining_case(), []
+
+    await record_link_optics(None, case, call=_call(OUTPUTS, asked))
+
+    assert sorted(asked) == sorted(OUTPUTS)                       # the gaining end and its far end
+    saved = [ev["payload"] for ev in case.evidence if ev["kind"] == KIND][0]
+    assert sorted(saved["ports"]) == [f"{NEWY}:HundredGigE0/0/0/19", f"{RUTG}:HundredGigE0/0/0/23"]
+    assert saved["also_gaining"] == 2 and saved["wanted"] == 2
+
+
+@pytest.mark.asyncio
+async def test_nothing_extra_is_read_when_no_link_gained_errors_and_an_adjacency_down_keeps_its_place():
+    quiet, asked = _gaining_case(crc=0), []
+    await record_link_optics(None, quiet, call=_call(OUTPUTS, asked))
+    assert asked == [] and not [ev for ev in quiet.evidence if ev["kind"] == KIND]
+
+    both, asked = _gaining_case(), []
+    open_issue(both, code="unidirectional_adjacency", severity="high", layer="underlay", evidence_ids=[],
+               edge_id=EDGE, devices=[NEWY, RUTG], message="IS-IS adjacency down")
+    await record_link_optics(None, both, call=_call(OUTPUTS, asked))
+    assert sorted(asked) == sorted(OUTPUTS)                       # the same two ports are asked for once, not twice
+    assert [ev for ev in both.evidence if ev["kind"] == KIND][0]["payload"]["also_gaining"] == 0
+
+
+@pytest.mark.asyncio
+async def test_the_report_line_of_a_link_gaining_errors_carries_the_light_at_each_end():
+    from diagnostic_mas.link_optics import with_optics
+    from diagnostic_mas.port_counters import gain_lines, links_gaining_errors
+
+    case = _gaining_case()
+    await record_link_optics(None, case, call=_call(OUTPUTS, []))
+    older, newer = _scans(case)
+
+    rows = with_optics(links_gaining_errors(older, newer), newer)
+
+    assert rows[0]["optics"] == (
+        f"Optics, each end on its own: {RUTG} transmitted +1.1 to +1.9 dBm, received -8.4 to -8.1 dBm; "
+        f"{NEWY} transmitted +1.1 to +1.7 dBm, received -2.5 to -0.4 dBm. No DOM alarms.")
+    assert gain_lines(rows)[0].endswith(" " + rows[0]["optics"])
+
+
+def test_a_link_gaining_errors_says_nothing_about_light_when_none_was_read():
+    from diagnostic_mas.link_optics import with_optics
+    from diagnostic_mas.port_counters import gain_lines, links_gaining_errors
+
+    older, newer = _scans(_gaining_case())
+    rows = with_optics(links_gaining_errors(older, newer), newer)
+
+    assert "optics" not in rows[0] and "Optics" not in gain_lines(rows)[0]
+
+
+@pytest.mark.asyncio
+async def test_an_alarm_on_either_end_is_named_and_an_end_not_read_is_said():
+    from diagnostic_mas.link_optics import with_optics
+    from diagnostic_mas.port_counters import links_gaining_errors
+
+    outputs = {(RUTG, "controllers HundredGigE0/0/0/23"):
+               _controllers("Thu Oct 22 19:03:23.969 UTC", [(1.1, -9.8)], alarms="Rx Power Low Alarm")}
+    case = _gaining_case()
+    await record_link_optics(None, case, call=_call(outputs, []))
+    older, newer = _scans(case)
+
+    text = with_optics(links_gaining_errors(older, newer), newer)[0]["optics"]
+
+    assert text == (f"Optics, each end on its own: {RUTG} transmitted +1.1 dBm, received -9.8 dBm; {NEWY} not read. "
+                    f"DOM alarms on {RUTG}: Rx Power Low Alarm.")
+
+
+def test_the_run_details_say_how_many_of_the_reads_were_for_links_gaining_errors():
+    case = _gaining_case()
+    case.evidence.append({"id": "ev_3", "kind": KIND, "payload": {
+        "ports": {f"{RUTG}:HundredGigE0/0/0/23": {"lanes": []}}, "wanted": 4, "left_out": 0, "ceiling": 20, "also_gaining": 2}})
+
+    assert ("**Optics reads:** 1 of 4 ports at the ends of IS-IS adjacencies down and of links gaining errors"
+            in "\n".join(format_run_details(case)))
+
+
+def test_a_breakout_lane_is_chosen_together_with_its_far_end():
+    from diagnostic_mas.link_optics import gaining_error_ends
+
+    toky, seat = "toky-data-sw", "seat-data-sw"
+    edge = isis_edge_id(toky, "TenGigE0/0/0/18/0.1491", seat, "HundredGigE0/0/0/19.1491")
+    case = CaseFile(budget=Budget(0, 0))
+    lane = f"{toky}:TenGigE0/0/0/18/0"
+    case.previous_port_counters = {"read_at": "2026-10-22T16:00:00+00:00", "ports": {lane: _port()}}
+    case.evidence = [
+        {"id": "ev_1", "kind": "spine", "role": "isis", "payload": {"operational_edges": [{"id": edge}]}},
+        {"id": "ev_2", "kind": "port_counters", "role": "physical", "payload": {
+            "read_at": "2026-10-22T19:00:00+00:00", "ports": {lane: _port(crc=900)}}}]
+
+    assert gaining_error_ends(case) == [(toky, "TenGigE0/0/0/18/0"), (seat, "HundredGigE0/0/0/19")]
+
+
+
+# --- a breakout lane's light, from its parent port: `controllers optics 0/0/0/64` as star-data-sw answered on 12 Nov ---
+# (a 400G DR4 port in four lanes: lanes 1 and 2 dark, 0 and 3 up; the vendor details at the end are left out)
+
+STAR_PARENT = """
+
+Thu Nov 12 21:34:56.522 UTC
+
+ Controller State: Up 
+
+ Transport Admin State: In Service 
+
+ Laser State: On 
+ 
+ Host Squelch Status: Enable 
+
+ LED State: Green 
+
+ FEC State: FEC DISABLED 
+ 
+ Optics Status 
+
+	 Optics Type:  QSFPDD 400G DR4
+	 Wavelength = 1311.00 nm 
+	 Loopback Host : None 
+	 Loopback Media : None 
+
+	 Alarm Status:
+	 -------------
+	 Detected Alarms: 
+		 LOW-RX2-PWR   LOW-RX3-PWR   
+
+	 LOS/LOL/Fault Status:
+	 Detected LOS/LOL/FAULT: RX-LOS   
+
+
+
+	 Performance Monitoring: Disable	
+
+	 THRESHOLD VALUES
+	 ----------------
+
+	 Parameter                 High Alarm  Low Alarm  High Warning  Low Warning
+	 ------------------------  ----------  ---------  ------------  -----------
+	 Rx Power Threshold(dBm)          4.9       -8.9           3.9         -5.9
+	 Tx Power Threshold(dBm)          4.9       -5.9           3.9         -2.9
+	 LBC Threshold(mA)             440.00     100.00        400.00       120.00
+	 Temp. Threshold(celsius)       75.00      -5.00         70.00         0.00
+	 Voltage Threshold(volt)         3.63       2.97          3.46         3.13
+
+	 Configured Tx Power = 0.00 dBm 
+	 Configured CD High Threshold = 0 ps/nm 
+	 Configured CD lower Threshold = 0 ps/nm 
+	 Configured OSNR lower Threshold = 0.00 dB 
+	 Configured DGD Higher Threshold = 0.00 ps 
+	 Polarization parameters not supported by optics
+
+	 Lane  Laser Bias    TX Power    RX Power  Output Frequency
+	 ----  ----------  ----------  ----------  ----------------
+	   0     74.8 mA    2.44 dBm    1.64 dBm       N/A  
+	   1     74.8 mA    2.29 dBm  -40.00 dBm       N/A  
+	   2     74.8 mA    2.16 dBm  -40.00 dBm       N/A  
+	   3     74.8 mA    2.24 dBm    1.10 dBm       N/A  
+
+	 Temperature = 39.81 Celsius 
+	 Voltage = 3.29 V
+
+
+RP/0/RP0/CPU0:star-data-sw#"""
+
+
+def test_the_parent_ports_lane_table_thresholds_and_alarms_are_read():
+    from diagnostic_mas.link_optics import parse_parent_optics
+
+    reading = parse_parent_optics(STAR_PARENT)
+
+    assert reading["lanes"] == [{"lane": 0, "tx_dbm": 2.44, "rx_dbm": 1.64}, {"lane": 1, "tx_dbm": 2.29, "rx_dbm": -40.0},
+                                {"lane": 2, "tx_dbm": 2.16, "rx_dbm": -40.0}, {"lane": 3, "tx_dbm": 2.24, "rx_dbm": 1.10}]
+    assert reading["alarms"] == "LOW-RX2-PWR LOW-RX3-PWR"
+    assert (reading["rx_low_alarm_dbm"], reading["rx_low_warning_dbm"]) == (-8.9, -5.9)
+    assert reading["read_at"] == "Thu Nov 12 21:34:56.522 UTC"
+    assert parse_parent_optics("% Invalid input detected") is None and parse_parent_optics("") is None
+
+
+def _lane_case(port: str = "HundredGigE0/0/0/64/3", far: str = "HundredGigE0/0/0/19.1491") -> CaseFile:
+    star, seat = "star-data-sw", "seat-data-sw"
+    edge = isis_edge_id(star, port + ".1491", seat, far)
+    case = CaseFile(budget=Budget(0, 0))
+    key = f"{star}:{port}"
+    case.previous_port_counters = {"read_at": "2026-10-22T16:00:00+00:00", "ports": {key: _port()}}
+    case.evidence = [
+        {"id": "ev_1", "kind": "spine", "role": "isis", "payload": {"operational_edges": [{"id": edge}]}},
+        {"id": "ev_2", "kind": "port_counters", "role": "physical", "payload": {
+            "read_at": "2026-10-22T19:00:00+00:00", "ports": {key: _port(crc=900)}}}]
+    return case
+
+
+@pytest.mark.asyncio
+async def test_breakout_lanes_share_one_read_of_their_parent_port_and_each_keeps_its_own_lane():
+    case, asked = _lane_case(), []
+    # a second lane of the same port gained errors too
+    case.previous_port_counters["ports"]["star-data-sw:HundredGigE0/0/0/64/0"] = _port()
+    case.evidence[1]["payload"]["ports"]["star-data-sw:HundredGigE0/0/0/64/0"] = _port(crc=7)
+    outputs = {("star-data-sw", "controllers optics 0/0/0/64"): STAR_PARENT}
+
+    await record_link_optics(None, case, call=_call(outputs, asked))
+
+    assert asked.count(("star-data-sw", "controllers optics 0/0/0/64")) == 1            # one read for two lanes
+    saved = [ev["payload"] for ev in case.evidence if ev["kind"] == KIND][0]["ports"]
+    lane3, lane0 = saved["star-data-sw:HundredGigE0/0/0/64/3"], saved["star-data-sw:HundredGigE0/0/0/64/0"]
+    assert lane3["lanes"] == [{"lane": 3, "tx_dbm": 2.24, "rx_dbm": 1.10}] and lane3["parent"] == "0/0/0/64"
+    assert lane0["lanes"] == [{"lane": 0, "tx_dbm": 2.44, "rx_dbm": 1.64}]
+    assert lane3["alarms"] == "" and lane0["alarms"] == ""                                # LOW-RX2/3 belong to lanes 1 and 2
+
+
+@pytest.mark.asyncio
+async def test_a_dark_lane_shows_its_light_its_alarm_and_the_thresholds_on_the_report_line():
+    from diagnostic_mas.link_optics import with_optics
+    from diagnostic_mas.port_counters import links_gaining_errors
+
+    case = _lane_case(port="HundredGigE0/0/0/64/2")
+    outputs = {("star-data-sw", "controllers optics 0/0/0/64"): STAR_PARENT}
+    await record_link_optics(None, case, call=_call(outputs, []))
+    older = {"evidence": [{"kind": "port_counters", "payload": case.previous_port_counters}]}
+    newer = {"evidence": case.evidence}
+
+    text = with_optics(links_gaining_errors(older, newer), newer)[0]["optics"]
+
+    assert text == ("Optics, each end on its own: star-data-sw HundredGigE0/0/0/64/2 (lane 2 of 0/0/0/64) transmitted "
+                    "+2.2 dBm, received -40.0 dBm (receive low alarm -8.9 dBm); seat-data-sw not read. "
+                    "DOM alarms on star-data-sw: LOW-RX3-PWR.")
+
+
+@pytest.mark.asyncio
+async def test_a_parent_read_that_cannot_be_parsed_leaves_the_lane_not_read():
+    case = _lane_case()
+    await record_link_optics(None, case, call=_call({("star-data-sw", "controllers optics 0/0/0/64"): "% Invalid input"}, []))
+
+    saved = [ev["payload"] for ev in case.evidence if ev["kind"] == KIND][0]
+    assert saved["ports"] == {} and saved["wanted"] == 2                 # the lane and its far end, neither readable

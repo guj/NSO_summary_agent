@@ -4,7 +4,7 @@ A port that is down is evidence of a fault. Ports that are up say nothing about
 the service's own logic, so this check can report Down or Unknown, never Up.
 """
 from nso_facts.l2vpn_xconnect import ac_name_from_endpoint
-from .probe import interface_state, safe
+from .probe import interface_found, interface_state, safe, state_line
 
 
 def interfaces(instance):
@@ -33,7 +33,8 @@ def interfaces(instance):
 async def check_interfaces(probe, pairs):
     for device, name in pairs:
         text = await probe.show(device, f"interfaces {name}")
-        probe.check("interface", interface_state(text, name), name, device, read=text)
+        probe.check("interface", interface_state(text, name), name, device, read=text, matched=state_line(text, name),
+                    found=interface_found(text, name))
 
 
 async def check(instance, probe):

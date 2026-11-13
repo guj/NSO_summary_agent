@@ -21,9 +21,24 @@ def sync_bucket(service):
 
 
 def assessment(service, dig=None):
+    """(final status, reason) of one service.
+
+    A device that is out of sync or was not read means there is no trusted configuration baseline, so the service
+    cannot be reported up (a pass without a baseline claims too much) and is held at unknown. Sync and forwarding
+    are separate: a Down or Degraded finding rests on what was read from the network, so it still counts, with the
+    sync state in its reason.
+    """
+    status, reason = _assessment(service, dig)
     stop = sync_bucket(service)
-    if stop:
-        return "unknown", stop
+    if not stop:
+        return status, reason
+    if status in ("down", "degraded"):
+        label = dict(zip(STATUSES, LABELS))[status]
+        return status, reason.replace(label, f"{label}, {stop.lower()}", 1)
+    return "unknown", stop
+
+
+def _assessment(service, dig=None):
     basic = service.get("basic_checks") or {}
     operational = basic.get("status", service.get("operational_status", "unknown"))
     if operational not in STATUSES:
@@ -74,6 +89,11 @@ def final_service_assessments(case):
         yield kind, name, service, status, reason
 
 
+def final_unknown_records(case):
+    """The ids of the service records whose final status is Unknown: what "left Unknown" groupings may count."""
+    return {id(service) for _kind, _name, service, status, _reason in final_service_assessments(case) if status == "unknown"}
+
+
 # What an unfinished investigation's cause ends with; untrue of a service the fixed check found faulted.
 STATUS_UNKNOWN_SENTENCE = "Service forwarding status remains unknown."
 
@@ -114,6 +134,6 @@ def format_final_services_table(rows):
     # Escape angle brackets so an untrusted service type cannot close the comment.
     payload = json.dumps(rows, ensure_ascii=True).replace("<", r"\u003c").replace(">", r"\u003e")
     lines += ["", "<!-- " + MARKER + payload + " -->", "",
-              "Final status uses the latest supported assessment. Incomplete LLM digs retain the operational result. Sync out/unknown has final status Unknown. OpUp means PE-side readiness; customer traffic delivery was not tested.",
+              "Final status uses the latest supported assessment. Incomplete LLM digs retain the operational result. A service on a device that is out of sync or was not read cannot be OpUp (Unknown); a Down or Degraded finding still counts, with the sync state in its reason. OpUp means PE-side readiness; customer traffic delivery was not tested.",
               "In HTML, expand a status count to see its contributing paths."]
     return lines

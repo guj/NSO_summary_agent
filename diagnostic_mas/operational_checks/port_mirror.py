@@ -32,6 +32,20 @@ def sessions(text):
     return found
 
 
+def _session_block(text, name):
+    """The part of the device's answer that is one session, as printed."""
+    for block in re.split(r"^Monitor-session ", (text or "").replace("\r", ""), flags=re.M)[1:]:
+        if block.split(None, 1)[0] == name:
+            return "Monitor-session " + block.strip("\n")
+    return None
+
+
+def _session_list(text):
+    """The sessions the device listed, each by name and destination only."""
+    lines = (text or "").replace("\r", "").splitlines()
+    return "\n".join(line for line in lines if line.startswith("Monitor-session ") or "Destination interface" in line) or None
+
+
 def _names(entries):
     entries = entries if isinstance(entries, list) else [entries]
     return [name for name in map(ac_name_from_endpoint, entries) if name and safe(name)]
@@ -48,20 +62,27 @@ async def check(instance, probe):
     text = await probe.show(device, STATUS)
     session = next((s for s in sessions(text) if interfaces_match(destination, s["destination"])), None)
     if session is None:
-        probe.check("session", "unknown", f"No mirror session to {destination} in the device's answer", device, read=text)
+        # The device's answer holds every session on it: show which it listed, not their fields.
+        listed = [s["destination"] for s in sessions(text)]
+        probe.check("session", "unknown", f"No mirror session to {destination} in the device's answer", device, read=text,
+                    shown=_session_list(text),
+                    found=(f"{len(listed)} session{'s' if len(listed) != 1 else ''} listed, none to {destination}: "
+                           + ", ".join(listed)) if listed else "no mirror session listed in the reply")
+        shown = None
     else:
-        probe.check("session", "pass", f"{session['name']} to {destination}", device, read=text)
+        shown = _session_block(text, session["name"])             # this service's session, not the whole answer
+        probe.check("session", "pass", f"{session['name']} to {destination}", device, read=text, shown=shown)
         wanted = DIRECTIONS.get(str(instance.get("direction") or "both"))
         for source in sources:
             row = next((r for r in session["sources"] if interfaces_match(source, r[0])), None)
             if row is None:
-                probe.check("source", "unknown", f"{source} is not listed under {session['name']}", device, read=text)
+                probe.check("source", "unknown", f"{source} is not listed under {session['name']}", device, read=text, shown=shown)
             elif not row[2].lower().startswith("operational"):
                 # "Not operational (reason)" is the device's own verdict on its session: nothing is left to investigate.
                 probe.check("source", "fault", f"{source}: {row[2]}", device,
-                            conclusive=row[2].lower().startswith("not operational"), read=text)
+                            conclusive=row[2].lower().startswith("not operational"), read=text, shown=shown)
             elif row[1] != wanted:
-                probe.check("source", "unknown", f"{source} is mirrored {row[1]}, intended {wanted}", device, read=text)
+                probe.check("source", "unknown", f"{source} is mirrored {row[1]}, intended {wanted}", device, read=text, shown=shown)
             else:
-                probe.check("source", "pass", f"{source} {row[1]}: {row[2]}", device, read=text)
+                probe.check("source", "pass", f"{source} {row[1]}: {row[2]}", device, read=text, shown=shown)
     await check_interfaces(probe, [(device, name) for name in (destination, *sources)])

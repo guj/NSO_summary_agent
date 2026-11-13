@@ -444,6 +444,30 @@ def test_no_bounce_without_a_later_change_on_a_port_that_is_up(before, now):
     assert _ciena_scans(before, now) == []
 
 
+# The bounce is told from the device's own stamps, never from the scan host's clock: the same stamp in both
+# scans means the port did not change, a different one means it did, whatever the clocks say.
+
+def test_a_device_clock_ahead_of_the_scan_host_does_not_invent_a_bounce():
+    # The port last changed long ago; the device stamps it 17:00 where the scan host read at 16:33.
+    same = _ciena_reading("2026-10-19T17:00:00+00:00")
+    assert _ciena_scans(same, dict(same)) == []
+
+
+def test_a_device_clock_behind_the_scan_host_does_not_hide_a_bounce():
+    # The port really bounced after the 16:33 read, but the slow clock stamps it 16:25.
+    rows = _ciena_scans(_ciena_reading("2026-10-19T16:20:00+00:00"), _ciena_reading("2026-10-19T16:25:00+00:00"))
+    assert [(r["port"], r["bounced"]) for r in rows] == [("Generic14", True)]
+
+
+def test_a_port_that_was_already_down_at_the_previous_scan_did_not_go_down_and_come_back():
+    assert _ciena_scans(_ciena_reading("2026-08-03T16:05:06+00:00", state="down"),
+                        _ciena_reading("2026-10-19T18:21:30+00:00")) == []
+
+
+def test_no_bounce_is_claimed_when_the_previous_scan_had_no_stamp_to_compare():
+    assert _ciena_scans(_ciena_reading(None), _ciena_reading("2026-10-19T18:21:30+00:00")) == []
+
+
 # --- one line per link: both ends of an IS-IS adjacency together ------------------
 
 def _two_scans(edges: list[str], **changed_by_port) -> tuple[dict, dict]:

@@ -25,6 +25,8 @@ def test_final_status_matches_summary_and_does_not_cross_types():
 
 def test_sync_failure_is_unknown_and_absent_excluded():
     c=fixture(); records=c["evidence"][0]["payload"]["extra"]["services"]
+    # A pass cannot stand without a trusted baseline: a sync failure holds it at Unknown. (A Down finding still counts.)
+    records["l2ptp/same"]["basic_checks"]["status"]="up"
     records["l2ptp/same"]["device_sync"]={"losa":"error"}
     records["l2sts/same"]["presence_recheck"]={"outcome":"absent"}
     rows=service_topology_data(c)

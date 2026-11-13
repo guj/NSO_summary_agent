@@ -426,8 +426,9 @@ Launchd does **not** require a crontab entry. `.env` in the project directory is
 1. Collects inventory and endpoint sync from NSO through MCP, then runs the deterministic operational checks
 2. Investigates eligible services with the LLM (skipped with `--skip-llm`)
 3. Compares the result with the last published case
-4. Saves `case.json`, `report.md`, `report.html`, `faults.json` (the scan's faults for a script) and
-   `mcp_calls.txt` (one line per MCP call; the terminal shows only the totals) under
+4. Saves `case.json`, `report.md`, `report.html`, `faults.json` (the scan's faults for a script),
+   `llm_exchanges.json` (each LLM investigation's conversation, when the scan had any; local, not
+   published) and `mcp_calls.txt` (one line per MCP call; the terminal shows only the totals) under
    `state/diagnostic_mas/runs/<run-id>/`
 5. Sends the digest to email and/or Slack if configured
 
@@ -603,7 +604,7 @@ docs/
   DOCKER.md             # run the agent from the image on a server
   FAQ.md                # operator FAQ
   SLACK.md              # set up Slack delivery
-state/            # gitignored; diagnostic_mas/runs/<run-id>/ holds case.json, report.md, report.html, faults.json, mcp_calls.txt
+state/            # gitignored; diagnostic_mas/runs/<run-id>/ holds case.json, report.md, report.html, faults.json, llm_exchanges.json, mcp_calls.txt
 deploy/
   agent/                        # building the image (README.md), compose file, pinned versions
   com.esnet.nso-summary.plist   # example launchd schedule
@@ -640,6 +641,10 @@ service's own operational checks in the current run; current faults refresh it.
 A fault is dropped when a full, unfiltered scan no longer lists the service; the
 report then lists it first under services no longer present, marked with its
 status in the previous run ("Down in the previous run").
+Within one scan, each service reported Down or Degraded is checked at the end against a fresh
+service listing (one per service type); one that is no longer listed is dropped from the counts
+and open faults and listed under services no longer present. A listing that cannot be read keeps
+the fault.
 Historical findings are reported separately and do not alter current-run service
 counts or masquerade as fresh evidence. Old cases without the field are supported.
 Dry-runs can show history from the last published case but do not persist updates.
@@ -698,8 +703,9 @@ A device without a CLI, such as a Ciena managed over NETCONF, answers `show` com
 `get_interface_health` instead. A port the service model names `Generic14` is port `14` on
 the device. Those readings have CRC and input-error counts but no state-transition count and
 no clear time, so a reset is caught only by a counter that went back. Instead of a transition
-count, the device gives the time of its last state change: a port that is up now and changed
-after the previous scan's read is listed as having gone down and come back (count not reported).
+count, the device gives the time of its last state change: a port that was up at the previous scan and is up
+now, and whose last-change time differs from the previous scan's, is listed as having gone down and come back
+(count not reported). The two times are the device's own, so a device clock that is fast or slow cannot affect it.
 
 ### LLM usage, cost and budget
 
@@ -769,8 +775,8 @@ Saved scans under `runs/` (about 24 MB each, mostly `case.json`) are kept unless
 `RUNS_KEEP_DAYS` is set. Then a scan that saves its own results removes saved scans whose run
 ID is more than that many days before its own. It never removes the scan `latest.json` names,
 which the next scan compares with. Only folders named exactly like a run ID are candidates,
-and only the five files a scan writes in them (`case.json`, `report.md`, `report.html`, `faults.json`,
-`mcp_calls.txt`): a folder you rename, or anything you add to one, stays. Dry runs remove nothing. History the
+and only the six files a scan writes in them (`case.json`, `report.md`, `report.html`, `faults.json`,
+`llm_exchanges.json`, `mcp_calls.txt`): a folder you rename, or anything you add to one, stays. Dry runs remove nothing. History the
 report shows (first-seen dates, how often an item was seen) is carried from scan to scan, so
 removing old scans loses none of it. Report links into `runs/` (see
 `DIAGNOSTIC_REPORT_BASE_URL`) stop working for removed scans.

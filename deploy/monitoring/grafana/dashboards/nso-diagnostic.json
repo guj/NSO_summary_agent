@@ -10,13 +10,27 @@
   "editable": true,
   "graphTooltip": 1,
   "timezone": "browser",
-  "refresh": "1m",
+  "refresh": "5m",
   "time": {
     "from": "now-7d",
     "to": "now"
   },
   "annotations": {
-    "list": []
+    "list": [
+      {
+        "name": "Scan finished",
+        "enable": true,
+        "iconColor": "rgba(87, 148, 242, 0.35)",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "expr": "(max(nso_summary_last_run_timestamp_seconds{instance=\"$instance\",pipeline=\"diagnostic\"}) - max(nso_summary_last_run_timestamp_seconds{instance=\"$instance\",pipeline=\"diagnostic\"} offset $__interval)) != 0",
+        "step": "60s",
+        "titleFormat": "Scan finished",
+        "textFormat": "A value pushed by a scan stays flat until the next scan replaces it."
+      }
+    ]
   },
   "templating": {
     "list": [
@@ -47,13 +61,162 @@
   "links": [],
   "panels": [
     {
-      "id": 1,
-      "type": "row",
-      "title": "Is the scanner healthy?",
-      "collapsed": false,
+      "id": 3,
+      "type": "stat",
+      "title": "",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "gridPos": {
         "x": 0,
         "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(nso_scan_last_attempt_state{instance=\"$instance\",pipeline=\"diagnostic\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(nso_scan_last_attempt_timestamp_seconds{instance=\"$instance\",pipeline=\"diagnostic\"}) * 1000 and on() (max(nso_scan_last_attempt_state{instance=\"$instance\",pipeline=\"diagnostic\"}) != 0)",
+          "refId": "B",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": " ",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "A"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": " ",
+                        "color": "transparent",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "Latest scan failed",
+                        "color": "red",
+                        "index": 1
+                      },
+                      "2": {
+                        "text": "Latest scan: NSO unreachable",
+                        "color": "red",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "time:h:mm A MMM D, YYYY"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "vertical"
+      },
+      "transparent": true
+    },
+    {
+      "id": 1,
+      "type": "row",
+      "title": "■ LAST SUCCESSFUL SCAN: AGE AND COVERAGE",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 2,
         "w": 24,
         "h": 1
       },
@@ -62,16 +225,16 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "Since last successful scan",
-      "description": "Time since a scan last produced a report. The other panels show that scan.",
+      "title": "Last good scan",
+      "description": "How long ago the last scan that produced a report finished. Green under 12 hours, orange from 12, red from 24. The panels below describe that scan. Latest scan attempt, above, says whether a newer attempt failed.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
         "x": 0,
-        "y": 1,
-        "w": 5,
+        "y": 3,
+        "w": 6,
         "h": 4
       },
       "targets": [
@@ -80,7 +243,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "time() - max(nso_summary_last_run_timestamp_seconds{instance=\"$instance\",pipeline=\"diagnostic\"})",
+          "expr": "(time() - max(nso_summary_last_run_timestamp_seconds{instance=\"$instance\",pipeline=\"diagnostic\"})) / 3600",
           "refId": "A",
           "instant": true,
           "range": false
@@ -88,8 +251,8 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "dtdurations",
-          "decimals": 0,
+          "unit": "suffix: h ago",
+          "decimals": 1,
           "noValue": "no data",
           "color": {
             "mode": "thresholds"
@@ -103,11 +266,11 @@
               },
               {
                 "color": "orange",
-                "value": 43200
+                "value": 12
               },
               {
                 "color": "red",
-                "value": 86400
+                "value": 24
               }
             ]
           },
@@ -130,18 +293,18 @@
       }
     },
     {
-      "id": 3,
+      "id": 31,
       "type": "stat",
-      "title": "Last attempt",
-      "description": "Whether the most recent scan attempt produced a report.",
+      "title": "Finished",
+      "description": "When the last good scan finished, in your browser's time zone.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 5,
-        "y": 1,
-        "w": 4,
+        "x": 6,
+        "y": 3,
+        "w": 6,
         "h": 4
       },
       "targets": [
@@ -150,7 +313,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max(nso_scan_last_attempt_success{instance=\"$instance\",pipeline=\"diagnostic\"})",
+          "expr": "max(nso_summary_last_run_timestamp_seconds{instance=\"$instance\",pipeline=\"diagnostic\"}) * 1000",
           "refId": "A",
           "instant": true,
           "range": false
@@ -158,38 +321,23 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
+          "unit": "time:h:mm A MMM D, YYYY",
           "decimals": 0,
           "noValue": "no data",
           "color": {
-            "mode": "thresholds"
+            "mode": "fixed",
+            "fixedColor": "text"
           },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "text",
                 "value": null
               }
             ]
           },
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "1": {
-                  "text": "OK",
-                  "color": "green",
-                  "index": 0
-                },
-                "0": {
-                  "text": "Failed",
-                  "color": "red",
-                  "index": 1
-                }
-              }
-            }
-          ]
+          "mappings": []
         },
         "overrides": []
       },
@@ -204,100 +352,25 @@
         "colorMode": "value",
         "graphMode": "none",
         "textMode": "auto",
-        "justifyMode": "center"
-      }
-    },
-    {
-      "id": 4,
-      "type": "stat",
-      "title": "NSO at last attempt",
-      "description": "Unreachable means the scan stopped because NSO did not answer.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 9,
-        "y": 1,
-        "w": 5,
-        "h": 4
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "max(nso_scan_last_attempt_nso_unreachable{instance=\"$instance\",pipeline=\"diagnostic\"})",
-          "refId": "A",
-          "instant": true,
-          "range": false
+        "justifyMode": "center",
+        "text": {
+          "valueSize": 22
         }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 0,
-          "noValue": "no data",
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "text": "Reachable",
-                  "color": "green",
-                  "index": 0
-                },
-                "1": {
-                  "text": "Unreachable",
-                  "color": "red",
-                  "index": 1
-                }
-              }
-            }
-          ]
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "value",
-        "graphMode": "none",
-        "textMode": "auto",
-        "justifyMode": "center"
       }
     },
     {
       "id": 5,
       "type": "stat",
-      "title": "Scan duration",
-      "description": "",
+      "title": "Took",
+      "description": "How long the last good scan took to run.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 14,
-        "y": 1,
-        "w": 5,
+        "x": 12,
+        "y": 3,
+        "w": 6,
         "h": 4
       },
       "targets": [
@@ -318,13 +391,14 @@
           "decimals": 0,
           "noValue": "no data",
           "color": {
-            "mode": "thresholds"
+            "mode": "fixed",
+            "fixedColor": "blue"
           },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "blue",
                 "value": null
               }
             ]
@@ -357,9 +431,9 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 19,
-        "y": 1,
-        "w": 5,
+        "x": 18,
+        "y": 3,
+        "w": 6,
         "h": 4
       },
       "targets": [
@@ -416,11 +490,11 @@
     {
       "id": 7,
       "type": "row",
-      "title": "Services: final status from the report",
+      "title": "■ SERVICES: FINAL STATUS FROM THE LAST SUCCESSFUL SCAN",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 5,
+        "y": 7,
         "w": 24,
         "h": 1
       },
@@ -437,7 +511,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 6,
+        "y": 8,
         "w": 6,
         "h": 4
       },
@@ -499,7 +573,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 6,
+        "y": 8,
         "w": 6,
         "h": 4
       },
@@ -565,7 +639,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 6,
+        "y": 8,
         "w": 6,
         "h": 4
       },
@@ -631,7 +705,7 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 6,
+        "y": 8,
         "w": 6,
         "h": 4
       },
@@ -697,7 +771,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 10,
+        "y": 12,
         "w": 12,
         "h": 8
       },
@@ -798,7 +872,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 10,
+        "y": 12,
         "w": 12,
         "h": 8
       },
@@ -823,16 +897,182 @@
             "rowField": "service_type",
             "valueField": "Value"
           }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^service_type.status$",
+            "renamePattern": "Service type"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "Service type": 0,
+              "up": 1,
+              "down": 2,
+              "degraded": 3,
+              "unknown": 4
+            }
+          }
         }
       ],
       "fieldConfig": {
         "defaults": {
           "custom": {
-            "align": "auto"
+            "align": "center",
+            "cellOptions": {
+              "type": "color-background",
+              "mode": "basic"
+            }
           },
-          "noValue": "none"
+          "noValue": "none",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#2b303b",
+                "value": null
+              }
+            ]
+          }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byType",
+              "options": "string"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "SERVICE TYPE"
+              },
+              {
+                "id": "custom.align",
+                "value": "left"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byType",
+              "options": "number"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "degraded"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "DEGRADED"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#2b303b",
+                      "value": null
+                    },
+                    {
+                      "color": "dark-orange",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "down"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "DOWN"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#2b303b",
+                      "value": null
+                    },
+                    {
+                      "color": "dark-red",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "unknown"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "UNKNOWN"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#2b303b",
+                      "value": null
+                    },
+                    {
+                      "color": "#5f6b7d",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "up"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "UP"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "showHeader": true,
@@ -842,11 +1082,11 @@
     {
       "id": 14,
       "type": "row",
-      "title": "Where to look",
+      "title": "■ WHERE TO LOOK",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 18,
+        "y": 20,
         "w": 24,
         "h": 1
       },
@@ -863,7 +1103,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 19,
+        "y": 21,
         "w": 12,
         "h": 8
       },
@@ -899,7 +1139,7 @@
       "fieldConfig": {
         "defaults": {
           "custom": {
-            "align": "auto"
+            "align": "left"
           },
           "noValue": "none"
         },
@@ -921,7 +1161,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 19,
+        "y": 21,
         "w": 12,
         "h": 8
       },
@@ -969,14 +1209,14 @@
       "id": 22,
       "type": "timeseries",
       "title": "Links gaining errors while up",
-      "description": "Links that are up but gained errors since the previous scan, as listed in the report. Solid lines: CRC errors per minute (left, log scale). Dashed lines: times the link went down or up (right). Each value is the average over the gap between two scans, so it shows the trend, not when the errors happened. A lead to follow up, not a service status. A link drops off once a scan finds it no longer gaining errors. The red dashed line marks 1,000 CRC errors a minute: a link above it is gaining errors fast.",
+      "description": "Links that are up but gained errors since the previous scan, as listed in the report. Solid lines: CRC errors per minute (left, log scale). Dashed lines: times the link went down or up (right). Each value is the average over the gap between two scans, so it shows the trend, not when the errors happened. A lead to follow up, not a service status. A link drops off once a scan finds it no longer gaining errors. The dashed lines mark 0.1 CRC errors a minute (orange, about 6 an hour) and 10 a minute (red). Any steady CRC on a link that is up is worth a look: a dirty connector, a marginal optic or fibre.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
         "x": 0,
-        "y": 27,
+        "y": 29,
         "w": 24,
         "h": 8
       },
@@ -1031,8 +1271,12 @@
                 "value": null
               },
               {
+                "color": "orange",
+                "value": 0.1
+              },
+              {
                 "color": "red",
-                "value": 1000
+                "value": 10
               }
             ]
           }
@@ -1100,30 +1344,30 @@
     {
       "id": 17,
       "type": "row",
-      "title": "Latest report and routing",
+      "title": "■ DEVICES AND ROUTING: THE LAST SUCCESSFUL SCAN",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 35,
+        "y": 37,
         "w": 24,
         "h": 1
       },
       "panels": []
     },
     {
-      "id": 18,
-      "type": "table",
-      "title": "Latest report",
-      "description": "The link is filled in when DIAGNOSTIC_REPORT_BASE_URL is set.",
+      "id": 21,
+      "type": "stat",
+      "title": "Device sync",
+      "description": "NSO can't reach: devices whose sync check failed (NSO cannot connect or the check errored); nothing read from them in this scan is confirmed. Locked: devices NSO shows as locked (southbound lock), usually someone's maintenance or a stuck session; nothing was read from them. Config drift: devices NSO reports out of sync, a change-management question; a locked device is not counted here.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
         "x": 0,
-        "y": 36,
-        "w": 12,
-        "h": 4
+        "y": 38,
+        "w": 6,
+        "h": 5
       },
       "targets": [
         {
@@ -1131,90 +1375,33 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "nso_scan_info{instance=\"$instance\",pipeline=\"diagnostic\"}",
+          "expr": "max(nso_fleet_devices_sync_error{instance=\"$instance\",pipeline=\"diagnostic\"})",
           "refId": "A",
           "instant": true,
           "range": false,
-          "format": "table"
-        }
-      ],
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "__name__": true,
-              "instance": true,
-              "job": true,
-              "pipeline": true,
-              "Value": true
-            },
-            "renameByName": {
-              "run_id": "Run",
-              "report_url": "Report"
-            }
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto"
-          },
-          "noValue": "none"
+          "legendFormat": "NSO can't reach"
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Report"
-            },
-            "properties": [
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "title": "Open the HTML report",
-                    "url": "${__value.raw}",
-                    "targetBlank": true
-                  }
-                ]
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm"
-      }
-    },
-    {
-      "id": 19,
-      "type": "stat",
-      "title": "BGP sessions down",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 36,
-        "w": 4,
-        "h": 4
-      },
-      "targets": [
         {
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max(nso_bgp_sessions_down{instance=\"$instance\",pipeline=\"diagnostic\"})",
-          "refId": "A",
+          "expr": "max(nso_fleet_devices_locked{instance=\"$instance\",pipeline=\"diagnostic\"})",
+          "refId": "B",
           "instant": true,
-          "range": false
+          "range": false,
+          "legendFormat": "Locked"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(nso_fleet_devices_out_of_sync{instance=\"$instance\",pipeline=\"diagnostic\"})",
+          "refId": "C",
+          "instant": true,
+          "range": false,
+          "legendFormat": "Config drift"
         }
       ],
       "fieldConfig": {
@@ -1240,7 +1427,110 @@
           },
           "mappings": []
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "A"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "unit",
+                "value": "suffix: NSO can't reach"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "blue",
+                      "value": 1
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "unit",
+                "value": "suffix: Locked"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "unit",
+                "value": "suffix: Config drift"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "reduceOptions": {
@@ -1252,6 +1542,70 @@
         },
         "colorMode": "value",
         "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "auto",
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 39,
+      "type": "stat",
+      "title": "Physical down",
+      "description": "Physical links down across the fabric. Interfaces down across the fabric, including shut and unused ports, so the level is normal. Watch the line for a step up. One point per scan.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 38,
+        "w": 6,
+        "h": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(nso_physical_links_down{instance=\"$instance\",pipeline=\"diagnostic\"})",
+          "refId": "A",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "no data",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
         "textMode": "auto",
         "justifyMode": "center"
       }
@@ -1259,17 +1613,18 @@
     {
       "id": 20,
       "type": "stat",
-      "title": "IS-IS adjacencies down",
+      "title": "IS-IS down",
+      "description": "IS-IS adjacencies down.",
       "description": "",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 16,
-        "y": 36,
-        "w": 4,
-        "h": 4
+        "x": 12,
+        "y": 38,
+        "w": 6,
+        "h": 5
       },
       "targets": [
         {
@@ -1323,19 +1678,20 @@
       }
     },
     {
-      "id": 21,
+      "id": 19,
       "type": "stat",
-      "title": "Devices not in sync",
+      "title": "BGP down",
+      "description": "BGP sessions down.",
       "description": "",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 20,
-        "y": 36,
-        "w": 4,
-        "h": 4
+        "x": 18,
+        "y": 38,
+        "w": 6,
+        "h": 5
       },
       "targets": [
         {
@@ -1343,7 +1699,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max(nso_fleet_devices_out_of_sync{instance=\"$instance\",pipeline=\"diagnostic\"}) + max(nso_fleet_devices_sync_error{instance=\"$instance\",pipeline=\"diagnostic\"})",
+          "expr": "max(nso_bgp_sessions_down{instance=\"$instance\",pipeline=\"diagnostic\"})",
           "refId": "A",
           "instant": true,
           "range": false
@@ -1386,6 +1742,837 @@
         "graphMode": "none",
         "textMode": "auto",
         "justifyMode": "center"
+      }
+    },
+    {
+      "id": 40,
+      "type": "row",
+      "title": "■ HARDWARE AND INFRASTRUCTURE: THE LAST SUCCESSFUL SCAN",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 43,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 34,
+      "type": "stat",
+      "title": "Busiest CPU",
+      "description": "Busiest device by 5-minute CPU. The highest 5-minute CPU of any device when the last good scan read them, with the device's name. Red at 80% or more. Devices the scan could not read are not included: see Devices not covered. Shows no data until a scan has run on the newer image.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 44,
+        "w": 5,
+        "h": 3
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "topk(1, nso_device_cpu_five_min_percent{instance=\"$instance\",pipeline=\"diagnostic\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "legendFormat": "{{device}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 0,
+          "noValue": "after the next scan",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 35,
+      "type": "stat",
+      "title": "Fullest memory",
+      "description": "Fullest device by memory use. The highest memory use of any device when the last good scan read them, with the device's name. Red at 85% or more. Devices the scan could not read are not included: see Devices not covered. Shows no data until a scan has run on the newer image.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 5,
+        "y": 44,
+        "w": 5,
+        "h": 3
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "topk(1, nso_device_memory_used_percent{instance=\"$instance\",pipeline=\"diagnostic\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "legendFormat": "{{device}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 0,
+          "noValue": "after the next scan",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 85
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 36,
+      "type": "stat",
+      "title": "Hot sensors",
+      "description": "Devices with a hot sensor. Devices with a temperature sensor outside its limit when the last good scan read them. Devices the scan could not read are not counted: see Devices not covered.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 10,
+        "y": 44,
+        "w": 5,
+        "h": 3
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(nso_hardware_temperature_alerts{instance=\"$instance\",pipeline=\"diagnostic\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "no data",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 37,
+      "type": "stat",
+      "title": "Fan faults",
+      "description": "Devices with a fan fault. Devices with a failed or degraded fan when the last good scan read them. Devices the scan could not read are not counted: see Devices not covered.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 15,
+        "y": 44,
+        "w": 5,
+        "h": 3
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(nso_hardware_fan_alerts{instance=\"$instance\",pipeline=\"diagnostic\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "no data",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 38,
+      "type": "stat",
+      "title": "Power faults",
+      "description": "Devices with a power fault. Devices with a failed or degraded power supply when the last good scan read them. Devices the scan could not read are not counted: see Devices not covered.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 44,
+        "w": 4,
+        "h": 3
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(nso_hardware_power_alerts{instance=\"$instance\",pipeline=\"diagnostic\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "no data",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 25,
+      "type": "row",
+      "title": "■ LLM: THE LAST SUCCESSFUL SCAN",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 47,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 26,
+      "type": "stat",
+      "title": "LLM investigations",
+      "description": "How the scan's LLM work went, as in the report's Result line: Complete, Partial (some investigations did not reach a conclusion), Unavailable (no request succeeded), Skipped, or Halted (the provider's spend limit). Then how many investigations reached a conclusion. When the LLM was skipped, only Skipped is shown.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 7,
+        "h": 3
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(nso_llm_state{instance=\"$instance\",pipeline=\"diagnostic\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(nso_llm_investigations_done{instance=\"$instance\",pipeline=\"diagnostic\"}) and on() (max(nso_llm_state{instance=\"$instance\",pipeline=\"diagnostic\"}) != 3)",
+          "refId": "B",
+          "instant": true,
+          "range": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(nso_llm_investigations_total{instance=\"$instance\",pipeline=\"diagnostic\"}) and on() (max(nso_llm_state{instance=\"$instance\",pipeline=\"diagnostic\"}) != 3)",
+          "refId": "C",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "no data",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "A"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "Complete",
+                        "color": "green",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "Partial",
+                        "color": "orange",
+                        "index": 1
+                      },
+                      "2": {
+                        "text": "Unavailable",
+                        "color": "red",
+                        "index": 2
+                      },
+                      "3": {
+                        "text": "Skipped",
+                        "color": "text",
+                        "index": 3
+                      },
+                      "4": {
+                        "text": "Halted",
+                        "color": "red",
+                        "index": 4
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "prefix:of "
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "vertical"
+      }
+    },
+    {
+      "id": 27,
+      "type": "stat",
+      "title": "Cost of last scan",
+      "description": "What the scan's LLM requests cost, as the provider reports it.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 7,
+        "y": 48,
+        "w": 5,
+        "h": 3
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(nso_llm_cost_usd{instance=\"$instance\",pipeline=\"diagnostic\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "noValue": "no data",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "vertical"
+      }
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "LLM cost per scan",
+      "description": "What each scan's LLM requests cost.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 48,
+        "w": 12,
+        "h": 6
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(nso_llm_cost_usd{instance=\"$instance\",pipeline=\"diagnostic\"})",
+          "refId": "A",
+          "legendFormat": "cost",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 28,
+      "type": "stat",
+      "title": "Budget left",
+      "description": "The provider's spend budget left this period, and its size. Orange below $100, red below $25.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 51,
+        "w": 7,
+        "h": 3
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(nso_llm_budget_left_usd{instance=\"$instance\",pipeline=\"diagnostic\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(nso_llm_budget_max_usd{instance=\"$instance\",pipeline=\"diagnostic\"})",
+          "refId": "B",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "noValue": "no data",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "A"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 25
+                    },
+                    {
+                      "color": "text",
+                      "value": 100
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "prefix:of $"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "text": {
+          "valueSize": 26
+        }
+      }
+    },
+    {
+      "id": 29,
+      "type": "stat",
+      "title": "Model",
+      "description": "The model that made this scan's LLM findings.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 7,
+        "y": 51,
+        "w": 5,
+        "h": 3
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (model) (nso_llm_info{instance=\"$instance\",pipeline=\"diagnostic\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "no data",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "name",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "text": {
+          "valueSize": 22
+        }
       }
     }
   ]

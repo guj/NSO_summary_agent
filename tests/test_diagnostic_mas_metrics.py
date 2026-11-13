@@ -158,6 +158,16 @@ def scan_case() -> CaseFile:
                message="scm-data-sw: live query timed out", devices=["scm-data-sw"])
     open_issue(case, code="collection_error", layer="routing", evidence_ids=[eid],
                message="cien-data-sw: BGP summary collection failed: exec action unavailable")
+    # The LLM work: two of three service investigations concluded, the summary was written.
+    case.run_configuration = {"Model": "claude-opus-5", "LLM enabled": True}
+    case.llm_status = {"summary": "written"}
+    case.diagnoses = [
+        {"kind": "dataplane", "source": "llm", "complete": complete, "status": "up" if complete else "unknown",
+         "subject": {"name": f"net{i}", "service_type": "l3rt"}, "observed": "o", "cause": "c",
+         "investigation": {"stop_reason": "concluded" if complete else "round_limit"}}
+        for i, complete in enumerate((True, True, False))]
+    case.llm_usage = {"requests": 31, "input_tokens": 497208, "output_tokens": 30115, "cost": 1.78,
+                      "budget_left": 394.63, "budget_max": 500.0}
     return case
 
 
@@ -250,3 +260,49 @@ def test_link_with_no_time_between_readings_gets_no_rate():
 
 def test_scan_without_a_previous_scan_pushes_no_link_series():
     assert "nso_link_" not in _pushed(scan_case())
+
+
+def test_scan_pushes_how_its_llm_work_went_and_what_it_cost():
+    text = _pushed(scan_case())
+
+    for line in ('nso_llm_state{pipeline="diagnostic"} 1.0',            # 0 complete, 1 partial, 2 unavailable, 3 skipped, 4 halted
+                 'nso_llm_investigations_done{pipeline="diagnostic"} 2.0',
+                 'nso_llm_investigations_total{pipeline="diagnostic"} 3.0',
+                 'nso_llm_cost_usd{pipeline="diagnostic"} 1.78',
+                 'nso_llm_budget_left_usd{pipeline="diagnostic"} 394.63',
+                 'nso_llm_budget_max_usd{pipeline="diagnostic"} 500.0',
+                 'nso_llm_requests{pipeline="diagnostic"} 31.0',
+                 'nso_llm_input_tokens{pipeline="diagnostic"} 497208.0',
+                 'nso_llm_output_tokens{pipeline="diagnostic"} 30115.0',
+                 'nso_llm_info{model="claude-opus-5",pipeline="diagnostic"} 1.0'):
+        assert line in text
+
+
+def test_a_provider_that_reports_no_spend_pushes_no_cost_or_budget_series():
+    case = scan_case()
+    case.llm_usage = {"requests": 31, "input_tokens": 10, "output_tokens": 2}
+
+    text = _pushed(case)
+
+    assert "nso_llm_requests" in text and "nso_llm_cost_usd" not in text and "nso_llm_budget" not in text
+
+
+def test_a_scan_that_skipped_the_llm_pushes_its_state_and_no_model():
+    case = scan_case()
+    case.run_configuration = {"Model": "claude-opus-5", "LLM enabled": False}
+    case.llm_status = {"skipped": "the scan ran with --skip-llm"}
+    case.diagnoses, case.llm_usage = [], {}
+
+    text = _pushed(case)
+
+    assert 'nso_llm_state{pipeline="diagnostic"} 3.0' in text
+    assert "nso_llm_info" not in text and "nso_llm_cost_usd" not in text
+
+
+def test_the_provider_message_never_reaches_the_metrics():
+    case = scan_case()
+    case.llm_halt_reason = "provider budget_exceeded: ExceededBudget: User=x over budget. Spend=50.1"
+
+    text = _pushed(case)
+
+    assert 'nso_llm_state{pipeline="diagnostic"} 4.0' in text and "ExceededBudget" not in text and "User=x" not in text

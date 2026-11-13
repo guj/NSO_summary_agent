@@ -235,7 +235,7 @@ to Docker) keeps its last numbers there; remove its group with:
 curl -X DELETE http://localhost:9091/metrics/job/nso-summary/instance/<PROMETHEUS_INSTANCE>
 ```
 
-Every scan pushes these counts: `nso_summary_run_success`, `nso_summary_last_run_timestamp_seconds`, `nso_summary_run_duration_seconds`, `nso_fleet_devices_total`, `nso_fleet_devices_in_sync`, `nso_fleet_devices_out_of_sync`, `nso_fleet_devices_sync_error`, `nso_services_up` / `nso_services_down` (`service_type` label), `nso_isis_adjacencies_up` / `_down`, `nso_bgp_sessions_up` / `_down`, `nso_physical_links_up` / `_down`, `nso_infra_cpu_alerts` / `nso_infra_memory_alerts`, `nso_hardware_*_alerts`, `nso_inventory_review_devices`, `nso_topology_issues` (`layer` label). Every series carries `pipeline="diagnostic"`. Changes since the previous scan are in the report and the Slack digest, not in metrics.
+Every scan pushes these counts: `nso_summary_run_success`, `nso_summary_last_run_timestamp_seconds`, `nso_summary_run_duration_seconds`, `nso_fleet_devices_total`, `nso_fleet_devices_in_sync`, `nso_fleet_devices_out_of_sync` (configuration drift; a locked device is not counted), `nso_fleet_devices_locked`, `nso_fleet_devices_sync_error`, `nso_services_up` / `nso_services_down` (`service_type` label), `nso_isis_adjacencies_up` / `_down`, `nso_bgp_sessions_up` / `_down`, `nso_physical_links_up` / `_down`, `nso_infra_cpu_alerts` / `nso_infra_memory_alerts`, `nso_hardware_*_alerts`, `nso_device_cpu_five_min_percent` and `nso_device_memory_used_percent` (one series per device, `device` label), `nso_inventory_review_devices`, `nso_topology_issues` (`layer` label). Every series carries `pipeline="diagnostic"`. Changes since the previous scan are in the report and the Slack digest, not in metrics.
 
 Unset `PROMETHEUS_PUSHGATEWAY_URL` to skip, or add `--skip-metrics` for one scan. If Pushgateway is down, the agent logs a warning and still finishes the report.
 
@@ -249,11 +249,17 @@ It also pushes:
 | `nso_link_crc_per_minute{device,port}` | CRC errors per minute on a link that is up, averaged over the gap since the previous scan; only links that gained CRC errors |
 | `nso_link_state_changes{device,port}` | Times such a link went down or up since the previous scan; only links that changed |
 | `nso_scan_info{run_id,report_url}` | The scan the values come from; the link needs `DIAGNOSTIC_REPORT_BASE_URL` |
-| `nso_scan_last_attempt_success`, `nso_scan_last_attempt_nso_unreachable`, `nso_scan_last_attempt_timestamp_seconds` | How the most recent attempt ended |
+| `nso_scan_last_attempt_state` | How the most recent attempt ended, in one value: 0 ok, 1 failed, 2 NSO unreachable |
+| `nso_scan_last_attempt_success`, `nso_scan_last_attempt_nso_unreachable`, `nso_scan_last_attempt_timestamp_seconds` | The same as two 0/1 gauges, and when it ended |
+| `nso_llm_state` | How the scan's LLM work went: 0 complete, 1 partial, 2 unavailable, 3 skipped, 4 halted |
+| `nso_llm_investigations_done`, `nso_llm_investigations_total` | Investigations that reached a conclusion, and all the scan started |
+| `nso_llm_requests`, `nso_llm_input_tokens`, `nso_llm_output_tokens` | The scan's LLM usage |
+| `nso_llm_cost_usd`, `nso_llm_budget_left_usd`, `nso_llm_budget_max_usd` | The scan's spend and the provider's budget, only when the provider reports them |
+| `nso_llm_info{model}` | The model that made the scan's findings; none when the LLM was skipped |
 
 A scan that ends without a report (for example NSO became unreachable) posts only the last three, with success 0. The last good scan's values stay in the Pushgateway, so compare `nso_summary_last_run_timestamp_seconds` with the current time to see how old they are.
 
-Dashboard **NSO Diagnostic** (folder **NSO**, file `grafana/dashboards/nso-diagnostic.json`) charts these: scanner health, final status, services not OpUp by device, links gaining errors while up, and the latest report.
+Dashboard **NSO Diagnostic** (folder **NSO**, file `grafana/dashboards/nso-diagnostic.json`) charts these: the latest scan attempt, how long ago the last good scan finished, final service status, services not OpUp by device, links gaining errors while up (with a mark at each scan), physical, IS-IS and BGP links down, device sync, hardware and infrastructure, and the LLM work and cost.
 
 ## Alert when scans stop
 
@@ -262,6 +268,14 @@ the scheduled scan stopped running (cron entry gone, Docker stopped). It watches
 `nso_summary_last_run_timestamp_seconds`, which only a published scan updates, and posts again
 when scans resume. A scan that runs but fails sends its own notice to the report's Slack and
 email, so this alert is for scans that never start.
+
+Alerting on findings is the agent's job, not Grafana's. Every published scan sends its report, with
+what is new since the previous scan, to Slack and email. The dashboard shows the same numbers and
+sends nothing. There is deliberately no Grafana alert on Down services, BGP or IS-IS sessions down
+or links gaining errors: some faults stay open for weeks (a dark port, a lost adjacency), so an alert
+on the count would fire all the time, while the report says which faults are new. To alert on one
+of them from Grafana anyway, copy the rule in `nso-scan-alerts.yaml` and alert on a change, not on
+the level.
 
 Turn it on by creating a `.env` next to `docker-compose.yml`, in the folder the stack runs from
 (see [Which folder the stack reads from](#which-folder-the-stack-reads-from)), with two lines. This file

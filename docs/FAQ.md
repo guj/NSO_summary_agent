@@ -224,6 +224,18 @@ its own: …" instead: each end's members and their state from `show bundle <nam
 with "Member optics not read". Members cannot be matched across the link, so nothing is set against the other end.
 An LLM investigation of the adjacency gets that list and reads each member's optics itself.
 
+A link that is up but gained errors since the previous scan (the "Links gaining errors while up" lines) ends with
+"Optics, each end on its own: A transmitted …, received …; B transmitted …, received …. No DOM alarms.": the same
+`show controllers <port>` read at the port that gained errors and at the far end of its IS-IS adjacency. Each end is
+given on its own and no loss figure is drawn between them. It is a reading, not a cause: a receive level far below
+the transmit level at the other end shows where to look. A bundle gives its members and their state. A breakout lane
+(for example `HundredGigE0/0/0/64/3`, lane 3 of port 0/0/0/64) is read from its parent port's `show controllers
+optics 0/0/0/64`, one read for all the lanes of that port, and shows its own lane, the parent in brackets and the
+receive low-alarm threshold: "star-data-sw HundredGigE0/0/0/64/2 (lane 2 of 0/0/0/64) transmitted +2.2 dBm, received
+-40.0 dBm (receive low alarm -8.9 dBm)". A lane's DOM alarms are the ones that name it (LOW-RX3-PWR is lane 2). A line
+with no optics sentence means none was read, including a device whose optics output is not in this layout. The reads
+count under the same 20-read limit, after the adjacencies down, and the run details say how many were for these links.
+
 "Packets since the previous scan (11 h 20 min): A → B: N sent, M received; B → A: …" subtracts the last published
 scan's packet counters from this scan's at both ends, so what one end sent is set against what the other received
 over the same time. The counts are for the whole port, every VLAN on it. When both scans counted bytes, "(bytes: X
@@ -315,13 +327,21 @@ checks for each service type; they are separate from LLM dataplane investigation
 [SERVICE_EXAMPLES.md](SERVICE_EXAMPLES.md) follows one real service of each type from NSO's intent
 to its final status.
 
-### Which command did a Collector detail line come from?
+### Which command did a Collector detail line come from, and what did it return?
 
 In the HTML report, click the line. Each `Basic check …` line under **Collector detail** opens to
 the `show` command or commands its verdict was read from, with the device and the time of the read;
 "(no output)" marks a command that returned nothing. A line with nothing to open was decided from
-the service's own definition, not from a command. The command is shown, not its output; run it
-again on the device, or keep the outputs with `--save-mcp-results`.
+the service's own definition, not from a command.
+
+For a check that did **not** pass (fault or unknown), the line also shows what the device answered,
+so you can see why: the part of the reply the verdict was read from (for a bridge check, that
+bridge-domain's header and its members, a port-mirror service's own session, a forwarding
+reply's line for the port), up to about 2,500 characters, cut between lines and marked "cut here". When
+the read itself failed, it shows the reason instead: NSO's error, such as "RESTCONF 500: Device
+brist-data-sw is southbound locked", or the device's own rejection, such as "% Invalid input". Above the commands, a line says what the check **looked for**, in words (for example "exactly one BVI among
+the bridge-domain's members"), which is how you read a verdict that failed because a line was missing. Under it, a line says what the check **found** (for example "no BVI among the members of bg:bd (…)", "2 BVIs among the members …", "% Network not in table" or "VLAN ranges [200, 200]; intended 100"), written from the reply the check read. A check that passed keeps only its command, and a service that passes shows no Collector detail.
+For the full replies, run the command again on the device, or keep them with `--save-mcp-results`.
 
 ### Why did only some services get an LLM investigation?
 
@@ -415,15 +435,18 @@ sync is taken from the endpoint devices' fleet sync instead. The default is `che
 
 When `PROMETHEUS_PUSHGATEWAY_URL` is set, each published run pushes count rollups to the
 Pushgateway, labelled `pipeline="diagnostic"`. Dry runs do not push, and `--skip-metrics` turns the
-push off for one run. Only counts are exported, not the topology itself. See `deploy/monitoring/`.
+push off for one run. Only counts, the scan's LLM spend and the model's name are exported, not the
+topology itself. See `deploy/monitoring/`.
 
 The counts include the report's final status per service type (`nso_services`), services that are
 not OpUp per device (`nso_service_faults`), and how many devices could not be covered. Links that
 gained errors while up since the previous scan add CRC errors per minute (`nso_link_crc_per_minute`)
 and down/up changes (`nso_link_state_changes`); a rate is the average over the gap between the two
-scans, a lead rather than a service status. A scan that
+scans, a lead rather than a service status. The scan's LLM work adds its state (`nso_llm_state`), how many
+investigations reached a conclusion, its requests and tokens, and, when the provider reports them,
+its cost and the budget left (`nso_llm_cost_usd`, `nso_llm_budget_left_usd`). A scan that
 ends without a report, for example because NSO became unreachable, pushes only a failed-attempt
-signal (`nso_scan_last_attempt_success` 0) and leaves the last good scan's values in place. The
+signal (`nso_scan_last_attempt_state` 1, or 2 when NSO was unreachable; `nso_scan_last_attempt_success` 0) and leaves the last good scan's values in place. The
 **NSO Diagnostic** Grafana dashboard charts these.
 
 ---

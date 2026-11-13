@@ -47,6 +47,7 @@ class Phases:
         import diagnostic_mas.dataplane_verify as dataplane
         import diagnostic_mas.drill as drill
         import diagnostic_mas.service_expand as service_expand
+        import diagnostic_mas.service_presence as service_presence
 
         self.calls: list[tuple[str, dict]] = []
         calls = self.calls
@@ -95,6 +96,7 @@ class Phases:
         monkeypatch.setattr(run_mod, "run_autonomous_loop", note("autonomous"))
         monkeypatch.setattr(drill, "run_drill_phase", note("drill"))
         monkeypatch.setattr(service_expand, "maybe_expand_underlay_for_service_focus", note("expand_underlay"))
+        monkeypatch.setattr(service_presence, "recheck_reported_faults", note("presence"))
         monkeypatch.setattr(run_mod, "summary_narrative", AsyncMock(return_value="Summary."))
         monkeypatch.setattr(run_mod, "end_llm_accounting", lambda settings: {"requests": 0})
         monkeypatch.setattr(run_mod, "render_report", render)
@@ -225,7 +227,7 @@ async def test_with_the_llm_the_dataplane_autonomous_and_drill_phases_run_in_tha
     code, case = await _scan(tmp_path, args=args, budget=LLM_BUDGET, skip_llm=False, run_service=True)
 
     assert code == 0
-    assert phases.names()[:5] == ["spines", "dataplane", "autonomous", "drill", "render_report"]
+    assert phases.names()[:6] == ["spines", "dataplane", "autonomous", "drill", "presence", "render_report"]
     dataplane = phases.of("dataplane")
     assert dataplane["device_names"] == set(DEVICES)
     assert (dataplane["suspicious_only"], dataplane["explicit_service"]) == (False, False)
@@ -351,3 +353,26 @@ async def test_the_changes_section_of_a_service_focused_report_lists_only_its_fa
     render = phases.of("render_report")
     assert render["previous_run_id"] == "r0"
     assert [row["service"] for row in render["case_delta"]["last_known_service_faults"]] == ["net1"]
+
+
+@pytest.mark.asyncio
+async def test_services_reported_down_are_rechecked_against_nso_after_the_investigations_and_before_the_report(
+        tmp_path, monkeypatch):
+    phases = Phases(monkeypatch)
+
+    await _scan(tmp_path, budget=LLM_BUDGET, skip_llm=False, run_service=True)
+    assert phases.names().index("presence") == phases.names().index("render_report") - 1
+
+    # Without the LLM the fixed checks still report Down services, so the recheck still runs.
+    skipped = Phases(monkeypatch)
+    await _scan(tmp_path, run_service=True)
+    assert "presence" in skipped.names()
+
+
+@pytest.mark.asyncio
+async def test_a_scan_that_reads_no_services_does_not_recheck_them(tmp_path, monkeypatch):
+    phases = Phases(monkeypatch)
+
+    await _scan(tmp_path, run_service=False, run_isis=True)
+
+    assert "presence" not in phases.names()

@@ -8,6 +8,30 @@ status, count or phrase in the report means, so read it first.
 
 ### Report meaning
 
+- **Links gaining errors:** for a port with no CLI (a Ciena device read through `get_interface_health`), "went down and came
+  back since the previous scan" is now decided by comparing the device's own last-change stamp in the two scans, not
+  the stamp with the scan host's clock, so a device clock that is fast or slow can neither invent nor hide it. It is
+  also not said of a port that was already down at the previous scan. No scan has read such a port since 27 Oct, when
+  NSO lost its connection to cien-data-sw.
+- **Services, sync and final status:** a Down or Degraded finding now counts when a device behind the service is
+  out of sync, locked, errored or was not read. Before, any such device held the service at Unknown, so a
+  completed investigation's Down (a named `--service`, or a port or device investigation) was discarded. The
+  reason carries the sync state, for example "LLM concluded Down, sync out". OpUp is still held at Unknown there,
+  since a pass without a trusted configuration baseline claims too much. The "left Unknown" groupings and the
+  Sync verification failed group count only services whose final status is Unknown. Replayed over the last 25
+  saved scans, the Services line is unchanged: none had an investigation behind a failed sync.
+- **Dashboard and metrics, devices not in sync:** `nso_fleet_devices_out_of_sync` now counts only devices
+  NSO reports as out of sync (configuration drift). A southbound-locked device, which NSO's summary
+  counted as out of sync, is exported as the new `nso_fleet_devices_locked`. On 12 Nov the one
+  "out of sync" device was brist-data-sw, locked, with no drift anywhere. The dashboard's single
+  "Devices not in sync" tile is three: Config drift (orange), NSO can't reach (the sync errors, red)
+  and Locked (blue). Locked shows no data until a scan runs on the newer image.
+- **Services:** a service reported Down or Degraded that its owner deleted before the scan ended is
+  no longer counted or listed as a fault. At the end of the scan, one fresh NSO listing per service
+  type that has such a service is taken; a service that is no longer listed appears under "Services
+  no longer present" with the other deleted services, and the next scan's changes list it too. Until
+  now a deleted Down service stayed an open fault until the next full scan. A listing that cannot be
+  read keeps the fault, and services reported Up or Unknown are not rechecked.
 - **Changes since previous run:** a port that a scan read down and then found up again when it
   read the port's counters is listed once, under "Interfaces up in the previous run, down now",
   marked "up again later in this scan" with its state changes since the previous scan. It used to
@@ -39,6 +63,41 @@ status, count or phrase in the report means, so read it first.
 
 ### Added
 
+- **Links gaining errors while up:** each line now ends with the light at both ends of the link
+  ("Optics, each end on its own: …"), read in the same scan with `show controllers <port>`, so "CRC rising" comes
+  with a reading. The ports are chosen from this scan's counters and the previous scan's, after the adjacencies
+  down and under the same 20-read limit; the run details' Optics reads line says how many were for them. A
+  bundle shows its members and their state. A breakout lane such as `HundredGigE0/0/0/64/3` or toky's
+  `TenGigE0/0/0/18/0` is read from its parent port's `show controllers optics`, one read for all its lanes, and shows
+  its own lane with the receive low-alarm threshold. On the last two scans that is 7 reads. The parent-port layout
+  was taken from star's and fiu's replies; toky's own has not been seen, and an unreadable reply is "not read".
+- `nso_device_cpu_five_min_percent` and `nso_device_memory_used_percent` give each device's 5-minute CPU and memory
+  use (a `device` label; none for a device that could not be read). The dashboard's hardware row shows the busiest
+  and the fullest device, with its name, instead of a count of devices over the alert line. Temperature, fans and
+  power supplies stay counts.
+- `llm_exchanges.json` in each saved run folder keeps every LLM investigation's conversation: the request, each
+  tool call and the device's reply as the model saw it, and its conclusion, with each system prompt stored once.
+  It is the material for replaying a changed prompt against a past scan (a later step). It is local like
+  `case.json`, not published, and is removed with the rest of the run when old scans are pruned. It is
+  written only when the scan had an LLM investigation.
+- `nso_scan_last_attempt_state` (0 ok, 1 failed, 2 NSO unreachable) says in one value how the latest scan attempt
+  ended, as `nso_llm_state` does for the LLM work. The two 0/1 gauges stay. The dashboard's latest-attempt banner
+  will read it instead of working the state out in its query.
+- A fixed check that did not pass shows what the device answered. Under **Collector detail** in the HTML
+  report, a `Basic check` line of a fault or unknown verdict opens to its command and, below it, an
+  excerpt of the reply (up to about 2,500 characters, and the part the verdict was read from: a
+  bridge-domain's header and members, a port-mirror service's own session, a forwarding reply's line for
+  the port, or the lines around the one the check read its verdict from), or the reason a read failed, such as "RESTCONF 500: Device brist-data-sw is southbound locked". It was
+  the command alone, so "gateway_identity unknown" for net1 could not be traced to what newy-data-sw
+  returned ([docs/FAQ.md](docs/FAQ.md), "Which command did a Collector detail line come from, and what
+  did it return?"). A line above the commands says what the check looked for, and a line under it
+  what the check found instead ("no BVI among the members …", "2 BVIs among the members …", "% Network
+  not in table"), so a verdict that failed because a line was missing or wrong can be read too.
+- A scan pushes how its LLM work went and what it cost: `nso_llm_state` (complete, partial, unavailable,
+  skipped or halted, as in the report's "LLM investigations" line), investigations done and total,
+  requests and tokens, and, when the provider reports them, `nso_llm_cost_usd` and the budget left,
+  with the model's name. The **NSO Diagnostic** dashboard has an LLM row for them. The provider's own
+  messages are never pushed ([docs/FAQ.md](docs/FAQ.md), "Is report data in Prometheus?").
 - [docs/SERVICE_EXAMPLES.md](docs/SERVICE_EXAMPLES.md): one real service per type (l2bridge, l2sts,
   l3rt, l2ptp) followed from NSO's intent through the checks to its final status.
 - `faults.json` lists `no_longer_present`: service faults open when last read whose service a full
@@ -109,6 +168,16 @@ status, count or phrase in the report means, so read it first.
   already say so, as a service's Next action does, including on a later scan's "Investigated by LLM
   on (day)" line. Findings from scans before this change have no marker. On 10 Nov the salt-data-sw
   ↔ seat-data-sw "Next:" was a shut/no-shut on salt-data-sw with no word on approval.
+- An LLM investigation is no longer stopped by a conclusion whose fields ran together: when the model
+  closes one field with the wrong tag, the provider puts the next fields inside it (``…</observed>
+  <parameter name="cause">…``), and the conclusion was refused as having no cause. The scan now splits
+  them back out and logs the repair. This was behind every "no usable cause" refusal since 9 Nov; on
+  11 Nov the amst-data-sw ↔ brist-data-sw investigation was stopped after three such refusals.
+- When the services chosen for an LLM investigation include some that owners have deleted since the
+  scan listed them, the next ranked services take their places, so the cap (`--max-dataplane-services`,
+  default 10) is filled when enough remain. The deleted ones still appear under "Services no longer
+  present". On 11 Nov six of ten chosen l2bridge services were deleted before their turn and their
+  slots stayed empty, while seven fiu-data-sw l2bridge services were left Unknown "not investigated".
 - **Services no longer present since the previous run** marks a deleted service that was an open
   fault, for example "— Down in the previous run", and lists those first; a cut-off list counts the
   faults it leaves out. The fault ended with the deletion, not a recovery. The summary's input marks

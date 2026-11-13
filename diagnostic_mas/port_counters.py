@@ -243,13 +243,10 @@ def _compared(older: dict[str, Any], newer: dict[str, Any]):
         gained = {name: pair[1] - pair[0] for name in _ERRORS if (pair := both(name)) and pair[1] > pair[0]}
         moved = both("transitions")
         state_changes = moved[1] - moved[0] if moved else 0
-        # Without a transition count, a last change after the previous read means it went down and back.
-        bounced = False
-        if structured and not state_changes:
-            try:
-                bounced = datetime.fromisoformat(str(reading.get("changed_at"))) > datetime.fromisoformat(before["read_at"])
-            except (KeyError, TypeError, ValueError):
-                bounced = False
+        # Without a transition count, a port that was up and whose last-change stamp differs from the previous
+        # scan's went down and back. Both stamps are the device's own, so no clock is compared with another.
+        was, is_ = earlier.get("changed_at"), reading.get("changed_at")
+        bounced = bool(structured and not state_changes and earlier.get("state") == "up" and was and is_ and was != is_)
         if not gained and not state_changes and not bounced:
             # Read clean only when there were error counts to subtract.
             if any(both(name) for name in _ERRORS):
@@ -322,7 +319,8 @@ def gain_lines(rows: list[dict[str, Any]], history: dict[str, dict[str, Any]] | 
         other = listed.get(other_key) if other_key not in done else None
         if other is None:
             clause = age(row)
-            lines.append(gain_line(row) + (f"; {clause}" if clause else ""))
+            lines.append(gain_line(row) + (f"; {clause}" if clause else "")
+                         + (f". {row['optics']}" if row.get("optics") else ""))
             continue
         done.add(other_key)
         short = lambda r: str(r["device"]).split("-", 1)[0]
@@ -333,5 +331,6 @@ def gain_lines(rows: list[dict[str, Any]], history: dict[str, dict[str, Any]] | 
         lines.append(f"`{row['device']}` {row['port']} ↔ `{other['device']}` {other['port']}, one IS-IS link"
                      f"{',' + took if took else ''}: {ends}."
                      + (f" {held[0]} and {held[1]} services on these devices." if any(held) else "")
-                     + (f" {clause[0].upper()}{clause[1:]}." if clause else ""))
+                     + (f" {clause[0].upper()}{clause[1:]}." if clause else "")
+                     + (f" {row.get('optics') or other.get('optics')}" if row.get("optics") or other.get("optics") else ""))
     return lines

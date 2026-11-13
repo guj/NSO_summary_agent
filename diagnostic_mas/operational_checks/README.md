@@ -78,8 +78,24 @@ remain separate. The report lists basic operational counts per type and includes
 checks in service detail. Sync and LLM dataplane table counts remain independent.
 A check read from device output also names the command or commands it came from
 (`sources` on the check), and the HTML report opens each Collector detail line to
-them. A service that passes keeps only its overall command list, since the report
-does not list it.
+them. A check that did not pass (fault or unknown) also keeps an `excerpt` of what the device
+answered, cut between lines at `EXCERPT_LIMIT` (2,500 characters; a verdict that read several commands
+shares `EXCERPT_TOTAL`, 6,000, between them, at least 1,200 each; `truncated` marks a cut): the part the
+verdict was taken from (`check(..., shown=)`) or else the start of the reply. The parts: a bridge-domain's
+header and member lists (`bridge_view`, since IOS XR prints its settings first), the interface's own line
+in a bulk `interfaces brief`, a forwarding reply's header and the AC's line (`focus`), a port-mirror
+service's own session, or the names of the sessions listed when its session is missing. A check that matched a line to reach its
+verdict passes it as `matched=` and the excerpt is the reply's first line, that line, and three lines
+either side. A check that did not pass also records `looked_for` (`LOOKED_FOR` in `probe.py`), what it
+expected in plain words, which the HTML shows above the commands; that covers a verdict from a missing
+line. It also records `found=`, a short sentence the check writes from the reply about why it did not
+pass ("no BVI among the members of bg:bd (…)", "2 BVIs among the members …", "% Network not in table",
+"VLAN ranges [200, 200]; intended 100"), shown under "Looked for"; a check that cannot say leaves it out.
+The model is not given the excerpts, `looked_for` or `found` (`checks_for_llm` in `common.py`): it reads the
+device itself, and the prompt stays short. For a read the
+checks could not use, the excerpt is the reason: NSO's error message, the device's own rejection, or
+the exception's type. A check that passed keeps only its command. A service that passes keeps only
+its overall command list, since the report does not list it.
 
 Offline tests cover healthy paths, missing identities, RT mismatch, reverse-path
 gaps, both address families, border coverage, sync gating, cache reuse and budgets.

@@ -27,6 +27,48 @@ def test_sync_stop(sync,reason):
     assert assessment(s,dict(status="up",source="llm",complete=True))==("unknown",reason)
 
 
+@pytest.mark.parametrize("sync,note",[("out-of-sync","sync out"),("locked","sync unknown"),("error","sync unknown"),(None,"sync unknown")])
+@pytest.mark.parametrize("source,status,text",[
+    ("llm","down","LLM concluded Down"), ("llm","degraded","LLM concluded Degraded"),
+    ("port_investigation","down","Down — port investigated once"),
+    ("device_investigation","down","Down — device investigated once")])
+def test_a_down_or_degraded_conclusion_stands_when_a_device_is_not_in_sync_and_says_so(sync,note,source,status,text):
+    s=service("unknown"); s["device_sync"]={"a":sync}
+    label=status.capitalize()
+    got=assessment(s,dict(status=status,source=source,complete=True))
+    assert got[0]==status
+    assert got[1]==text.replace(label,f"{label}, {note}",1)
+
+
+@pytest.mark.parametrize("sync",["out-of-sync",None])
+def test_a_fixed_check_down_stands_when_a_device_is_not_in_sync(sync):
+    s=service("down"); s["device_sync"]={"a":sync}
+    s["basic_checks"]["needs_investigation"]=False
+    assert assessment(s)==("down","Down, "+("sync out" if sync else "sync unknown")+" — decided by the fixed check")
+    s["basic_checks"]["needs_investigation"]=True                       # the investigation has not run
+    assert assessment(s)[0]=="down"
+
+
+@pytest.mark.parametrize("sync,reason",[("out-of-sync","Sync out"),(None,"Sync unknown")])
+def test_up_and_unfinished_results_are_still_held_at_unknown_when_a_device_is_not_in_sync(sync,reason):
+    s=service("up"); s["device_sync"]={"a":sync}
+    assert assessment(s)==("unknown",reason)                                    # a pass without a trusted baseline
+    assert assessment(s,dict(status="up",source="llm",complete=True))==("unknown",reason)
+    s2=service("unknown"); s2["device_sync"]={"a":sync}
+    assert assessment(s2,dict(status="unknown",source="llm",complete=False))==("unknown",reason)
+    assert assessment(s2,dict(status="down",source="llm",complete=False))==("unknown",reason)   # not concluded: no finding to keep
+
+
+def test_a_down_finding_on_a_device_that_is_not_in_sync_is_counted_down_and_marked_in_the_breakdown():
+    c=CaseFile(Budget(0,0))
+    one=service("unknown"); one["device_sync"]={"a":"out-of-sync"}
+    c.evidence=[dict(kind="spine",role="service",payload={"extra":{"services":{"l2sts/s":one}}})]
+    c.diagnoses=[normalize_diagnosis(dict(kind="dataplane",subject={"name":"s","service_type":"l2sts"},source="llm",status="down",complete=True))]
+    row=final_service_counts(c)["l2sts"]
+    assert (row["down"],row["unknown"])==(1,0)
+    assert row["sources"]["down"]=={"LLM concluded Down, sync out":1}
+
+
 def test_counts_exclusive_typed_identity_and_html():
     c=CaseFile(Budget(0,0))
     one=service("down")
@@ -84,3 +126,34 @@ def test_headline_matches_final_counts_with_incomplete_digs():
     c.evidence = [dict(kind="spine", role="service", payload={"extra":{"services":records}})]
     assert "Final service status: 0 OpUp, 1 Down, 1 Degraded, 36 Unknown." in format_result_line(c)
     assert final_service_counts(c)["l2sts"]["unknown"] == 36
+
+
+def _two_services_behind_a_failed_device():
+    """s1 has a completed Down finding; s2 has nothing. Both sit on device a, whose sync check errored."""
+    def record(name):
+        return dict(name=name, service_type="l2sts", devices=["a"], device_sync={"a": "error"}, system_status="unknown",
+                    basic_checks={"status": "not_checked", "sync_ready": False})
+    c = CaseFile(Budget(0, 0))
+    c.evidence = [dict(kind="spine", role="service", payload={"extra": {
+        "services": {"l2sts/s1": record("s1"), "l2sts/s2": record("s2")},
+        "sync_rechecks": {"a": {"resolved": False}}}})]
+    c.diagnoses = [normalize_diagnosis(dict(kind="dataplane", subject={"name": "s1", "service_type": "l2sts"},
+                                            source="llm", status="down", complete=True))]
+    return c
+
+
+def test_the_sync_groupings_list_only_the_services_whose_final_status_is_unknown():
+    from diagnostic_mas.operator_report import (
+        _incomplete_checks_by_endpoint_reason, _verification_unknown_by_endpoints,
+        _verification_unknown_involvement_by_device, _verification_unknown_service_names)
+    from diagnostic_mas.sync_failure_report import sync_failure_group
+
+    c = _two_services_behind_a_failed_device()
+    row = final_service_counts(c)["l2sts"]
+    assert (row["down"], row["unknown"]) == (1, 1)                    # s1 counts Down, s2 stays Unknown
+
+    assert _verification_unknown_by_endpoints(c) == [(("a",), 1)]
+    assert dict(_verification_unknown_involvement_by_device(c)) == {"a": 1}
+    assert _verification_unknown_service_names(c) == {"s2"}
+    assert sum(n for _eps, _reason, n in _incomplete_checks_by_endpoint_reason(c)) == 1
+    assert sync_failure_group(c) == (["a"], 1)                        # "1 distinct service remains Unknown"

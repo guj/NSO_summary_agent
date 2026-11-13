@@ -1782,3 +1782,90 @@ def test_a_routing_findings_approval_flag_is_carried_to_the_next_scan():
         "fix_requires_human_approval": True}}]}
 
     assert previous_findings(scan)[SALT_SEAT]["fix_requires_human_approval"] is True
+
+
+# test67's amst ↔ brist conclusions, shortened: a field closed with the wrong tag swallowed the next.
+_SWALLOWED_CAUSE = {
+    "observed": 'amst lists no brist neighbor; brist "show isis neighbors" returned "southbound locked".'
+                '</observed><parameter name="cause">IS-IS hellos from brist stopped arriving on VLAN 3250.',
+    "headline": "Hellos from brist stopped arriving on VLAN 3250 only.",
+    "next_step": "Restore read access to brist-data-sw.",
+    "fix_requires_human_approval": True, "confidence": "high"}
+_SWALLOWED_REST = {
+    "cause": 'IS-IS hellos from the far end stopped arriving on VLAN 3250.</parameter>\n'
+             '<parameter name="observed">amst lists no brist neighbor.</observed>\n'
+             '<parameter name="headline">Hellos from brist stopped on VLAN 3250 only</parameter>\n'
+             '<parameter name="fix_suggestion">No change is indicated on amst-data-sw.',
+    "next_step": "Restore read access to brist-data-sw.", "fix_requires_human_approval": True, "confidence": "high"}
+
+
+def test_a_field_swallowed_by_a_wrongly_closed_one_is_split_back_out():
+    from diagnostic_mas.drill import DRILL_CONCLUDE_TOOL, parse_drill_finding, unfold_swallowed_fields
+
+    fields = DRILL_CONCLUDE_TOOL["function"]["parameters"]["properties"]
+    args, recovered = unfold_swallowed_fields(_SWALLOWED_CAUSE, fields)
+    assert recovered == ["cause"]
+    finding = parse_drill_finding(args)
+    assert finding["observed"] == 'amst lists no brist neighbor; brist "show isis neighbors" returned "southbound locked".'
+    assert finding["cause"] == "IS-IS hellos from brist stopped arriving on VLAN 3250."
+
+    args, recovered = unfold_swallowed_fields(_SWALLOWED_REST, fields)
+    assert recovered == ["observed", "headline", "fix_suggestion"]
+    assert args["cause"] == "IS-IS hellos from the far end stopped arriving on VLAN 3250."
+    assert args["observed"] == "amst lists no brist neighbor."
+    assert args["headline"] == "Hellos from brist stopped on VLAN 3250 only"
+    assert args["fix_suggestion"] == "No change is indicated on amst-data-sw."
+
+
+def test_only_the_tools_own_field_names_are_split_out_and_sent_fields_are_kept():
+    from diagnostic_mas.drill import DRILL_CONCLUDE_TOOL, unfold_swallowed_fields
+
+    fields = DRILL_CONCLUDE_TOOL["function"]["parameters"]["properties"]
+    quoted = {"observed": 'The config holds <parameter name="vlan">3250</parameter>.', "cause": "c"}
+    assert unfold_swallowed_fields(quoted, fields) == (quoted, [])
+    both = {"observed": 'o</observed><parameter name="headline">swallowed', "headline": "sent", "cause": "c"}
+    args, recovered = unfold_swallowed_fields(both, fields)
+    assert args["headline"] == "sent" and args["observed"] == "o" and recovered == []
+
+
+@pytest.mark.asyncio
+async def test_a_drill_concludes_on_a_conclusion_whose_cause_was_swallowed(capsys):
+    from diagnostic_mas.case import DrillSession
+    from diagnostic_mas.drill import llm_drill_tool_loop
+
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    open_issue(case, code="unidirectional_adjacency", severity="high", message="down", evidence_ids=[],
+               layer="underlay", edge_id="isis:amst-data-sw:Hu0/0/0/23.3250:brist-data-sw:?", devices=["amst-data-sw"])
+    issue = case.issues[0]
+    session = DrillSession(max_tools=5, issue_id=issue["id"], issue_edge_id=issue["edge_id"])
+    call = type("Call", (), {"id": "c1", "function": type("Fn", (), {
+        "name": "conclude_investigation", "arguments": json.dumps(_SWALLOWED_CAUSE)})()})()
+    reply = type("Resp", (), {"choices": [type("Choice", (), {
+        "message": type("Msg", (), {"content": None, "tool_calls": [call]})(), "finish_reason": "tool_calls"})()]})()
+
+    class FakeOAI:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kwargs):
+                    return reply
+
+    class S:
+        fabric_api_key = "k"
+        fabric_model = "m"
+
+    _, concluded = await llm_drill_tool_loop(object(), S(), case, device_names={"amst-data-sw"}, focus_issue=issue,
+                                             session=session, openai_client=FakeOAI())
+    assert concluded is True
+    assert "[drill] repaired conclude_investigation: cause was inside another field" in capsys.readouterr().err
+    finding = next(ev["payload"] for ev in case.evidence if ev["kind"] == "drill_finding")
+    assert finding["cause"] == "IS-IS hellos from brist stopped arriving on VLAN 3250."
+
+
+def test_a_refusal_whose_text_still_holds_field_markup_says_so():
+    from diagnostic_mas.drill import refused_conclusion_reply
+
+    reply = refused_conclusion_reply("conclude_investigation", "no usable cause (missing; sent: observed)",
+                                     ("observed", "cause"), markup=True)
+    assert "<parameter name=" in reply and "its own field" in reply
+    assert "<parameter" not in refused_conclusion_reply("conclude_investigation", "no usable cause", ("observed", "cause"))

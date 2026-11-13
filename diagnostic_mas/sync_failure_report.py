@@ -10,11 +10,14 @@ def _sync_audits(case):
 
 def _affected(case, failed):
     """Each service still Unknown on a failed device, with those devices."""
+    from diagnostic_mas.service_final_status import final_unknown_records
     from diagnostic_mas.service_presence import disappeared
+    unknown = final_unknown_records(case)
     out = {}
     for key, r in services_from_case(case).items():
         devices = {d for d, value in (r.get("device_sync") or {}).items() if d in failed and value != "in-sync"}
-        if devices and not disappeared(r):
+        # A Down or Degraded finding on such a device counts as that, so the service is not "left Unknown".
+        if devices and not disappeared(r) and id(r) in unknown:
             out[key] = devices
     return out
 

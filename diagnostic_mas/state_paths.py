@@ -67,6 +67,12 @@ def persist_case(
     path.write_text(
         json.dumps({**case_to_dict(case), "run_id": run_id}, indent=2, default=str), encoding="utf-8"
     )
+    from diagnostic_mas.llm_exchanges import FILE_NAME as EXCHANGES_FILE, exchanges_document
+
+    exchanges = exchanges_document(case)
+    if exchanges is not None:
+        # Local state like case.json, not published: the conversations a later prompt can be replayed against.
+        (run_dir / EXCHANGES_FILE).write_text(json.dumps(exchanges, indent=1, default=str), encoding="utf-8")
     report_path: Path | None = None
     if report is not None:
         from agent.publish import mask_nso_address
@@ -103,7 +109,7 @@ def persist_case(
 # A saved scan's folder is named by its run id and holds what ``persist_case`` writes, and the
 # scan's list of MCP calls.
 _RUN_FOLDER = re.compile(r"\d{8}T\d{6}Z")
-_RUN_FILES = ("case.json", "report.md", "report.html", "faults.json", CALLS_FILE)
+_RUN_FILES = ("case.json", "report.md", "report.html", "faults.json", "llm_exchanges.json", CALLS_FILE)
 
 
 def _run_time(name: str) -> datetime | None:

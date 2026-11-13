@@ -290,3 +290,23 @@ async def test_worker_label_for_its_own_service_reaches_the_saved_case():
 
     assert case.service_coverage == {'0': 'disappeared', '1': 'needs_investigation'}
 
+
+
+@pytest.mark.asyncio
+async def test_each_workers_llm_conversation_reaches_the_scans_case():
+    from diagnostic_mas.llm_exchanges import record_exchange
+
+    case = fixture()
+    selected = candidates(['a'], ['b'], ['c'])
+
+    async def verify(client, settings, child, *, record, session, **kw):
+        # What a worker records goes to its own copy first, never straight into the scan's list.
+        assert child.llm_exchanges is not case.llm_exchanges and child.llm_texts is not case.llm_texts
+        record_exchange(child, kind='dataplane', subject={'name': record['name']}, model='m', outcome={},
+                        messages=[{'role': 'system', 'content': 'RULES'}, {'role': 'user', 'content': record['name']}])
+        return True
+
+    await run(case, selected, verify)
+
+    assert sorted(e['subject']['name'] for e in case.llm_exchanges) == ['0', '1', '2']
+    assert list(case.llm_texts.values()) == ['RULES']                      # one copy of the same prompt

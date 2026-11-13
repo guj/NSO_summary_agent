@@ -68,7 +68,7 @@ def _body(md: str) -> str:
         if grouped:
             parts.append(STATUS_DEFINITIONS_HTML)
         elif final_table:
-            parts.append('<details class="status-definitions"><summary>Status definitions</summary><ul><li><strong>OpUp:</strong> Required PE-side operational checks passed, either by basic checks or a supported LLM conclusion. Customer delivery was not tested.</li><li><strong>Down:</strong> A required service component or path is confirmed failed.</li><li><strong>Degraded:</strong> Confirmed partial impairment.</li><li><strong>Unknown:</strong> Sync prerequisite failed, or operational evidence is insufficient.</li></ul><p>An incomplete LLM dig preserves a confirmed operational fault. Each service belongs to exactly one final-status cell.</p></details>')
+            parts.append('<details class="status-definitions"><summary>Status definitions</summary><ul><li><strong>OpUp:</strong> Required PE-side operational checks passed, either by basic checks or a supported LLM conclusion. Customer delivery was not tested.</li><li><strong>Down:</strong> A required service component or path is confirmed failed.</li><li><strong>Degraded:</strong> Confirmed partial impairment.</li><li><strong>Unknown:</strong> Operational evidence is insufficient, or a device is out of sync or was not read, so a pass cannot be trusted. A Down or Degraded finding on such a device still counts, marked with the sync state.</li></ul><p>An incomplete LLM dig preserves a confirmed operational fault. Each service belongs to exactly one final-status cell.</p></details>')
         end = match.end()
     parts.append(_plain_body(md[end:]))
     return ''.join(parts)
@@ -154,9 +154,13 @@ def _check_sources(case: dict | None) -> dict[str, list[dict]]:
 
 def _source_item(source: dict) -> str:
     when = re.search(r"T(\d\d:\d\d:\d\d)", str(source.get("collected_at") or ""))
+    # What the device answered, for a verdict that did not pass; text, never markup.
+    reply = (f'<pre class="reply">{html.escape(str(source["excerpt"]))}</pre>'
+             + ('<p class="cut">cut here; the rest of the reply is not kept</p>' if source.get("truncated") else "")
+             if source.get("excerpt") else "")
     return (f'<li><code>show {html.escape(str(source.get("command")))}</code> on {html.escape(str(source.get("device")))}'
             + (f", read {when[1]} UTC" if when else "")
-            + (" (no output)" if source.get("available") is False else "") + "</li>")
+            + (" (no output)" if source.get("available") is False else "") + reply + "</li>")
 
 
 def _link_check_lines(body: str, checks: list[dict]) -> str:
@@ -177,7 +181,11 @@ def _link_check_lines(body: str, checks: list[dict]) -> str:
     items = [f'<div class="check">{line}</div>' for line in lines]
     for i, check in zip(basic, checks):
         if check.get("sources"):
-            items[i] = (f'<details class="check"><summary>{lines[i]}</summary><ul>'
+            looked = (f'<p class="lookedfor">Looked for: {html.escape(str(check["looked_for"]))}</p>'
+                      if check.get("looked_for") else "")
+            if check.get("found"):
+                looked += f'<p class="lookedfor">Found: {html.escape(str(check["found"]))}</p>'
+            items[i] = (f'<details class="check"><summary>{lines[i]}</summary>{looked}<ul>'
                         + "".join(_source_item(s) for s in check["sources"]) + "</ul></details>")
     return (body[:match.start()] + '<p><strong>Collector detail:</strong></p><div class="collector">'
             + "".join(items) + "</div>" + body[match.end():])
@@ -313,7 +321,7 @@ header{padding:24px 32px;background:#172536;color:white}header h1{margin:0;font-
 nav{position:sticky;top:0;background:white;padding:12px 24px;border-bottom:1px solid #dce2e8;display:flex;gap:16px;flex-wrap:wrap;z-index:1}a{color:#155d98}
 main{max-width:1200px;margin:auto;padding:24px}.controls{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}input,select,button{font:inherit;padding:8px;border:1px solid #adb9c4;border-radius:4px}input{flex:1;min-width:220px}
 .section{background:white;border:1px solid #dce2e8;margin:16px 0;padding:16px}.section>summary{font-size:20px;font-weight:650;cursor:pointer}.record{border-top:1px solid #dce2e8;padding:12px 0}.record>summary{cursor:pointer;overflow-wrap:anywhere;font-weight:600}
-.device-detail{margin-top:8px}.finding p{white-space:pre-wrap;margin:6px 0;font-size:14px}.device-detail>summary{font-size:14px;font-weight:600;cursor:pointer}.badge{display:block;font-weight:400;font-size:13px;color:#526071}pre{overflow:auto;background:#f1f4f7;padding:12px}table{border-collapse:collapse;width:100%;font-size:14px}td,th{padding:6px 10px;border-bottom:1px solid #dce2e8;text-align:left}.status-definitions{margin:12px 0;font-size:14px}.status-definitions>summary{cursor:pointer;font-weight:600}code{overflow-wrap:anywhere}.collector .check{margin:1px 0;overflow-wrap:anywhere}.collector div.check{padding-left:1.1em}.collector details.check>summary{cursor:pointer}.collector ul{margin:2px 0 6px 1.1em;padding-left:1.2em;font-size:14px}[hidden]{display:none!important}#count{color:#526071}
+.device-detail{margin-top:8px}.finding p{white-space:pre-wrap;margin:6px 0;font-size:14px}.device-detail>summary{font-size:14px;font-weight:600;cursor:pointer}.badge{display:block;font-weight:400;font-size:13px;color:#526071}pre{overflow:auto;background:#f1f4f7;padding:12px}table{border-collapse:collapse;width:100%;font-size:14px}td,th{padding:6px 10px;border-bottom:1px solid #dce2e8;text-align:left}.status-definitions{margin:12px 0;font-size:14px}.status-definitions>summary{cursor:pointer;font-weight:600}code{overflow-wrap:anywhere}.collector .check{margin:1px 0;overflow-wrap:anywhere}.collector div.check{padding-left:1.1em}.collector details.check>summary{cursor:pointer}.collector ul{margin:2px 0 6px 1.1em;padding-left:1.2em;font-size:14px}.collector pre.reply{margin:4px 0;padding:6px 8px;max-height:16em;overflow:auto;font-size:12px;background:rgba(127,127,127,.12);border-radius:4px;white-space:pre-wrap;overflow-wrap:anywhere}.collector p.cut{margin:0 0 4px;font-size:12px;opacity:.7}.collector p.lookedfor{margin:4px 0 0 1.1em;font-size:13px;opacity:.8}[hidden]{display:none!important}#count{color:#526071}
 </style></head><body><header><h1>NSO diagnostic report</h1><div>''' + html.escape(run_id) + '''</div></header><nav>''' + ''.join(nav) + '''</nav><main>''' + _body(sections[0]) + '''
 <div class="controls"><input id="search" aria-label="Search report details" placeholder="Search service ID, device, type or evidence">
 <select id="status" aria-label="Service status"><option value="all">All service statuses</option><option value="down">Down</option><option value="degraded">Degraded</option><option value="unknown">Unknown / incomplete</option><option value="passed">PE-readiness passed</option><option value="basic">Basic checks only</option></select>

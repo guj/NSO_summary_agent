@@ -237,3 +237,25 @@ def test_the_slack_and_email_text_carries_the_line_only_when_the_llm_work_was_no
 
     complete = "Complete — 9 of 9 investigations reached a conclusion; summary written."
     assert not any("LLM investigations" in line for line in notification_digest(_REPORT.format(llm=complete), "run").splitlines())
+
+
+def test_the_outcome_is_the_state_and_the_counts_behind_the_line():
+    from diagnostic_mas.llm_status import llm_outcome
+
+    case = _case()
+    _service(case, "net1")
+    _service(case, "net2", "round_limit")
+    assert llm_outcome(case) == {"state": "partial", "done": 1, "total": 2}
+
+    assert llm_outcome(_case()) == {"state": "complete", "done": 0, "total": 0}
+    assert llm_outcome(_case(skipped="the scan ran with --skip-llm"))["state"] == "skipped"
+    assert llm_outcome(CaseFile(budget=Budget(0, 0))) is None
+
+    halted = _case()
+    halted.llm_halt_reason = "provider budget_exceeded: x"
+    assert llm_outcome(halted)["state"] == "halted"
+
+    down = _case()
+    _service(down, "net1", "provider_failure", llm_error=CONNECTION)
+    note_summary_failed(down, CONNECTION)
+    assert llm_outcome(down) == {"state": "unavailable", "done": 0, "total": 1}

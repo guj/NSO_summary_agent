@@ -319,3 +319,88 @@ def test_failed_attempt_is_not_pushed_when_no_pushgateway_is_configured(monkeypa
     assert push_scan_attempt_failed(
         _settings(prometheus_pushgateway_url=None), reason="error", pipeline="diagnostic") is False
     assert calls == []
+
+
+def _fleet(results, summary):
+    return {"fleet_sync": {"status": "success", "data": {
+        "summary": summary, "devices": [{"device": f"d{i}", "result": r} for i, r in enumerate(results)]}}}
+
+
+def _sync_lines(snapshot):
+    text = "\n".join(build_phase1_metrics(snapshot, success=True, duration_seconds=1, timestamp_seconds=1, pipeline="agent"))
+    return {name: float(text.split(f"{name}{{")[1].split("} ")[1].split("\n")[0])
+            for name in ("nso_fleet_devices_in_sync", "nso_fleet_devices_out_of_sync",
+                         "nso_fleet_devices_sync_error", "nso_fleet_devices_locked")}
+
+
+def test_a_locked_device_is_exported_as_locked_not_as_configuration_drift():
+    # test75: NSO's summary counts the southbound-locked brist as out of sync; no device had drifted.
+    got = _sync_lines(_fleet(["in-sync"] * 30 + ["error"] * 3 + ["locked"],
+                             {"in_sync": 30, "out_of_sync": 1, "error": 3}))
+    assert got == {"nso_fleet_devices_in_sync": 30, "nso_fleet_devices_out_of_sync": 0,
+                   "nso_fleet_devices_sync_error": 3, "nso_fleet_devices_locked": 1}
+
+
+def test_drift_and_a_lock_are_counted_apart_when_both_are_present():
+    got = _sync_lines(_fleet(["in-sync", "out-of-sync", "locked", "error"],
+                             {"in_sync": 1, "out_of_sync": 2, "error": 1}))
+    assert (got["nso_fleet_devices_out_of_sync"], got["nso_fleet_devices_locked"]) == (1, 1)
+
+
+def test_without_per_device_results_the_summary_stands_and_nothing_is_called_locked():
+    got = _sync_lines({"fleet_sync": {"status": "success", "data": {
+        "summary": {"in_sync": 2, "out_of_sync": 1, "error": 1}, "devices": [{"device": "a"}, {"device": "b"}]}}})
+    assert (got["nso_fleet_devices_out_of_sync"], got["nso_fleet_devices_locked"]) == (1, 0)
+
+
+def test_the_attempt_state_gauge_is_ok_failed_or_nso_unreachable_as_0_1_2(monkeypatch):
+    from nso_facts.metrics import ATTEMPT_STATES, push_scan_attempt_failed
+
+    assert ATTEMPT_STATES == ("ok", "failed", "nso_unreachable")
+
+    ok = "\n".join(build_phase1_metrics({}, success=True, duration_seconds=1, timestamp_seconds=1, pipeline="diagnostic"))
+    assert 'nso_scan_last_attempt_state{pipeline="diagnostic"} 0.0' in ok
+
+    calls = _capture_requests(monkeypatch)
+    push_scan_attempt_failed(_settings(), reason="error", pipeline="diagnostic")
+    push_scan_attempt_failed(_settings(), reason="nso_unreachable", pipeline="diagnostic")
+    failed, unreachable = (c.data.decode("utf-8") for c in calls)
+    assert 'nso_scan_last_attempt_state{pipeline="diagnostic"} 1.0' in failed
+    assert 'nso_scan_last_attempt_state{pipeline="diagnostic"} 2.0' in unreachable
+
+
+def test_a_scan_that_finished_but_failed_is_state_failed_not_ok():
+    body = "\n".join(build_phase1_metrics({}, success=False, duration_seconds=1, timestamp_seconds=1, pipeline="diagnostic"))
+    assert 'nso_scan_last_attempt_state{pipeline="diagnostic"} 1.0' in body
+
+
+def _device_gauges(snapshot):
+    text = "\n".join(build_phase1_metrics(snapshot, success=True, duration_seconds=1, timestamp_seconds=1, pipeline="agent"))
+    out = {}
+    for line in text.splitlines():
+        for name in ("nso_device_cpu_five_min_percent", "nso_device_memory_used_percent"):
+            if line.startswith(name + "{"):
+                device = line.split('device="')[1].split('"')[0]
+                out[(name, device)] = float(line.rsplit(" ", 1)[1])
+    return text, out
+
+
+def test_cpu_and_memory_are_exported_per_device_so_a_dashboard_can_show_the_busiest():
+    snapshot = {"system_health": {
+        "salt": {"cpu": {"five_min": 10}, "memory": {"used_pct": 19.3}},
+        "eduky": {"cpu": {"five_min": 2}, "memory": {"used_pct": 45.6}},
+        "partial": {"cpu": {"five_min": 7}},                                 # no memory reading
+        "locked": {"error": "RESTCONF 500: southbound locked"},               # unread: no series at all
+    }}
+
+    text, got = _device_gauges(snapshot)
+
+    assert got == {("nso_device_cpu_five_min_percent", "salt"): 10.0, ("nso_device_cpu_five_min_percent", "eduky"): 2.0,
+                   ("nso_device_cpu_five_min_percent", "partial"): 7.0,
+                   ("nso_device_memory_used_percent", "salt"): 19.3, ("nso_device_memory_used_percent", "eduky"): 45.6}
+    assert "# TYPE nso_device_cpu_five_min_percent gauge" in text and "# TYPE nso_device_memory_used_percent gauge" in text
+
+
+def test_without_health_data_no_per_device_series_are_exported():
+    text, got = _device_gauges({})
+    assert got == {} and "nso_device_cpu_five_min_percent" not in text

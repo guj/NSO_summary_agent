@@ -451,6 +451,12 @@ async def _run_after_accounting(
                 _refilter_service_evidence(case, focus, plan.service_type, plan.service_id)
 
         await _investigate(client, args, settings, case, plan, spine_devices=spine_devices, all_names=all_names)
+        if plan.run_service:
+            # Last read of NSO: a service reported Down that its owner has since deleted is not a fault to report.
+            from diagnostic_mas.service_presence import recheck_reported_faults
+
+            set_mcp_stage("presence")
+            await recheck_reported_faults(client, case)
 
         from nso_facts.mcp_client import successful_live_devices
 

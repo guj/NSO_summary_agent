@@ -28,6 +28,8 @@ from diagnostic_mas.drill import (
     execute_one_drill_call,
     refused_conclusion_reply,
     rejected_call_log_line,
+    has_field_markup,
+    unfold_swallowed_fields,
 )
 from diagnostic_mas.tool_context import BatchProgress, result_error, tool_catalog
 from diagnostic_mas.focus import counts_from_services
@@ -2175,6 +2177,12 @@ async def _llm_dataplane_verify_one(
 
     if not dig.concluded:
         _record_unfinished(dig)
+    from diagnostic_mas.llm_exchanges import record_exchange
+
+    record_exchange(case, kind="dataplane", messages=dig.messages, model=getattr(settings, "fabric_model", None),
+                    subject={"service_type": record.get("service_type"), "name": record.get("name")},
+                    outcome={"concluded": dig.concluded, "stop_reason": dig.investigation.stop_reason,
+                             "detail": None if dig.concluded else dig.stop_reason})
     return True
 
 
@@ -2190,7 +2198,9 @@ def _service_brief(record: dict[str, Any]) -> dict[str, Any]:
         "device_sync": record.get("device_sync"),
     }
     if isinstance(record.get("basic_checks"), dict):
-        brief["basic_checks"] = record["basic_checks"]
+        from diagnostic_mas.operational_checks.common import checks_for_llm
+
+        brief["basic_checks"] = checks_for_llm(record["basic_checks"])
     if isinstance(record.get("live_l2"), dict):
         brief["live_l2"] = record["live_l2"]
     try:
@@ -2420,6 +2430,9 @@ async def _handle_call(dig: _Dig, call: Any, finish_reason: Any) -> None:
     """Answer one tool call of the model's batch."""
     fn_name, raw_args, args, bad_json = _call_arguments(call)
     if fn_name == "conclude_dataplane":
+        args, recovered = unfold_swallowed_fields(args, CONCLUDE_DATAPLANE_TOOL["function"]["parameters"]["properties"])
+        if recovered:
+            _log(f"repaired {fn_name}: {', '.join(recovered)} was inside another field")
         finding = parse_dataplane_conclusion(args)
         if finding:
             await _conclude(dig, finding)
@@ -2429,7 +2442,7 @@ async def _handle_call(dig: _Dig, call: Any, finish_reason: Any) -> None:
         why = conclusion_rejection(args, bad_json=bad_json, required=required,
                                    choices={"dataplane_status": _DATAPLANE_STATUSES})
         _log(rejected_call_log_line(fn_name, raw_args, why, finish_reason=finish_reason))
-        dig.tool_reply(call, refused_conclusion_reply(fn_name, why, required))
+        dig.tool_reply(call, refused_conclusion_reply(fn_name, why, required, markup=has_field_markup(args)))
         dig.refused_in_a_row += 1
         # The report gives the stop reason; what each field held stays in the log.
         dig.last_refused = re.sub(r" \([^)]*\)", "", why)
@@ -2660,9 +2673,12 @@ async def run_dataplane_verify_phase(
         if case.budget.port_investigations_used:
             _log(f"port and device investigations={case.budget.port_investigations_used} "
                  f"explained services={len(explained)}")
+    # Owners delete services while a scan runs: with a cap, rank a reserve three times as long, and let the
+    # services NSO still lists fill the cap (the cap stays a ceiling).
+    replace_gone = bool(limit) and not explicit_service
     candidates = select_dataplane_candidates(
         case,
-        limit=limit,
+        limit=limit * 4 if replace_gone else limit,
         per_category=per_category,
         suspicious_only=suspicious_only,
         explicit_service=explicit_service,
@@ -2670,6 +2686,15 @@ async def run_dataplane_verify_phase(
         category_rotate_seed=category_rotate_seed,
         exclude=explained,
     )
+    if replace_gone:
+        from diagnostic_mas.service_presence import keep_services_still_listed
+
+        ranked = candidates
+        candidates = await keep_services_still_listed(client, case, ranked, limit=limit)
+        gone = [str(r.get("name")) for _ev, r in ranked if case.service_coverage.get(r.get("name")) == "disappeared"]
+        if gone:
+            _log(f"{len(gone)} chosen service(s) no longer listed in NSO, replaced by the next ranked: "
+                 + ", ".join(gone))
     apply_coverage_after_candidate_select(case, candidates)
     if not candidates:
         _log(

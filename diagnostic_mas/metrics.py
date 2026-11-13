@@ -46,6 +46,27 @@ def _final_status_metrics(case: CaseFile) -> tuple[dict[str, dict[str, int]], li
     return by_type, faults
 
 
+def _llm_metrics(case: CaseFile) -> dict[str, Any]:
+    """How the scan's LLM work went and what it cost; numbers and the model's name, never a provider's text.
+
+    Spend and budget are there only when the provider reported them.
+    """
+    from diagnostic_mas.llm_status import llm_outcome
+
+    outcome = llm_outcome(case)
+    if outcome is None:
+        return {}
+    out: dict[str, Any] = dict(outcome)
+    configuration = getattr(case, "run_configuration", None) or {}
+    if configuration.get("LLM enabled") and configuration.get("Model"):
+        out["model"] = str(configuration["Model"])
+    usage = getattr(case, "llm_usage", None) or {}
+    for key in ("requests", "input_tokens", "output_tokens", "cost", "budget_left", "budget_max"):
+        if isinstance(usage.get(key), (int, float)) and not isinstance(usage.get(key), bool):
+            out[key] = usage[key]
+    return out
+
+
 def metrics_snapshot_from_case(
     case: CaseFile,
     *,
@@ -101,6 +122,9 @@ def metrics_snapshot_from_case(
         "service_faults": service_faults,
         "devices_not_covered": len(_collection_gap_devices(case)),
     }
+    llm = _llm_metrics(case)
+    if llm:
+        snapshot["llm"] = llm
     if run_id:
         snapshot["scan"] = {"run_id": run_id, "report_url": report_url or ""}
     if links_gaining_errors:

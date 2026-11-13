@@ -256,6 +256,10 @@ class CaseFile:
     # routing investigation stopped without a conclusion, and how the summary request ended.
     llm_status: dict[str, Any] = field(default_factory=dict)
     llm_halt_reason: str | None = None
+    # Each LLM investigation's conversation and the system prompts it used (by hash), saved as
+    # llm_exchanges.json beside case.json so a prompt can be replayed against it.
+    llm_exchanges: list[dict[str, Any]] = field(default_factory=list)
+    llm_texts: dict[str, str] = field(default_factory=dict)
     _evidence_seq: int = 0
     _issue_seq: int = 0
     _diagnosis_seq: int = 0
