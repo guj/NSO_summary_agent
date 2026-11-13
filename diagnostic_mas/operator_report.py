@@ -2124,9 +2124,15 @@ def _optics_sweep_followups(case: CaseFile) -> list[tuple[str | None, str]]:
     leads = optics_alarm_leads(case)
     if not leads:
         return []
+    def level(lead: dict[str, Any]) -> str:
+        rx = lead.get("rx")
+        who = "receives" if lead.get("parent") else f"lane {rx['lane']} receives" if rx else ""     # a lane already named
+        return (f"; {who} {rx['dbm']:+.1f} dBm, {'above' if rx['side'] == 'high' else 'below'} its "
+                f"{rx['side']} alarm threshold of {rx['threshold_dbm']:+.1f} dBm" if rx else "")
+
     shown = ", ".join(
         f"`{lead['device']}` {lead['port']} ("
-        + (f"lane {lead['lane']} of {lead['parent']}, " if lead.get("parent") else "") + f"{lead['alarms']})"
+        + (f"lane {lead['lane']} of {lead['parent']}, " if lead.get("parent") else "") + f"{lead['alarms']}{level(lead)})"
         for lead in leads[:5]) + (f", and {len(leads) - 5} more" if len(leads) > 5 else "")
     many = len(leads) != 1
     return [(None, "Investigate the optics alarms the devices themselves report on "

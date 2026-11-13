@@ -628,8 +628,8 @@ async def test_the_follow_up_list_and_the_result_name_the_alarms_as_a_lead_not_a
 
     assert format_followup_operator(case) == [
         "1. Investigate the optics alarms the devices themselves report on 2 links that are up: "
-        f"`{A_SW}` HundredGigE0/0/0/2 ({LOW}), `star-data-sw` HundredGigE0/0/0/64/1 (lane 1 of 0/0/0/64, LOW-RX2-PWR). "
-        "No service status rests on them."]
+        f"`{A_SW}` HundredGigE0/0/0/2 ({LOW}), `star-data-sw` HundredGigE0/0/0/64/1 (lane 1 of 0/0/0/64, LOW-RX2-PWR; "
+        "receives -40.0 dBm, below its low alarm threshold of -8.9 dBm). No service status rests on them."]
     result = "\n".join(format_result_section(case, None))
     assert "- **Optics alarms:** 2 ports on links that are up report an optics alarm of their own (a lead, not a status)." in result
     quiet = _sweep_case()
@@ -677,15 +677,260 @@ async def test_a_port_that_only_gained_output_drops_is_not_read_for_light_but_on
     assert (RUTG, "HundredGigE0/0/0/23") in gaining_error_ends(both)
 
 
-def test_a_lane_row_with_a_flag_after_its_bias_is_still_a_lane():
-    """wash FourHundredGigE0/0/0/64 on 13 Nov: three of its four lanes carry a flag, and only the unflagged lane was read."""
-    text = _controllers("Fri Nov 13 04:59:07.000 UTC", [(2.1, 4.1), (2.2, 3.4), (2.1, 1.6), (2.2, 3.3)],
-                        alarms="Receive Power: Alarm high")
-    text = (text.replace("4.1   0.1000     55.000", "4.1   0.1000     55.000   H - Rx alarm high")
-                .replace("3.4   0.1000     55.000", "3.4   0.1000     55.000   h - Rx warning high")
-                .replace("3.3   0.1000     55.000", "3.3   0.1000     55.000   h - Rx warning high"))
+# --- raw replies kept when a read gave no table or an alarm, so a layout nobody has seen can be read later ------------
 
-    parsed = parse_optics(text)
+def _saved_payload(case: CaseFile) -> dict:
+    return [ev["payload"] for ev in case.evidence if ev["kind"] == KIND][0]
 
-    assert [(lane["lane"], lane["rx_dbm"]) for lane in parsed["lanes"]] == [(0, 4.1), (1, 3.4), (2, 1.6), (3, 3.3)]
+
+@pytest.mark.asyncio
+async def test_a_reply_with_no_table_is_kept_with_its_command_so_its_layout_can_be_read_later():
+    case = _sweep_case()
+    # 0/0/0/2 answers, but with a layout that has no optics table (as a single SFP+ did on 13 Nov).
+    outputs = SWEEP_OUTPUTS | {(A_SW, "controllers HundredGigE0/0/0/2"): "State: Controller Up\n Detected Alarms: None\n"}
+
+    await record_link_optics(None, case, call=_call(outputs, []))
+
+    [sample] = [s for s in _saved_payload(case)["raw_samples"] if s["why"] == "no table"]
+    assert (sample["port"], sample["command"]) == (f"{A_SW}:HundredGigE0/0/0/2", "controllers HundredGigE0/0/0/2")
+    assert "Detected Alarms: None" in sample["text"]
+
+
+@pytest.mark.asyncio
+async def test_an_error_reply_has_no_layout_so_nothing_is_kept_for_it():
+    case = _sweep_case()
+    outputs = {k: v for k, v in SWEEP_OUTPUTS.items() if k[1] != "controllers HundredGigE0/0/0/2"}   # 0/0/0/2 answers an error
+
+    await record_link_optics(None, case, call=_call(outputs, []))
+
+    assert not [s for s in _saved_payload(case).get("raw_samples", []) if s["why"] == "no table"]
+
+
+@pytest.mark.asyncio
+async def test_an_alarm_reading_is_kept_as_raw_text_and_a_clean_one_is_not():
+    case = _sweep_case()
+
+    await record_link_optics(None, case, call=_call(SWEEP_OUTPUTS, []))
+
+    samples = _saved_payload(case)["raw_samples"]
+    assert {(s["port"], s["why"]) for s in samples} == {
+        (f"{A_SW}:HundredGigE0/0/0/2", "alarm"), ("star-data-sw:0/0/0/64", "alarm")}      # a parent read is kept once
+    assert LOW in next(s for s in samples if s["port"].startswith(A_SW))["text"]
+    assert not [s for s in samples if s["port"] == f"{A_SW}:HundredGigE0/0/0/1"]            # no alarm: nothing kept
+
+
+@pytest.mark.asyncio
+async def test_nothing_is_kept_when_every_read_gave_a_table_and_no_alarm():
+    case = _sweep_case()
+    clean = {(A_SW, "controllers HundredGigE0/0/0/1"): _controllers("Thu Oct 22 19:03:23.557 UTC", [(1.7, -2.5)]),
+             (A_SW, "controllers HundredGigE0/0/0/2"): _controllers("Thu Oct 22 19:03:24.000 UTC", [(1.1, -2.4)])}
+    case.evidence[0]["payload"]["ports"] = {k: v for k, v in case.evidence[0]["payload"]["ports"].items() if k.startswith(A_SW)}
+
+    await record_link_optics(None, case, call=_call(clean, []))
+
+    assert "raw_samples" not in _saved_payload(case)
+
+
+@pytest.mark.asyncio
+async def test_the_kept_text_is_a_window_around_the_optics_table_and_never_longer_than_the_limit():
+    from diagnostic_mas.link_optics import SAMPLE_CHARS
+
+    case = _sweep_case()
+    case.evidence[0]["payload"]["ports"] = {f"{A_SW}:HundredGigE0/0/0/2": _port()}
+    long_reply = "preface line\n" * 400 + _controllers("Thu Oct 22 19:03:24.000 UTC", [(1.1, -12.4)], alarms=LOW)
+
+    await record_link_optics(None, case, call=_call({(A_SW, "controllers HundredGigE0/0/0/2"): long_reply}, []))
+
+    [sample] = _saved_payload(case)["raw_samples"]
+    assert len(sample["text"]) <= SAMPLE_CHARS and "Digital Optical Monitoring" in sample["text"] and LOW in sample["text"]
+
+
+@pytest.mark.asyncio
+async def test_no_table_samples_collapse_when_a_device_gives_the_same_answer_and_each_kind_has_a_limit():
+    case = CaseFile(budget=Budget(0, 0))
+    ports = {f"d{n}-data-sw:HundredGigE0/0/0/1": _port() for n in range(6)}                       # six devices, no table
+    ports |= {f"{A_SW}:HundredGigE0/0/0/{n}": _port() for n in range(10, 16)}                       # one device, same error
+    ports |= {f"e{n}-data-sw:HundredGigE0/0/0/1": _port() for n in range(5)}                       # five devices with an alarm
+    case.evidence = [{"id": "ev_1", "kind": "port_counters", "role": "physical", "payload": {
+        "read_at": "2026-10-22T19:00:00+00:00", "ports": ports}}]
+    outputs = {(f"e{n}-data-sw", "controllers HundredGigE0/0/0/1"):
+               _controllers("Thu Oct 22 19:03:24.000 UTC", [(1.1, -12.4)], alarms=LOW) for n in range(5)}
+    outputs |= {(f"d{n}-data-sw", "controllers HundredGigE0/0/0/1"): f"State: Controller Up {n}\n" for n in range(6)}
+    outputs |= {(A_SW, f"controllers HundredGigE0/0/0/{n}"): "State: Controller Up\n" for n in range(10, 16)}
+
+    await record_link_optics(None, case, call=_call(outputs, []))
+
+    samples = _saved_payload(case)["raw_samples"]
+    assert sum(1 for s in samples if s["why"] == "no table") == 3 and sum(1 for s in samples if s["why"] == "alarm") == 3
+    assert len([s for s in samples if s["port"].startswith(A_SW)]) <= 1                             # the same error, once
+
+
+# Real replies saved by test81 (13 Nov 2026), without vendor details and serial numbers.
+WASH_400G = """
+Fri Nov 13 16:59:00.000 UTC
+Operational data for interface FourHundredGigE0/0/0/64:
+
+State:
+    Administrative state: enabled
+    Operational state: Up
+
+Phy:
+    Digital Optical Monitoring:
+        Transceiver Temp: 33.793 C
+        Transceiver Voltage: 3.243 V
+
+        Alarms key: (H) Alarm high, (h) Warning high
+                    (L) Alarm low, (l) Warning low
+           Wavelength    Tx Power          Rx Power      Laser Bias
+        Lane  (nm)    (dBm)    (mW)     (dBm)     (mW)      (mA)
+        --   -----   ------   ------    ------   ------    ------
+        0     n/a     2.1   1.6354     4.1   2.5485H    81.526 
+        1     n/a     2.2   1.6448     3.4   2.2116h    83.998 
+        2     n/a     2.1   1.6270     1.6   1.4609     85.070 
+        3     n/a     2.2   1.6469     3.3   2.1467h    85.902 
+
+        DOM alarms:
+            Receive Power: Alarm high
+
+        Alarm                     Alarm    Warning   Warning    Alarm
+        Thresholds                High      High       Low       Low
+                                 -------   -------   -------   -------
+        Receive Power (dBm):       3.501     2.499    -6.310    -7.305
+"""
+
+GATECH_SFP = """
+ Controller State: Up
+ Transport Admin State: In Service
+ Laser State: On
+ Optics Status
+
+	 Optics Type:  SFP+ 10G LR
+	 Wavelength = 1310.00 nm
+
+	 Alarm Status:
+	 -------------
+	 Detected Alarms: None
+
+
+	 LOS/LOL/Fault Status:
+
+	 Laser Bias Current = 39.2 mA
+	 Actual TX Power = -1.59 dBm
+	 RX Power = -14.13 dBm
+
+	 THRESHOLD VALUES
+	 ----------------
+
+	 Parameter                 High Alarm  Low Alarm  High Warning  Low Warning
+	 ------------------------  ----------  ---------  ------------  -----------
+	 Rx Power Threshold(dBm)          3.4      -16.4           2.5        -14.4
+	 Tx Power Threshold(dBm)          3.4      -10.1           2.5         -8.1
+
+RP/0/RP0/CPU0:gatech-data-sw#"""
+
+
+def test_flagged_lanes_of_a_400g_port_are_all_read_the_flag_letter_is_glued_to_the_receive_mw():
+    parsed = parse_optics(WASH_400G)
+
+    assert [(lane["lane"], lane["tx_dbm"], lane["rx_dbm"]) for lane in parsed["lanes"]] == [
+        (0, 2.1, 4.1), (1, 2.2, 3.4), (2, 2.1, 1.6), (3, 2.2, 3.3)]
     assert parsed["alarms"] == "Receive Power: Alarm high"
+
+
+def test_a_single_sfp_with_no_lane_table_is_one_lane_with_its_thresholds():
+    from diagnostic_mas.link_optics import _lane_reading, parse_parent_optics
+
+    parsed = parse_parent_optics(GATECH_SFP)
+
+    assert parsed["lanes"] == [{"lane": 0, "tx_dbm": -1.59, "rx_dbm": -14.13}]
+    assert (parsed["alarms"], parsed["rx_low_alarm_dbm"], parsed["rx_low_warning_dbm"]) == ("", -16.4, -14.4)
+    assert _lane_reading(parsed, 0, "0/0/0/20")["lanes"][0]["rx_dbm"] == -14.13
+
+
+def test_an_alarm_named_on_the_detected_alarms_line_of_a_single_sfp_is_kept_as_the_devices_own_text():
+    """Constructed: no alarmed single SFP+ has been seen, so the alarm text itself is a guess at the device's wording."""
+    from diagnostic_mas.link_optics import parse_parent_optics
+
+    parsed = parse_parent_optics(GATECH_SFP.replace("Detected Alarms: None", "Detected Alarms: RX LOS"))
+
+    assert parsed["alarms"] == "RX LOS"
+
+
+@pytest.mark.asyncio
+async def test_the_sweep_now_reads_a_single_sfp_breakout_name_and_a_400g_port_with_flagged_lanes():
+    case = CaseFile(budget=Budget(0, 0))
+    case.evidence = [{"id": "ev_1", "kind": "port_counters", "role": "physical", "payload": {
+        "read_at": "2026-11-13T16:00:00+00:00", "ports": {
+            "gatech-data-sw:TenGigE0/0/0/20/0": _port(), "wash-data-sw:FourHundredGigE0/0/0/64": _port()}}}]
+    outputs = {("gatech-data-sw", "controllers optics 0/0/0/20"): GATECH_SFP,
+               ("wash-data-sw", "controllers FourHundredGigE0/0/0/64"): WASH_400G}
+
+    await record_link_optics(None, case, call=_call(outputs, []))
+
+    saved = _saved_payload(case)
+    assert sorted(saved["ports"]) == ["gatech-data-sw:TenGigE0/0/0/20/0", "wash-data-sw:FourHundredGigE0/0/0/64"]
+    assert len(saved["ports"]["wash-data-sw:FourHundredGigE0/0/0/64"]["lanes"]) == 4
+    assert not [s for s in saved.get("raw_samples", []) if s["why"] == "no table"]
+
+
+@pytest.mark.parametrize("flag", ["", "H", "h", "L", "l"])
+def test_a_flag_letter_glued_to_the_receive_mw_is_read_and_a_value_with_none_too(flag):
+    text = WASH_400G.replace("2.5485H", f"2.5485{flag}")
+
+    lanes = parse_optics(text)["lanes"]
+
+    assert [(lane["lane"], lane["rx_dbm"]) for lane in lanes] == [(0, 4.1), (1, 3.4), (2, 1.6), (3, 3.3)]
+
+
+@pytest.mark.parametrize("old, new", [("2.1   1.6354", "2.1H   1.6354"), ("2.1   1.6354", "2.1h   1.6354"),
+                                      ("4.1   2.5485H", "4.1L   2.5485H"), ("81.526", "81.526l")])
+def test_a_flag_on_any_other_value_of_a_lane_row_does_not_lose_the_lane(old, new):
+    lanes = parse_optics(WASH_400G.replace(old, new, 1))["lanes"]
+
+    assert [(lane["lane"], lane["tx_dbm"], lane["rx_dbm"]) for lane in lanes][0] == (0, 2.1, 4.1)
+    assert len(lanes) == 4
+
+
+def test_the_devices_own_receive_alarm_thresholds_are_read_from_its_threshold_table():
+    """The columns are alarm high, warning high, warning low, alarm low (the header of the device's own table)."""
+    parsed = parse_optics(WASH_400G)
+
+    assert (parsed["rx_high_alarm_dbm"], parsed["rx_low_alarm_dbm"]) == (3.501, -7.305)
+
+
+@pytest.mark.asyncio
+async def test_the_follow_up_item_sets_the_worst_lane_against_the_devices_own_alarm_threshold():
+    from diagnostic_mas.link_optics import optics_alarm_leads
+    from diagnostic_mas.operator_report import format_followup_operator
+
+    case = CaseFile(budget=Budget(0, 0))
+    case.evidence = [{"id": "ev_1", "kind": "port_counters", "role": "physical", "payload": {
+        "read_at": "2026-11-13T16:00:00+00:00", "ports": {"wash-data-sw:FourHundredGigE0/0/0/64": _port()}}}]
+    await record_link_optics(None, case, call=_call(
+        {("wash-data-sw", "controllers FourHundredGigE0/0/0/64"): WASH_400G}, []))
+
+    [lead] = optics_alarm_leads(case)
+
+    assert lead["rx"] == {"side": "high", "dbm": 4.1, "lane": 0, "threshold_dbm": 3.501}
+    assert format_followup_operator(case) == [
+        "1. Investigate the optics alarms the devices themselves report on 1 link that is up: `wash-data-sw` "
+        "FourHundredGigE0/0/0/64 (Receive Power: Alarm high; lane 0 receives +4.1 dBm, above its high alarm threshold "
+        "of +3.5 dBm). No service status rests on it."]
+
+
+@pytest.mark.asyncio
+async def test_no_numbers_are_added_when_the_level_is_not_beyond_the_devices_threshold_or_the_alarm_names_no_side():
+    from diagnostic_mas.link_optics import optics_alarm_leads
+
+    inside = WASH_400G.replace("4.1   2.5485H", "3.0   2.5485 ").replace("3.4", "3.0").replace("3.3", "3.0")
+    case = CaseFile(budget=Budget(0, 0))
+    case.evidence = [{"id": "ev_1", "kind": "port_counters", "role": "physical", "payload": {
+        "read_at": "2026-11-13T16:00:00+00:00", "ports": {"wash-data-sw:FourHundredGigE0/0/0/64": _port()}}}]
+    await record_link_optics(None, case, call=_call({("wash-data-sw", "controllers FourHundredGigE0/0/0/64"): inside}, []))
+    assert "rx" not in optics_alarm_leads(case)[0]                           # 3.0 dBm is under the 3.501 dBm threshold
+
+    odd = WASH_400G.replace("Receive Power: Alarm high", "Receive Power: Alarm")
+    case2 = CaseFile(budget=Budget(0, 0))
+    case2.evidence = case.evidence
+    await record_link_optics(None, case2, call=_call({("wash-data-sw", "controllers FourHundredGigE0/0/0/64"): odd}, []))
+    assert "rx" not in optics_alarm_leads(case2)[0]                          # the device's words name no side

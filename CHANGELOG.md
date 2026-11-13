@@ -8,6 +8,12 @@ status, count or phrase in the report means, so read it first.
 
 ### Report meaning
 
+- **Optics alarms follow-up:** when the device's own alarm names a side ("Alarm high", `LOW-RX1-PWR`) and its own
+  threshold table is in the same reply, the item now sets the worst lane against that threshold: "`wash-data-sw`
+  FourHundredGigE0/0/0/64 (Receive Power: Alarm high; lane 0 receives +4.1 dBm, above its high alarm threshold of +3.5
+  dBm)". Both numbers are the device's; no threshold is the agent's. Nothing is added when the level is not beyond the
+  threshold or the alarm names no side. The same applies to the optics alarm in a link-gaining-errors item, where a
+  plain port now also has its low alarm threshold. Takes effect from the first scan after the image is rebuilt.
 - **IS-IS overload bit:** each scan now reads the IS-IS link-state database once (`show isis database level 2`, on
   the first router with an adjacency; the next is asked if it gives no table, three tries at most) and lists the
   routers that advertise the overload bit: one Recommended follow-up item ("Check whether the IS-IS overload bit is
@@ -29,7 +35,7 @@ status, count or phrase in the report means, so read it first.
   on it, and no cause is named. Ports already read for an adjacency down or a link gaining errors keep their own
   report line. The reads are about 310 more `show` calls per scan (on about 9,000), under a limit of 400 reads of
   their own that never takes reads from the 20 above; the run details' Optics reads line says how many were read,
-  how many have an alarm and how many the limit left out. How much longer a scan takes is not yet measured.
+  how many have an alarm and how many the limit left out. On test79 (13 Nov) the scan took 48 min 49 s against 49 min for test78, with 276 more calls (9,351 against 9,075, including the overload read below): one scan each, so no scan-time claim beyond that.
 - **Recommended follow-up:** a link that gained errors while the device itself reports an optics alarm at one end now
   has its own item ("Investigate `toky-data-sw` TenGigE0/0/0/18/0 (lane 0 of 0/0/0/18): the device reports its
   receive level (-18.3 dBm) below its low alarm (-16.4 dBm, LOW-RX1-PWR) while `seat-data-sw` transmits +1.1 to
@@ -91,6 +97,11 @@ status, count or phrase in the report means, so read it first.
 
 ### Added
 
+- `case.json` of a run now keeps the raw reply of an optics read that gave no table or whose device reported an
+  alarm (the `link_optics` evidence, key `raw_samples`): up to 3 of each kind, each a window of at most 2,500
+  characters around the optics table, with the port, the command and why it was kept. Empty and error replies are not
+  kept. It is there so a layout never seen before (a 400G port with flagged lanes, a single SFP+) can be read from the
+  device's own text; nothing in the report or any status uses it. Optic serial numbers can appear in the text.
 - `nso_link_utilization_percent{device,port,direction}` gives the ten busiest port directions of a scan: the device's
   own 5-minute rate (`show interfaces`) over the port's bandwidth, one reading per scan. It is neither a peak nor a
   daily average, so a burst between scans does not show; idle ports, ports that are down and devices read without
@@ -227,10 +238,14 @@ status, count or phrase in the report means, so read it first.
 
 ### Fixed
 
-- A transceiver lane that the device flags (`H - Rx alarm high`) was dropped from the optics reading, so a port with
-  three flagged lanes showed only its one unflagged lane: on 13 Nov `wash-data-sw` FourHundredGigE0/0/0/64 was read
-  as a single lane at +1.6 dBm while the device reported lane 0 at 4.1 dBm, above its 3.501 dBm alarm. Every lane is
-  now read. The alarm itself was reported correctly: it is the device's own text.
+- A 400G port with flagged lanes was read as one lane: the device glues its flag letter to the receive mW value
+  (`2.5485H`, alarm high; `h` warning high), which the lane pattern did not accept, so only the unflagged lane was kept.
+  On 13 Nov `wash-data-sw` FourHundredGigE0/0/0/64 showed a single lane at +1.6 dBm while the device reported lane 0 at
+  4.1 dBm, above its 3.501 dBm alarm. A first fix on 13 Nov guessed the flag came after the bias column and did not
+  work; this one is written from the device's own text (kept by the raw-reply capture under Added). The alarm line itself
+  was always correct. A single SFP+ in a breakout cage (`gatech-data-sw` TenGigE0/0/0/20/0, `sri-data-sw`
+  TenGigE0/0/0/22/0) has no lane table and was "not read"; its transmit and receive power and thresholds are now read
+  as lane 0.
 - LLM investigations get the readings of an interface-health or hardware-health read. They used to
   get only the platform name ("ios-xr" or "saos"), and a dig's saved evidence kept only that: 213
   reads in 51 of the last 53 scans. On 10 Nov the salt ↔ seat drill said its hardware read gave "no

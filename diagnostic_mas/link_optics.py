@@ -28,11 +28,18 @@ KIND = "link_optics"
 CEILING = 20
 # Reads for the sweep of the other ports that are up; a ceiling of its own, so it never takes reads from the ports above.
 SWEEP_CEILING = 400
+# Raw replies kept for a read that gave no table or an alarm, so a layout never seen before can be read from the text:
+# up to this many of each kind, each a window of this many characters around the optics table.
+SAMPLES = 3
+SAMPLE_CHARS = 2500
+_SAMPLE_MARKERS = ("Digital Optical Monitoring", "Lane  Laser Bias", "Detected Alarms", "DOM alarm")
 _ADJACENCY_DOWN = frozenset({"configured_no_adjacency", "unidirectional_adjacency"})
-# One row of the DOM table: lane, wavelength, Tx dBm, Tx mW, Rx dBm, Rx mW, laser bias, and a flag after it on a lane
-# the device marks (``H - Rx alarm high``).
-_LANE = re.compile(r"^\s*(\d+)\s+(?:n/a|[\d.]+)\s+(-?\d+(?:\.\d+)?)\s+[\d.]+\s+(-?\d+(?:\.\d+)?)\s+[\d.]+\s+[\d.]+"
-                   r"(?:\s+[A-Za-z-].*)?\s*$")
+# One row of the DOM table: lane, wavelength, Tx dBm, Tx mW, Rx dBm, Rx mW, laser bias. A value the device flags has the
+# flag letter glued to it (``2.5485H`` is a receive power in alarm high, ``h`` is warning high, ``L`` and ``l`` low).
+_FLAG = r"[HhLl]?"
+_NUM = rf"-?\d+(?:\.\d+)?{_FLAG}"
+_LANE = re.compile(rf"^\s*(\d+)\s+(?:n/a|[\d.]+)\s+(-?\d+(?:\.\d+)?){_FLAG}\s+{_NUM}\s+"
+                   rf"(-?\d+(?:\.\d+)?){_FLAG}\s+{_NUM}\s+{_NUM}\s*$")
 _STAMP = re.compile(r"^\s*(\w{3} \w{3} +\d+ [\d:.]+ \w+)\s*$", re.M)
 _BUNDLE_PORT = re.compile(r"Bundle-Ether\d+")
 _BREAKOUT_LANE = re.compile(r"(\d+/\d+/\d+/\d+)/(\d+)$")
@@ -40,6 +47,10 @@ _BREAKOUT_LANE = re.compile(r"(\d+/\d+/\d+/\d+)/(\d+)$")
 _PARENT_LANE = re.compile(r"^\s*(\d+)\s+-?[\d.]+\s*mA\s+(-?\d+(?:\.\d+)?)\s*dBm\s+(-?\d+(?:\.\d+)?)\s*dBm\b")
 # High alarm, low alarm, high warning, low warning.
 _RX_THRESHOLD = re.compile(r"Rx Power Threshold\(dBm\)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)")
+# The threshold table of ``show controllers <port>``: alarm high, warning high, warning low, alarm low.
+_PLAIN_RX_THRESHOLD = re.compile(r"Receive Power \(dBm\):\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)")
+_SINGLE_TX = re.compile(r"Actual TX Power\s*=\s*(-?\d+(?:\.\d+)?)\s*dBm")
+_SINGLE_RX = re.compile(r"\bRX Power\s*=\s*(-?\d+(?:\.\d+)?)\s*dBm")
 _LANE_ALARM = re.compile(r"(?:LOW|HIGH)-(?:RX|TX)(\d+)-[A-Z]+")
 _LINKS = re.compile(r"Local links <active/standby/configured>:\s*(\d+)\s*/\s*\d+\s*/\s*(\d+)")
 
@@ -63,8 +74,10 @@ def parse_optics(text: str) -> dict[str, Any] | None:
             break
         if line:
             alarms.append(line)
-    stamp = _STAMP.search(text)
-    return {"lanes": lanes, "alarms": ", ".join(alarms), "read_at": stamp[1] if stamp else None}
+    stamp, limits = _STAMP.search(text), _PLAIN_RX_THRESHOLD.search(text)
+    return {"lanes": lanes, "alarms": ", ".join(alarms), "read_at": stamp[1] if stamp else None,
+            "rx_high_alarm_dbm": float(limits[1]) if limits else None,
+            "rx_low_alarm_dbm": float(limits[4]) if limits else None}
 
 
 def parse_parent_optics(text: str) -> dict[str, Any] | None:
@@ -75,18 +88,26 @@ def parse_parent_optics(text: str) -> dict[str, Any] | None:
     """
     text = (text or "").replace("\r", "")
     start = text.find("Lane  Laser Bias")
-    if start < 0:
-        return None
-    lanes = [{"lane": int(m[1]), "tx_dbm": float(m[2]), "rx_dbm": float(m[3])}
-             for m in (_PARENT_LANE.match(line) for line in text[start:].splitlines()) if m]
+    if start >= 0:
+        lanes = [{"lane": int(m[1]), "tx_dbm": float(m[2]), "rx_dbm": float(m[3])}
+                 for m in (_PARENT_LANE.match(line) for line in text[start:].splitlines()) if m]
+    else:
+        # A single optic (an SFP+ in a breakout cage) has no lane table: its one reading is lane 0.
+        tx, rx = _SINGLE_TX.search(text), _SINGLE_RX.search(text)
+        lanes = [{"lane": 0, "tx_dbm": float(tx[1]), "rx_dbm": float(rx[1])}] if tx and rx else []
     if not lanes:
         return None
     alarms: list[str] = []
     found = text.find("Detected Alarms:")
-    for line in text[found + len("Detected Alarms:"):].splitlines()[1:] if found >= 0 else []:
-        if not line.strip() or ":" in line:
-            break
-        alarms += line.split()
+    if found >= 0:
+        # The alarm text is on the next lines, or on this one when the device names it there ("None" is no alarm).
+        after = text[found + len("Detected Alarms:"):].splitlines()
+        if after and after[0].strip().lower() not in ("", "none"):
+            alarms += after[0].split()
+        for line in after[1:]:
+            if not line.strip() or ":" in line:
+                break
+            alarms += line.split()
     threshold, stamp = _RX_THRESHOLD.search(text), _STAMP.search(text)
     return {"lanes": lanes, "alarms": " ".join(alarms), "read_at": stamp[1] if stamp else None,
             "rx_low_alarm_dbm": float(threshold[2]) if threshold else None,
@@ -185,6 +206,14 @@ def sweep_ends(case: CaseFile, taken: set[str]) -> list[tuple[str, str]]:
     return out
 
 
+def _excerpt(text: str) -> str:
+    """A window of the reply around its optics table (else its start), at most ``SAMPLE_CHARS`` long."""
+    text = (text or "").replace("\r", "")
+    found = [text.find(marker) for marker in _SAMPLE_MARKERS if marker in text]
+    start = max(0, min(found) - 300) if found else 0
+    return text[start:start + SAMPLE_CHARS]
+
+
 class _Reads:
     """One scan's optics reads: the client, the call path with its cache, and the device concurrency."""
 
@@ -193,8 +222,33 @@ class _Reads:
 
         self.client, self.workers = client, max(1, workers)
         self.calls, self.cache = DeviceCalls(call or call_mcp, self.workers), ProbeCache()
+        self.samples: list[dict[str, str]] = []
 
-    async def each(self, wanted: list[tuple[str, str]], command: str, parse: Any, into: dict[str, Any]) -> None:
+    def keep(self, key: str, command: str, text: str, reading: dict[str, Any] | None) -> None:
+        """Keep the raw reply of a read that gave no table, or whose device reported an alarm."""
+        if not (text or "").strip():
+            return          # an error or an empty answer has no layout to read
+        said = ((reading or {}).get("alarms") or "").strip().lower()
+        why = "no table" if reading is None else "alarm" if said not in ("", "no alarms") else None
+        if why:
+            self.samples.append({"port": key, "command": command, "why": why, "text": _excerpt(text)})
+
+    def chosen(self) -> list[dict[str, str]]:
+        """Up to ``SAMPLES`` of each kind in port order; one reply from a device that answers every port alike."""
+        out: list[dict[str, str]] = []
+        for why in ("no table", "alarm"):
+            seen: set[tuple[str, str]] = set()
+            for sample in sorted((s for s in self.samples if s["why"] == why), key=lambda s: s["port"]):
+                same = (sample["port"].partition(":")[0], sample["text"][:80].strip())
+                if why == "no table" and same in seen:
+                    continue
+                seen.add(same)
+                if sum(1 for kept in out if kept["why"] == why) < SAMPLES:
+                    out.append(sample)
+        return out
+
+    async def each(self, wanted: list[tuple[str, str]], command: str, parse: Any, into: dict[str, Any],
+                   *, keep: bool = False) -> None:
         from diagnostic_mas.operational_checks.probe import Probe, safe
         from diagnostic_mas.operational_checks.scheduler import run_groups
 
@@ -206,7 +260,10 @@ class _Reads:
         async def read(device: str) -> None:
             probe = Probe(self.client, self.calls, self.cache, max_calls=len(by_device[device]))
             for port in by_device[device]:
-                into[f"{device}:{port}"] = parse(await probe.show(device, f"{command} {port}", required=False))
+                text = await probe.show(device, f"{command} {port}", required=False)
+                into[f"{device}:{port}"] = reading = parse(text)
+                if keep:
+                    self.keep(f"{device}:{port}", f"{command} {port}", text, reading)
 
         await run_groups(sorted(by_device), read, lambda device: device, self.workers)
 
@@ -217,7 +274,7 @@ class _Reads:
 
         plain = [end for end in wanted if not _BREAKOUT_LANE.search(end[1])]
         plain_read = plain[:max(0, budget)]
-        await self.each(plain_read, "controllers", parse_optics, found)
+        await self.each(plain_read, "controllers", parse_optics, found, keep=True)
         # A breakout lane shares its parent port's optics: one read per parent, each lane keeping its own part.
         by_parent: dict[tuple[str, str], list[tuple[str, int]]] = {}
         for device, port in wanted:
@@ -228,7 +285,9 @@ class _Reads:
         async def read_parents(device: str) -> None:
             probe = Probe(self.client, self.calls, self.cache, max_calls=len(parents))
             for owner, parent in (key for key in parents if key[0] == device):
-                reading = parse_parent_optics(await probe.show(device, f"controllers optics {parent}", required=False))
+                text = await probe.show(device, f"controllers optics {parent}", required=False)
+                reading = parse_parent_optics(text)
+                self.keep(f"{device}:{parent}", f"controllers optics {parent}", text, reading)
                 for port, lane in by_parent[owner, parent]:
                     found[f"{device}:{port}"] = _lane_reading(reading, lane, parent) if reading else None
 
@@ -267,7 +326,8 @@ async def record_link_optics(client: Any, case: CaseFile, *, ceiling: int = CEIL
         "read_at": datetime.now(timezone.utc).isoformat(), "ports": dict(sorted(ports.items())),
         **({"bundles": dict(sorted(bundles.items()))} if bundles else {}),
         "wanted": len(wanted), "left_out": left_out, "ceiling": ceiling,
-        "also_gaining": len(extra), "swept": sorted(swept), "sweep_left_out": sweep_left_out}})
+        "also_gaining": len(extra), "swept": sorted(swept), "sweep_left_out": sweep_left_out,
+        **({"raw_samples": reads.chosen()} if reads.samples else {})}})
 
 
 def _saved(case: CaseFile) -> dict[str, Any] | None:
@@ -437,8 +497,26 @@ def optics_alarm_leads(case: CaseFile) -> list[dict[str, Any]]:
             continue
         device, _, port = key.partition(":")
         out.append({"device": device, "port": port, "alarms": said,
-                    **({"parent": reading["parent"], "lane": reading["lane"]} if reading.get("parent") else {})})
+                    **({"parent": reading["parent"], "lane": reading["lane"]} if reading.get("parent") else {}),
+                    **_beyond_threshold(reading, said)})
     return out
+
+
+def _beyond_threshold(reading: dict[str, Any], said: str) -> dict[str, Any]:
+    """The worst lane's receive level against the device's own alarm threshold, when the device's words name a side.
+
+    The side comes from the alarm text ("Alarm high", "LOW-RX1-PWR") and the threshold from the same reply, so no
+    number here is the agent's; nothing is returned when the level is not beyond the threshold.
+    """
+    low, high = "low" in said.lower(), "high" in said.lower()
+    if low == high or not reading.get("lanes"):
+        return {}
+    side = "high" if high else "low"
+    limit = reading.get("rx_high_alarm_dbm" if high else "rx_low_alarm_dbm")
+    worst = (max if high else min)(reading["lanes"], key=lambda lane: lane["rx_dbm"])
+    if limit is None or not (worst["rx_dbm"] > limit if high else worst["rx_dbm"] < limit):
+        return {}
+    return {"rx": {"side": side, "dbm": worst["rx_dbm"], "lane": worst["lane"], "threshold_dbm": limit}}
 
 
 def optics_sweep_counts(case: CaseFile) -> dict[str, int] | None:

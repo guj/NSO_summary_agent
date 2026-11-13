@@ -232,7 +232,7 @@ the transmit level at the other end shows where to look. A bundle gives its memb
 (for example `HundredGigE0/0/0/64/3`, lane 3 of port 0/0/0/64) is read from its parent port's `show controllers
 optics 0/0/0/64`, one read for all the lanes of that port, and shows its own lane, the parent in brackets and the
 receive low-alarm threshold: "star-data-sw HundredGigE0/0/0/64/2 (lane 2 of 0/0/0/64) transmitted +2.2 dBm, received
--40.0 dBm (receive low alarm -8.9 dBm)". A lane's DOM alarms are the ones that name it (LOW-RX3-PWR is lane 2). A line
+-40.0 dBm (receive low alarm -8.9 dBm)". A lane's DOM alarms are the ones that name it (LOW-RX3-PWR is lane 2). A single SFP+ in such a cage (`TenGigE0/0/0/20/0`) has no lane table: its one transmit and receive reading is lane 0, with its own thresholds. A line
 with no optics sentence means none was read, including a device whose optics output is not in this layout. The reads
 count under the same 20-read limit, after the adjacencies down, and the run details say how many were for these links.
 
@@ -247,12 +247,12 @@ The same read is made on every other physical port that is up and whose counters
 last scan), because a transceiver can sit in alarm on a link that has not gained an error yet. A port whose own device
 reports an alarm is listed in one Recommended follow-up item ("Investigate the optics alarms the devices themselves
 report on 2 links that are up: `a-sw` HundredGigE0/0/0/2 (Rx Power Low Alarm), … No service status rests on them."),
-five named and then "and N more", with an "Optics alarms" line in the Result when there is any. It is a lead, not a
+five named and then "and N more", with an "Optics alarms" line in the Result when there is any. When the alarm names a side and the reply has the device's own threshold, the item gives the worst lane's receive level against it ("lane 0 receives +4.1 dBm, above its high alarm threshold of +3.5 dBm"). It is a lead, not a
 status or an issue: the alarm is the device's own, no service, count or drill rests on it, and the agent does not say
 whether it is the optic, the fibre or the far end. Bundles are not read (they have no optics of their own), nor are
 ports that are down. The sweep has a limit of 400 reads, separate from the 20 above; the run details say how many
 ports were read, how many have an alarm and how many the limit left out. `nso_optics_alarm_ports` counts them for the
-dashboard. These reads are extra `show` calls on every scan; how much longer they make a scan is not yet measured.
+dashboard. These reads are extra `show` calls on every scan: on test79 (13 Nov) the scan made 276 more calls in all than test78 and took 48 min 49 s against 49 min, one scan each.
 
 Once per scan the agent also reads the IS-IS link-state database (`show isis database level 2`) on one router that has
 an adjacency, and lists the routers whose entry has the overload bit set: "Check whether the IS-IS overload bit is

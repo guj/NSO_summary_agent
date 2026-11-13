@@ -261,7 +261,7 @@ It also pushes:
 
 A scan that ends without a report (for example NSO became unreachable) posts only the last three, with success 0. The last good scan's values stay in the Pushgateway, so compare `nso_summary_last_run_timestamp_seconds` with the current time to see how old they are.
 
-Dashboard **NSO Diagnostic** (folder **NSO**, file `grafana/dashboards/nso-diagnostic.json`) charts these: the latest scan attempt, how long ago the last good scan finished, final service status, services not OpUp by device, links gaining errors while up (with a mark at each scan), physical, IS-IS and BGP links down, device sync, hardware and infrastructure, and the LLM work and cost.
+Dashboard **NSO Diagnostic** (folder **NSO**, file `grafana/dashboards/nso-diagnostic.json`) charts these: the latest scan attempt, how long ago the last good scan finished, final service status, services not OpUp by device, links gaining errors while up (with a mark at each scan) beside the ten busiest port directions, physical, IS-IS and BGP links down, device sync, hardware and infrastructure (CPU, memory, sensors, fans, power, and ports with an optics alarm of their own), and the LLM work and cost.
 
 ## Alert when scans stop
 
