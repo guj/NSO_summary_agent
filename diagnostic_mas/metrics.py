@@ -125,6 +125,14 @@ def metrics_snapshot_from_case(
     llm = _llm_metrics(case)
     if llm:
         snapshot["llm"] = llm
+    from diagnostic_mas.link_optics import optics_sweep_counts
+
+    if (optics := optics_sweep_counts(case)) is not None:
+        snapshot["optics"] = optics
+    from diagnostic_mas.port_counters import busiest_links
+
+    if busy := busiest_links(case):
+        snapshot["link_utilization"] = busy
     if run_id:
         snapshot["scan"] = {"run_id": run_id, "report_url": report_url or ""}
     if links_gaining_errors:

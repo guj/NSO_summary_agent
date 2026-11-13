@@ -54,7 +54,8 @@ def test_reads_one_ports_counters_from_its_interface_output():
         "state": "up", "transitions": 26, "cleared": "never", "description": "uplink to star, panel 4",
         "input_errors": 843, "crc": 843, "output_errors": 0, "input_drops": 0, "output_drops": 12,
         "packets_in": 569938104308, "packets_out": 461680525836,
-        "bytes_in": 1315276986914302, "bytes_out": 1378183884420187}
+        "bytes_in": 1315276986914302, "bytes_out": 1378183884420187,
+        "bw_kbit": 100000000, "rate_in_bps": 0, "rate_out_bps": 0}
     down = parse_port_counters(SHOWN.replace("is up, line protocol is up", "is down, line protocol is down"), "Hu0/0/0/23")
     assert down["state"] == "down"
     # Another port's output, two ports at once, or a failed command is not this port's reading.
@@ -217,7 +218,7 @@ def test_port_that_flapped_and_came_back_is_a_lead_too():
 
 @pytest.mark.parametrize("before, now", [
     (_reading(), _reading()),                                             # nothing grew
-    (_reading(), _reading(output_drops=900, input_drops=40)),             # drops alone are not a lead
+    (_reading(), _reading(input_drops=40)),                               # input drops alone are not a lead
     (_reading(), _reading(crc=843, state="down")),                        # already down: the service checks own that
     (_reading(crc=900), _reading(crc=843)),                               # a counter went back: reset
     (_reading(), _reading(crc=843, cleared="00:20:11")),                  # cleared since the previous scan
@@ -225,6 +226,58 @@ def test_port_that_flapped_and_came_back_is_a_lead_too():
 ])
 def test_no_lead_without_growth_on_a_port_that_is_up_and_was_not_reset(before, now):
     assert _gains(before, now) == []
+
+
+def test_the_load_is_read_from_the_five_minute_rates_and_a_missing_line_is_none():
+    busy = (SHOWN.replace("5 minute input rate 0 bits/sec", "5 minute input rate 94000000000 bits/sec")
+            .replace("5 minute output rate 0 bits/sec", "5 minute output rate 1500 bits/sec"))
+    reading = parse_port_counters(busy, UPLINK)
+    assert (reading["bw_kbit"], reading["rate_in_bps"], reading["rate_out_bps"]) == (100000000, 94000000000, 1500)
+
+    bare = "\n".join(line for line in SHOWN.splitlines() if "minute" not in line and "BW" not in line)
+    reading = parse_port_counters(bare, UPLINK)
+    assert (reading["bw_kbit"], reading["rate_in_bps"], reading["rate_out_bps"]) == (None, None, None)
+
+
+def test_a_rate_that_fell_is_not_a_counter_that_went_back():
+    # A rate is not cumulative: it falls whenever the traffic does, and must not read as a reset.
+    assert _gains(_reading(rate_in_bps=9_000_000_000), _reading(rate_in_bps=10, crc=5))[0]["gained"] == {"crc": 5}
+
+
+def _busy(**changed) -> dict:
+    return _reading(bw_kbit=100_000_000, rate_in_bps=0, rate_out_bps=0) | changed
+
+
+def test_the_busiest_links_are_the_top_port_directions_by_share_of_their_bandwidth():
+    from diagnostic_mas.port_counters import busiest_links
+
+    case = CaseFile(budget=Budget(0, 0))
+    ports = {f"{RUTG}:HundredGigE0/0/0/1": _busy(rate_in_bps=94_000_000_000, rate_out_bps=2_000_000_000),
+             f"{RUTG}:TenGigE0/0/0/2": _busy(bw_kbit=10_000_000, rate_out_bps=5_000_000_000),
+             f"{RUTG}:HundredGigE0/0/0/3": _busy(),                                        # idle: not listed
+             f"{RUTG}:HundredGigE0/0/0/4": _busy(rate_in_bps=99_000_000_000, state="down"),  # not up
+             f"{RUTG}:HundredGigE0/0/0/5": _busy(bw_kbit=None, rate_in_bps=1_000_000_000),   # no bandwidth to divide by
+             f"{RUTG}:HundredGigE0/0/0/6": _reading(rate_in_bps=1_000_000_000)}              # an older reading: no bandwidth
+    add_evidence(case, {"kind": "port_counters", "role": "physical", "payload": {"read_at": LATER, "ports": ports}})
+
+    assert busiest_links(case) == [
+        {"device": RUTG, "port": "HundredGigE0/0/0/1", "direction": "in", "percent": 94.0},
+        {"device": RUTG, "port": "TenGigE0/0/0/2", "direction": "out", "percent": 50.0},
+        {"device": RUTG, "port": "HundredGigE0/0/0/1", "direction": "out", "percent": 2.0}]
+    assert len(busiest_links(case, limit=2)) == 2
+    assert busiest_links(CaseFile(budget=Budget(0, 0))) == []
+
+
+def test_output_drops_alone_are_a_lead_worded_as_a_count_and_not_as_congestion():
+    rows = _gains(_reading(output_drops=0), _reading(output_drops=900, input_drops=40))
+
+    assert rows[0]["gained"] == {"output_drops": 900}                        # the input drops are not counted
+    line = gain_line(rows[0])
+    assert "+900 output drops" in line and "input drops" not in line and "congestion" not in line
+
+
+def test_output_drops_that_went_back_are_a_reset_and_not_a_lead():
+    assert _gains(_reading(output_drops=900), _reading(output_drops=10)) == []
 
 
 def test_counters_cleared_before_the_previous_scan_can_still_be_compared():
@@ -240,7 +293,7 @@ def test_port_comparisons_say_which_ports_gained_and_which_were_read_clean():
     from diagnostic_mas.port_counters import port_comparisons
 
     quiet, reset, new, blank = "HundredGigE0/0/0/13", "HundredGigE0/0/0/9", "HundredGigE0/0/0/20", "HundredGigE0/0/0/3"
-    unreadable = {"crc": None, "input_errors": None, "output_errors": None}
+    unreadable = {"crc": None, "input_errors": None, "output_errors": None, "output_drops": None}
     before = _counters(EARLIER, **{UPLINK: _reading(), quiet: _reading(), reset: _reading(), blank: _reading(**unreadable)})
     now = _counters(LATER, **{UPLINK: _reading(crc=5), quiet: _reading(), reset: _reading(cleared="00:10:00"),
                               new: _reading(), blank: _reading(**unreadable)})
@@ -320,13 +373,20 @@ async def test_collection_phase_reads_the_counters_after_the_service_step(monkey
     monkeypatch.setattr(coordinator, "run_isis_spine", isis_spine)
     monkeypatch.setattr(coordinator, "run_bgp_spine", bgp_spine)
     monkeypatch.setattr("diagnostic_mas.port_counters.call_mcp", _call({(RUTG, f"interfaces {UPLINK}"): SHOWN}, asked))
+    optics_asked: list = []
+    monkeypatch.setattr("diagnostic_mas.link_optics.call_mcp", _call({}, optics_asked))   # the sweep after the counters
+    overload_asked: list = []
+    monkeypatch.setattr("diagnostic_mas.isis_overload.call_mcp", _call({}, overload_asked))  # the database read after it
 
     await coordinator.run_mandatory_spines(None, None, case, [RUTG, HUB], physical_edges=[], max_port_counter_reads=400)
-    assert len(asked) == 4 and case_to_dict(case)["evidence"][-1]["kind"] == "port_counters"
+    kinds = [ev["kind"] for ev in case_to_dict(case)["evidence"]]
+    assert len(asked) == 4 and kinds[-3:] == ["port_counters", "link_optics", "isis_overload"]   # counters, sweep, database
+    assert overload_asked and {command for _, command in overload_asked} == {"isis database level 2"}
+    assert optics_asked == [(RUTG, f"controllers {UPLINK}")]                         # the one port the counters found up
 
-    quiet, asked[:] = CaseFile(budget=Budget(0, 0)), []
+    quiet, asked[:], optics_asked[:] = CaseFile(budget=Budget(0, 0)), [], []
     await coordinator.run_mandatory_spines(None, None, quiet, [RUTG, HUB], physical_edges=[], max_port_counter_reads=0)
-    assert asked == []
+    assert asked == [] and optics_asked == []                                        # no counters, so nothing to sweep
 
 
 # --- a device without a CLI exec action (Ciena) ---------------------------------
@@ -518,3 +578,16 @@ def test_the_changes_section_counts_links_not_ports():
         "salt-data-sw:HundredGigE0/0/0/17": {"transitions": 44}, "kans-data-sw:HundredGigE0/0/0/23": {"transitions": 44}}))
     text = "\n".join(format_changes_since_previous({"links_gaining_errors": rows}))
     assert text.count("one IS-IS link") == 1 and "…and" not in text
+
+
+def test_the_metrics_snapshot_carries_the_busiest_links_only_when_a_port_was_busy():
+    from diagnostic_mas.metrics import metrics_snapshot_from_case
+
+    case = CaseFile(budget=Budget(0, 0))
+    add_evidence(case, {"kind": "port_counters", "role": "physical", "payload": {
+        "read_at": LATER, "ports": {f"{RUTG}:HundredGigE0/0/0/1": _busy()}}})
+    assert "link_utilization" not in metrics_snapshot_from_case(case)         # nothing carried traffic: no series
+
+    case.evidence[0]["payload"]["ports"][f"{RUTG}:HundredGigE0/0/0/1"] = _busy(rate_out_bps=25_000_000_000)
+    assert metrics_snapshot_from_case(case)["link_utilization"] == [
+        {"device": RUTG, "port": "HundredGigE0/0/0/1", "direction": "out", "percent": 25.0}]

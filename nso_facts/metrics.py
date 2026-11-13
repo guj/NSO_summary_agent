@@ -258,6 +258,21 @@ def build_phase1_metrics(
     if state_changes:
         lines += ["# TYPE nso_link_state_changes gauge", *state_changes]
 
+    # The busiest port directions of the scan (the device's 5-minute rate over the port's bandwidth), a few only:
+    # each push replaces the last, so a port that is no longer among them drops off.
+    busy = [g("nso_link_utilization_percent", float(row["percent"]),
+              {"device": str(row["device"]), "port": str(row["port"]), "direction": str(row["direction"])})
+            for row in snapshot.get("link_utilization") or [] if isinstance(row, dict) and row.get("percent") is not None]
+    if busy:
+        lines += ["# TYPE nso_link_utilization_percent gauge", *busy]
+
+    # The sweep of ports on links that are up: how many report an optics alarm of their own (a lead, not a status)
+    # out of how many were read. Absent when the scan did not sweep, so a gap is not drawn as zero alarms.
+    optics = snapshot.get("optics")
+    if isinstance(optics, dict):
+        lines += ["# TYPE nso_optics_alarm_ports gauge", g("nso_optics_alarm_ports", float(_intish(optics.get("alarm_ports")))),
+                  "# TYPE nso_optics_ports_read gauge", g("nso_optics_ports_read", float(_intish(optics.get("ports_read"))))]
+
     return lines
 
 

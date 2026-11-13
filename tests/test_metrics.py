@@ -404,3 +404,23 @@ def test_cpu_and_memory_are_exported_per_device_so_a_dashboard_can_show_the_busi
 def test_without_health_data_no_per_device_series_are_exported():
     text, got = _device_gauges({})
     assert got == {} and "nso_device_cpu_five_min_percent" not in text
+
+
+def test_the_optics_sweep_is_exported_as_alarm_ports_and_ports_read_only_when_it_ran():
+    text = "\n".join(build_phase1_metrics({"optics": {"alarm_ports": 2, "ports_read": 311}}, success=True,
+                                          duration_seconds=1, timestamp_seconds=1, pipeline="agent"))
+    assert 'nso_optics_alarm_ports{pipeline="agent"} 2.0' in text and 'nso_optics_ports_read{pipeline="agent"} 311.0' in text
+
+    quiet = "\n".join(build_phase1_metrics({}, success=True, duration_seconds=1, timestamp_seconds=1, pipeline="agent"))
+    assert "nso_optics_alarm_ports" not in quiet and "nso_optics_ports_read" not in quiet
+
+
+def test_the_busiest_links_are_exported_with_their_share_of_bandwidth_and_only_when_there_are_any():
+    rows = [{"device": "a-sw", "port": "HundredGigE0/0/0/1", "direction": "in", "percent": 94.0}]
+    text = "\n".join(build_phase1_metrics({"link_utilization": rows}, success=True, duration_seconds=1,
+                                          timestamp_seconds=1, pipeline="agent"))
+    assert ('nso_link_utilization_percent{device="a-sw",direction="in",pipeline="agent",'
+            'port="HundredGigE0/0/0/1"} 94.0') in text
+
+    quiet = "\n".join(build_phase1_metrics({}, success=True, duration_seconds=1, timestamp_seconds=1, pipeline="agent"))
+    assert "nso_link_utilization_percent" not in quiet

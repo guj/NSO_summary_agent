@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from diagnostic_mas.case import Budget, CaseFile, open_issue
-from diagnostic_mas.link_optics import KIND, optics_line, parse_optics, record_link_optics
+from diagnostic_mas.link_optics import KIND, gaining_error_ends, optics_line, parse_optics, record_link_optics
 from diagnostic_mas.operator_report import format_devices_operator, format_run_details
 from nso_facts.topology.graph import isis_edge_id
 
@@ -239,10 +239,13 @@ async def test_a_link_gaining_errors_has_both_ends_read_even_though_it_is_up():
 
 
 @pytest.mark.asyncio
-async def test_nothing_extra_is_read_when_no_link_gained_errors_and_an_adjacency_down_keeps_its_place():
+async def test_no_port_is_read_as_gaining_errors_when_none_did_and_an_adjacency_down_keeps_its_place():
     quiet, asked = _gaining_case(crc=0), []
     await record_link_optics(None, quiet, call=_call(OUTPUTS, asked))
-    assert asked == [] and not [ev for ev in quiet.evidence if ev["kind"] == KIND]
+    saved = [ev["payload"] for ev in quiet.evidence if ev["kind"] == KIND][0]
+    # The two ports are up, so the sweep reads them, but not as ends of a link that gained errors.
+    assert sorted(asked) == sorted(OUTPUTS) and (saved["also_gaining"], saved["wanted"]) == (0, 0)
+    assert len(saved["swept"]) == 2
 
     both, asked = _gaining_case(), []
     open_issue(both, code="unidirectional_adjacency", severity="high", layer="underlay", evidence_ids=[],
@@ -461,3 +464,228 @@ async def test_a_parent_read_that_cannot_be_parsed_leaves_the_lane_not_read():
 
     saved = [ev["payload"] for ev in case.evidence if ev["kind"] == KIND][0]
     assert saved["ports"] == {} and saved["wanted"] == 2                 # the lane and its far end, neither readable
+
+
+# --- a follow-up item when the device itself reports an optics alarm on a link that gained errors ------------------
+
+async def _alarmed_rows(*, far_read: bool):
+    from diagnostic_mas.link_optics import with_optics
+    from diagnostic_mas.port_counters import links_gaining_errors
+
+    case = _lane_case(port="HundredGigE0/0/0/64/2")
+    outputs = {("star-data-sw", "controllers optics 0/0/0/64"): STAR_PARENT}
+    if far_read:
+        outputs[("seat-data-sw", "controllers HundredGigE0/0/0/19")] = NEWY_TEXT
+    await record_link_optics(None, case, call=_call(outputs, []))
+    older = {"evidence": [{"kind": "port_counters", "payload": case.previous_port_counters}]}
+    newer = {"evidence": case.evidence}
+    return with_optics(links_gaining_errors(older, newer), newer)
+
+
+@pytest.mark.asyncio
+async def test_a_row_keeps_the_alarm_the_device_reported_as_data_not_only_as_text():
+    rows = await _alarmed_rows(far_read=True)
+
+    [alarm] = rows[0]["optics_alarms"]
+    assert (alarm["device"], alarm["port"], alarm["alarms"]) == ("star-data-sw", "HundredGigE0/0/0/64/2", "LOW-RX3-PWR")
+    assert (alarm["rx_dbm"], alarm["rx_low_alarm_dbm"], alarm["parent"], alarm["lane"]) == (-40.0, -8.9, "0/0/0/64", 2)
+    assert alarm["other"] == {"device": "seat-data-sw", "tx": "+1.1 to +1.7"}
+
+
+@pytest.mark.asyncio
+async def test_no_alarm_data_when_the_device_reports_none():
+    from diagnostic_mas.link_optics import with_optics
+    from diagnostic_mas.port_counters import links_gaining_errors
+
+    case = _gaining_case()
+    await record_link_optics(None, case, call=_call(OUTPUTS, []))
+    older, newer = _scans(case)
+
+    assert "optics_alarms" not in with_optics(links_gaining_errors(older, newer), newer)[0]
+
+
+@pytest.mark.asyncio
+async def test_the_follow_up_list_names_a_receive_level_below_the_devices_own_alarm_and_the_far_ends_transmit():
+    from diagnostic_mas.operator_report import format_followup_operator
+
+    rows = await _alarmed_rows(far_read=True)
+    delta = {"links_gaining_errors": rows, "item_history": {}}
+
+    items = format_followup_operator(CaseFile(budget=Budget(0, 0)), None, case_delta=delta)
+
+    assert items == [
+        "1. Investigate `star-data-sw` HundredGigE0/0/0/64/2 (lane 2 of 0/0/0/64): the device reports its receive level "
+        "(-40.0 dBm) below its low alarm (-8.9 dBm, LOW-RX3-PWR) while `seat-data-sw` transmits +1.1 to +1.7 dBm; "
+        "the port gained errors since the previous scan."]
+
+
+@pytest.mark.asyncio
+async def test_the_item_leaves_out_the_far_end_when_it_was_not_read_and_the_list_is_none_without_alarms():
+    from diagnostic_mas.operator_report import format_followup_operator
+
+    rows = await _alarmed_rows(far_read=False)
+    items = format_followup_operator(CaseFile(budget=Budget(0, 0)), None, case_delta={"links_gaining_errors": rows})
+    assert items[0].endswith("(-8.9 dBm, LOW-RX3-PWR); the port gained errors since the previous scan.")
+    assert "while" not in items[0]
+
+    quiet = [{k: v for k, v in rows[0].items() if k != "optics_alarms"}]
+    assert format_followup_operator(CaseFile(budget=Budget(0, 0)), None, case_delta={"links_gaining_errors": quiet}) == ["(none)"]
+    assert format_followup_operator(CaseFile(budget=Budget(0, 0)), None) == ["(none)"]
+
+
+# --- a sweep of the ports on links that are up: a transceiver in alarm before anything else shows --------------------
+
+A_SW = "a-sw"
+LOW = "Rx Power Low Alarm"
+
+
+def _sweep_case() -> CaseFile:
+    """Counters were read on six ports; no adjacency is down and nothing gained errors."""
+    def up(**changed):
+        return _port(**changed)
+    case = CaseFile(budget=Budget(0, 0))
+    case.evidence = [{"id": "ev_1", "kind": "port_counters", "role": "physical", "payload": {
+        "read_at": "2026-10-22T19:00:00+00:00", "ports": {
+            f"{A_SW}:HundredGigE0/0/0/1": up(), f"{A_SW}:HundredGigE0/0/0/2": up(),
+            f"{A_SW}:HundredGigE0/0/0/3": up(state="down"),                       # down: not a link that is up
+            f"{A_SW}:Bundle-Ether100": up(),                                       # a bundle has no optics of its own
+            "star-data-sw:HundredGigE0/0/0/64/0": up(), "star-data-sw:HundredGigE0/0/0/64/1": up()}}}]
+    return case
+
+
+SWEEP_OUTPUTS = {
+    (A_SW, "controllers HundredGigE0/0/0/1"): _controllers("Thu Oct 22 19:03:23.557 UTC", [(1.7, -2.5)]),
+    (A_SW, "controllers HundredGigE0/0/0/2"): _controllers("Thu Oct 22 19:03:24.000 UTC", [(1.1, -12.4)], alarms=LOW),
+    ("star-data-sw", "controllers optics 0/0/0/64"): STAR_PARENT,
+}
+
+
+@pytest.mark.asyncio
+async def test_the_sweep_reads_each_port_that_is_up_once_and_a_breakout_parent_once():
+    case, asked = _sweep_case(), []
+
+    await record_link_optics(None, case, call=_call(SWEEP_OUTPUTS, asked))
+
+    assert sorted(asked) == sorted(SWEEP_OUTPUTS)                        # not the down port, not the bundle
+    saved = [ev["payload"] for ev in case.evidence if ev["kind"] == KIND][0]
+    assert saved["swept"] == [f"{A_SW}:HundredGigE0/0/0/1", f"{A_SW}:HundredGigE0/0/0/2",
+                              "star-data-sw:HundredGigE0/0/0/64/0", "star-data-sw:HundredGigE0/0/0/64/1"]
+    assert sorted(saved["ports"]) == saved["swept"]
+    assert (saved["wanted"], saved["also_gaining"]) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_port_already_read_for_a_link_gaining_errors_is_not_swept_again():
+    case, asked = _gaining_case(), []
+    await record_link_optics(None, case, call=_call(OUTPUTS, asked))
+
+    saved = [ev["payload"] for ev in case.evidence if ev["kind"] == KIND][0]
+    assert sorted(asked) == sorted(OUTPUTS) and saved["swept"] == []
+
+
+@pytest.mark.asyncio
+async def test_the_sweep_stops_at_its_own_limit_and_says_so(monkeypatch):
+    import diagnostic_mas.link_optics as lo
+
+    monkeypatch.setattr(lo, "SWEEP_CEILING", 1)
+    case, asked = _sweep_case(), []
+    await record_link_optics(None, case, call=_call(SWEEP_OUTPUTS, asked))
+
+    saved = [ev["payload"] for ev in case.evidence if ev["kind"] == KIND][0]
+    assert len(asked) == 1 and saved["sweep_left_out"] == 3
+
+
+@pytest.mark.asyncio
+async def test_only_swept_ports_with_an_alarm_of_their_own_are_leads():
+    from diagnostic_mas.link_optics import optics_alarm_leads
+
+    case = _sweep_case()
+    await record_link_optics(None, case, call=_call(SWEEP_OUTPUTS, []))
+
+    leads = optics_alarm_leads(case)
+
+    assert [(lead["device"], lead["port"], lead["alarms"]) for lead in leads] == [
+        (A_SW, "HundredGigE0/0/0/2", LOW), ("star-data-sw", "HundredGigE0/0/0/64/1", "LOW-RX2-PWR")]
+    assert leads[1]["parent"] == "0/0/0/64" and leads[1]["lane"] == 1
+    assert optics_alarm_leads(CaseFile(budget=Budget(0, 0))) == []
+
+
+@pytest.mark.asyncio
+async def test_the_run_details_say_how_many_swept_ports_were_read_and_how_many_have_an_alarm():
+    case = _sweep_case()
+    await record_link_optics(None, case, call=_call(SWEEP_OUTPUTS, []))
+
+    assert ("sweep of ports on links that are up: 4 of 4 read, 2 with an alarm"
+            in "\n".join(format_run_details(case)))
+
+
+@pytest.mark.asyncio
+async def test_the_follow_up_list_and_the_result_name_the_alarms_as_a_lead_not_a_status():
+    from diagnostic_mas.operator_report import format_followup_operator, format_result_section
+
+    case = _sweep_case()
+    await record_link_optics(None, case, call=_call(SWEEP_OUTPUTS, []))
+
+    assert format_followup_operator(case) == [
+        "1. Investigate the optics alarms the devices themselves report on 2 links that are up: "
+        f"`{A_SW}` HundredGigE0/0/0/2 ({LOW}), `star-data-sw` HundredGigE0/0/0/64/1 (lane 1 of 0/0/0/64, LOW-RX2-PWR). "
+        "No service status rests on them."]
+    result = "\n".join(format_result_section(case, None))
+    assert "- **Optics alarms:** 2 ports on links that are up report an optics alarm of their own (a lead, not a status)." in result
+    quiet = _sweep_case()
+    await record_link_optics(None, quiet, call=_call({k: v for k, v in SWEEP_OUTPUTS.items() if "64" in k[1]
+                                                      and False}, []))
+    assert "Optics alarms" not in "\n".join(format_result_section(quiet, None))
+
+
+@pytest.mark.asyncio
+async def test_many_alarms_are_listed_five_and_then_counted():
+    from diagnostic_mas.operator_report import format_followup_operator
+
+    case = CaseFile(budget=Budget(0, 0))
+    ports = {f"{A_SW}:HundredGigE0/0/0/{n}": _port() for n in range(1, 9)}
+    case.evidence = [{"id": "ev_1", "kind": "port_counters", "role": "physical", "payload": {
+        "read_at": "2026-10-22T19:00:00+00:00", "ports": ports}}]
+    outputs = {(A_SW, f"controllers HundredGigE0/0/0/{n}"): _controllers("Thu Oct 22 19:03:24.000 UTC", [(1.1, -12.4)], alarms=LOW)
+               for n in range(1, 9)}
+    await record_link_optics(None, case, call=_call(outputs, []))
+
+    [item] = format_followup_operator(case)
+    assert "on 8 links that are up: " in item and item.count("HundredGigE0/0/0/") == 5 and "and 3 more" in item
+
+
+@pytest.mark.asyncio
+async def test_the_metrics_snapshot_carries_the_sweep_counts_only_when_the_sweep_ran():
+    from diagnostic_mas.metrics import metrics_snapshot_from_case
+
+    case = _sweep_case()
+    assert "optics" not in metrics_snapshot_from_case(case)               # no sweep yet: no claim of zero alarms
+
+    await record_link_optics(None, case, call=_call(SWEEP_OUTPUTS, []))
+
+    assert metrics_snapshot_from_case(case)["optics"] == {"alarm_ports": 2, "ports_read": 4}
+
+
+@pytest.mark.asyncio
+async def test_a_port_that_only_gained_output_drops_is_not_read_for_light_but_one_that_also_gained_crc_is():
+    drops = _gaining_case(crc=0)
+    drops.evidence[1]["payload"]["ports"][f"{RUTG}:HundredGigE0/0/0/23"]["output_drops"] = 900
+    assert gaining_error_ends(drops) == []                                   # congestion is not a light question
+
+    both = _gaining_case()
+    both.evidence[1]["payload"]["ports"][f"{RUTG}:HundredGigE0/0/0/23"]["output_drops"] = 900
+    assert (RUTG, "HundredGigE0/0/0/23") in gaining_error_ends(both)
+
+
+def test_a_lane_row_with_a_flag_after_its_bias_is_still_a_lane():
+    """wash FourHundredGigE0/0/0/64 on 13 Nov: three of its four lanes carry a flag, and only the unflagged lane was read."""
+    text = _controllers("Fri Nov 13 04:59:07.000 UTC", [(2.1, 4.1), (2.2, 3.4), (2.1, 1.6), (2.2, 3.3)],
+                        alarms="Receive Power: Alarm high")
+    text = (text.replace("4.1   0.1000     55.000", "4.1   0.1000     55.000   H - Rx alarm high")
+                .replace("3.4   0.1000     55.000", "3.4   0.1000     55.000   h - Rx warning high")
+                .replace("3.3   0.1000     55.000", "3.3   0.1000     55.000   h - Rx warning high"))
+
+    parsed = parse_optics(text)
+
+    assert [(lane["lane"], lane["rx_dbm"]) for lane in parsed["lanes"]] == [(0, 4.1), (1, 3.4), (2, 1.6), (3, 3.3)]
+    assert parsed["alarms"] == "Receive Power: Alarm high"

@@ -674,15 +674,15 @@ Each scan reads the error counters of every port that carries a service attachme
 an IS-IS adjacency: one `show interfaces <port>` per port, in the collection phase after
 the service step, within `--max-port-counter-reads`. The readings are saved with the scan.
 The next scan subtracts, and **Changes since previous run** lists a port under **Links
-gaining errors while up** when it is up now and its CRC, input-error or output-error
-count grew, or its state-transition count grew (it went down and came back). The list is
+gaining errors while up** when it is up now and its CRC, input-error, output-error or
+output-drop count grew, or its state-transition count grew (it went down and came back). The list is
 ordered by size: most errors gained first, then links that only changed state. The Slack and
 email digest carries the three largest, one per line. Each line says what the port carries and,
 for three services or fewer, names them, so a service that passed its check can be matched
 with a port that kept going down and coming back.
 
-This is a lead, never a status: no service changes state because of it. Drops alone are
-not listed. A port that this scan's interface read found down and its counter read found up
+This is a lead, never a status: no service changes state because of it. Input drops alone are
+not listed (ACL denies, unknown protocol and other benign causes); output drops are, as a count, with no cause named. A port that this scan's interface read found down and its counter read found up
 again is listed under **Interfaces up in the previous run, down now** instead, marked "up again
 later in this scan" with its changes: it changed state during the scan, and its services may be
 Down or Degraded because of it. A port is not compared when it was not read in both scans,

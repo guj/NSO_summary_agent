@@ -32,6 +32,8 @@ def test_dashboard_queries_only_metrics_a_scan_pushes():
     # A series exists only for a device that gave a reading, so the sample scan needs one.
     snapshot["system_health"] = {**(snapshot.get("system_health") or {}),
                                  "salt-data-sw": {"cpu": {"five_min": 10}, "memory": {"used_pct": 20.0}}}
+    snapshot["optics"] = {"alarm_ports": 0, "ports_read": 310}      # the sweep ran, so its gauges are pushed
+    snapshot["link_utilization"] = [{"device": "salt-data-sw", "port": "HundredGigE0/0/0/0", "direction": "in", "percent": 12.5}]
     pushed = {
         re.match(r"[a-z0-9_]+", line).group(0)
         for line in build_phase1_metrics(snapshot, success=True, duration_seconds=1.0,

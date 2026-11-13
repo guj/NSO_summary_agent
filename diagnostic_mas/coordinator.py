@@ -152,6 +152,10 @@ async def run_mandatory_spines(
         from diagnostic_mas.link_optics import record_link_optics
 
         await record_link_optics(client, case, workers=spine_concurrent_devices)
+        # The overload bit of every router, from one read of the link-state database.
+        from diagnostic_mas.isis_overload import record_isis_overload
+
+        await record_isis_overload(client, case)
 
     if run_device:
         spine = await run_device_health_spine(client, settings, device_names)

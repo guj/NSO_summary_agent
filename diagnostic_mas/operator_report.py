@@ -2065,7 +2065,8 @@ def _fault_location(record: dict[str, Any]) -> tuple[tuple[str, ...], bool]:
     return tuple(sorted({str(d) for d in record.get("devices") or [] if d})), False
 
 
-def format_followup_operator(case: CaseFile, newness: Newness | None = None) -> list[str]:
+def format_followup_operator(case: CaseFile, newness: Newness | None = None,
+                             case_delta: dict[str, Any] | None = None) -> list[str]:
     """Ordered operator actions: service faults → collection → gaps → inventory.
 
     Each item names a target and what resolving it achieves. Avoid generic
@@ -2084,6 +2085,9 @@ def format_followup_operator(case: CaseFile, newness: Newness | None = None) -> 
                             + _decided_fault_followups(case, records, dp_findings, fault_names, newness)
                             + _last_known_fault_followups(case, fault_names, newness))
     items += order_new_first(_routing_followups(case, newness))
+    items += order_new_first(_optics_alarm_followups(case_delta))
+    items += order_new_first(_optics_sweep_followups(case))
+    items += order_new_first(_isis_overload_followups(case))
     items += order_new_first(_device_access_followups(case, newness))
     # Do not add generic "retry service sync" / "reassess all unknowns" —
     # per-device actions above already state what they resolve.
@@ -2096,6 +2100,64 @@ def format_followup_operator(case: CaseFile, newness: Newness | None = None) -> 
     if not out:
         return ["(none)"]
     return [f"{i}. {item}" for i, item in enumerate(out, start=1)]
+
+
+def _isis_overload_followups(case: CaseFile) -> list[tuple[str | None, str]]:
+    """Routers that advertise the IS-IS overload bit: one lead, five named, no status."""
+    from diagnostic_mas.isis_overload import _saved, isis_overload_leads
+
+    leads = isis_overload_leads(case)
+    if not leads:
+        return []
+    shown = ", ".join(f"`{name}`" for name in leads[:5]) + (f" and {len(leads) - 5} more" if len(leads) > 5 else "")
+    many = len(leads) != 1
+    return [(None, f"Check whether the IS-IS overload bit is intended on {shown}: "
+                   f"{'each advertises' if many else 'it advertises'} it in the database read from "
+                   f"`{(_saved(case) or {}).get('read_on')}`, and IS-IS routers avoid sending transit through a router "
+                   f"that does. No service status rests on it.")]
+
+
+def _optics_sweep_followups(case: CaseFile) -> list[tuple[str | None, str]]:
+    """Ports on links that are up whose own device reports an optics alarm: one lead, five named, no status."""
+    from diagnostic_mas.link_optics import optics_alarm_leads
+
+    leads = optics_alarm_leads(case)
+    if not leads:
+        return []
+    shown = ", ".join(
+        f"`{lead['device']}` {lead['port']} ("
+        + (f"lane {lead['lane']} of {lead['parent']}, " if lead.get("parent") else "") + f"{lead['alarms']})"
+        for lead in leads[:5]) + (f", and {len(leads) - 5} more" if len(leads) > 5 else "")
+    many = len(leads) != 1
+    return [(None, "Investigate the optics alarms the devices themselves report on "
+                   f"{len(leads)} link{'s' if many else ''} that {'are' if many else 'is'} up: {shown}. "
+                   f"No service status rests on {'them' if many else 'it'}.")]
+
+
+def _optics_alarm_followups(delta: dict[str, Any] | None) -> list[tuple[str | None, str]]:
+    """A link that gained errors while an end's own device reports an optics alarm: the readings, no cause."""
+    from diagnostic_mas.item_history import clause_for, link_key
+
+    history = (delta or {}).get("item_history")
+    items: list[tuple[str | None, str]] = []
+    seen: set[tuple[str, str | None]] = set()
+    for row in (delta or {}).get("links_gaining_errors") or []:
+        for alarm in row.get("optics_alarms") or []:
+            if (alarm["device"], alarm["port"]) in seen:
+                continue
+            seen.add((alarm["device"], alarm["port"]))
+            lane = f" (lane {alarm['lane']} of {alarm['parent']})" if alarm.get("parent") else ""
+            rx, low = alarm.get("rx_dbm"), alarm.get("rx_low_alarm_dbm")
+            why = (f"its receive level ({rx:.1f} dBm) below its low alarm ({low:.1f} dBm, {alarm['alarms']})"
+                   if rx is not None and low is not None and rx < low else f"the optics alarm {alarm['alarms']}")
+            other = alarm.get("other") or {}
+            far = f" while `{other['device']}` transmits {other['tx']} dBm" if other.get("tx") else ""
+            moved = ("the port gained errors since the previous scan" if row.get("gained") else
+                     f"the port changed state {row.get('state_changes') or 0} times since the previous scan")
+            clause = clause_for(history, link_key(str(row["device"]), str(row["port"])), "listed")
+            items.append((None, f"Investigate `{alarm['device']}` {alarm['port']}{lane}: the device reports {why}{far}; "
+                                f"{moved}{'; ' + clause if clause else ''}."))
+    return items
 
 
 def _service_fault_followups(
@@ -2864,6 +2926,16 @@ def _result_parts(case: CaseFile) -> list[tuple[str, str, Any]]:
     if outside_n:
         out.append(("Outside BGP", f"{outside_n} outside BGP session{'s' if outside_n != 1 else ''} not established.",
                     _issue_tag(coded("outside_bgp_session_not_established"))))
+    from diagnostic_mas.link_optics import optics_alarm_leads
+
+    if leads := optics_alarm_leads(case):
+        out.append(("Optics alarms", f"{len(leads)} port{'s' * (len(leads) != 1)} on links that are up report "
+                    f"an optics alarm of their own (a lead, not a status).", None))
+    from diagnostic_mas.isis_overload import isis_overload_leads
+
+    if overloaded := isis_overload_leads(case):
+        out.append(("IS-IS overload", f"{len(overloaded)} router{'s' * (len(overloaded) != 1)} "
+                    f"advertise{'s' * (len(overloaded) == 1)} the overload bit (a lead, not a status).", None))
     health_flags = [r for r in _device_rows(case) if _device_has_health_review(r)]
     if health_flags:
         out.append(("Inventory", "Device inventory/counter observations need classification "
@@ -3012,9 +3084,10 @@ def format_run_details(
             + (f"; {kept} port{'s' if kept != 1 else ''} explained by "
                + ("an earlier scan's finding" if kept == 1 else "earlier scans' findings") if kept else ""))
     from diagnostic_mas.link_lldp import lldp_reads_line
+    from diagnostic_mas.isis_overload import overload_reads_line
     from diagnostic_mas.link_optics import optics_reads_line
 
-    for reads in (lldp_reads_line(case), optics_reads_line(case)):
+    for reads in (lldp_reads_line(case), optics_reads_line(case), overload_reads_line(case)):
         if reads:
             lines.append(reads)
     if any((b.max_deep_checks, b.max_handoffs, b.deep_checks_used, b.handoffs_used)):

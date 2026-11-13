@@ -248,6 +248,8 @@ It also pushes:
 | `nso_fleet_devices_not_covered` | Devices dropped or not collected in the scan |
 | `nso_link_crc_per_minute{device,port}` | CRC errors per minute on a link that is up, averaged over the gap since the previous scan; only links that gained CRC errors |
 | `nso_link_state_changes{device,port}` | Times such a link went down or up since the previous scan; only links that changed |
+| `nso_optics_alarm_ports` / `nso_optics_ports_read` | Ports on links that are up whose own device reports an optics alarm, and the ports the sweep read (a lead, not a status); absent when the scan did not sweep |
+| `nso_link_utilization_percent{device,port,direction}` | The ten busiest port directions of the scan: the device's 5-minute rate over the port's bandwidth, one reading per scan (not a peak or a daily average); idle ports, ports that are down and devices read without CLI are left out; absent when no port carried traffic |
 | `nso_scan_info{run_id,report_url}` | The scan the values come from; the link needs `DIAGNOSTIC_REPORT_BASE_URL` |
 | `nso_scan_last_attempt_state` | How the most recent attempt ended, in one value: 0 ok, 1 failed, 2 NSO unreachable |
 | `nso_scan_last_attempt_success`, `nso_scan_last_attempt_nso_unreachable`, `nso_scan_last_attempt_timestamp_seconds` | The same as two 0/1 gauges, and when it ended |

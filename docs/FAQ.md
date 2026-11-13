@@ -236,6 +236,33 @@ receive low-alarm threshold: "star-data-sw HundredGigE0/0/0/64/2 (lane 2 of 0/0/
 with no optics sentence means none was read, including a device whose optics output is not in this layout. The reads
 count under the same 20-read limit, after the adjacencies down, and the run details say how many were for these links.
 
+When the device itself reports an optics alarm at one end of such a link (for a breakout lane, an alarm that names
+that lane), the Recommended follow-up list also has an item for it, written from the readings and not by the LLM:
+"Investigate `toky-data-sw` TenGigE0/0/0/18/0 (lane 0 of 0/0/0/18): the device reports its receive level (-18.3 dBm)
+below its low alarm (-16.4 dBm, LOW-RX1-PWR) while `seat-data-sw` transmits +1.1 to +1.8 dBm; the port gained errors
+since the previous scan." The alarm is the device's own, never a threshold of the agent's, and the item names no cause
+and proposes no change. A link whose ends read no alarm gets no item.
+
+The same read is made on every other physical port that is up and whose counters the scan reads (about 310 on the
+last scan), because a transceiver can sit in alarm on a link that has not gained an error yet. A port whose own device
+reports an alarm is listed in one Recommended follow-up item ("Investigate the optics alarms the devices themselves
+report on 2 links that are up: `a-sw` HundredGigE0/0/0/2 (Rx Power Low Alarm), … No service status rests on them."),
+five named and then "and N more", with an "Optics alarms" line in the Result when there is any. It is a lead, not a
+status or an issue: the alarm is the device's own, no service, count or drill rests on it, and the agent does not say
+whether it is the optic, the fibre or the far end. Bundles are not read (they have no optics of their own), nor are
+ports that are down. The sweep has a limit of 400 reads, separate from the 20 above; the run details say how many
+ports were read, how many have an alarm and how many the limit left out. `nso_optics_alarm_ports` counts them for the
+dashboard. These reads are extra `show` calls on every scan; how much longer they make a scan is not yet measured.
+
+Once per scan the agent also reads the IS-IS link-state database (`show isis database level 2`) on one router that has
+an adjacency, and lists the routers whose entry has the overload bit set: "Check whether the IS-IS overload bit is
+intended on `X`: it advertises it in the database read from `Y`, and IS-IS routers avoid sending transit through a
+router that does. No service status rests on it." The run details' "IS-IS overload bit" line says which router was
+read, how many routers the table listed and how many set the bit (or "not read" after three routers gave no table).
+The bit is set on purpose during maintenance as often as it is left on by mistake, and the agent cannot tell them
+apart, so it is a lead and not a fault; there is no metric for it. A router missing from the table is not reported
+here: the adjacency checks cover that.
+
 "Packets since the previous scan (11 h 20 min): A → B: N sent, M received; B → A: …" subtracts the last published
 scan's packet counters from this scan's at both ends, so what one end sent is set against what the other received
 over the same time. The counts are for the whole port, every VLAN on it. When both scans counted bytes, "(bytes: X
@@ -428,6 +455,28 @@ case set `NSO_SERVICE_SYNC_MODE=skip`: the per-service sync calls are skipped an
 sync is taken from the endpoint devices' fleet sync instead. The default is `check`.
 
 ---
+
+### Why doesn't the report say which NSO change a fault came after?
+
+The agent does not read NSO's rollback list (`get_rollback_list`), the record of every commit with its number, who made
+it, when, and its label and comment. Collecting it was proposed to say "NSO commit 1247 by someone touched this
+device in the window" beside a newly failed service. It was left out on 2 Nov 2026, and again on 13 Nov when the
+proposal came back, for these reasons:
+
+- The list is NSO's whole commit list, not a device's. Finding the devices a commit touched needs one more read per
+  commit and parsing of each.
+- The window between two scans is 2 to 28 hours, and service owners create and delete services through NSO all the
+  time. Some commit touching a given device is almost always in that window, so the sentence would nearly always be
+  true and tell the reader little. A commit in the same window is in any case a correlation, not a cause.
+- A change made directly on a device does not appear in NSO's list. It shows as out of sync, which the report
+  already reads and shows (see "What do the NSO sync values mean?").
+- The faults seen so far (dark breakout ports, cien-data-sw's isolation, salt-data-sw ↔ seat-data-sw) were physical
+  or remote, not NSO commits. A service created since the previous scan is already told apart by comparing scans.
+- Whether the rollback records can be read on this NSO was never checked.
+
+To see what changed in NSO around a fault, use NSO's own commit list (`show configuration commit list` in the NSO
+CLI). To revisit this: read the list once and count the commits in a typical window; if only a few fall in one, the
+sentence would carry information.
 
 ## Metrics
 

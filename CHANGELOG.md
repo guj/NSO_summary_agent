@@ -8,6 +8,34 @@ status, count or phrase in the report means, so read it first.
 
 ### Report meaning
 
+- **IS-IS overload bit:** each scan now reads the IS-IS link-state database once (`show isis database level 2`, on
+  the first router with an adjacency; the next is asked if it gives no table, three tries at most) and lists the
+  routers that advertise the overload bit: one Recommended follow-up item ("Check whether the IS-IS overload bit is
+  intended on `X`: …"), an "IS-IS overload" line in the Result when any is set, and an "IS-IS overload bit" line in the
+  run details ("read on `Y`: 33 routers, none set", or "not read"). It is a lead: the bit is often set on purpose during
+  maintenance and the agent cannot tell that from a router left in overload, so no issue, drill, status or count rests
+  on it. Before, the bit was not read anywhere. One extra read per scan. On the 12 Nov tables no router set it, so the
+  "set" case has only been tested against a constructed reply.
+- **Links gaining errors while up:** a port whose output drops grew is now listed ("+900 output drops"), even with
+  no CRC, no state change and no adjacency loss. Before, drops were never listed. The line states the count only: on
+  IOS XR this counter includes drops by a QoS policy as well as congestion, so no cause is named. Input drops stay out
+  (ACL denies and other benign causes). The ports are not read for light unless they also gained errors or changed
+  state. On 11 to 13 Nov no port gained output drops (all 327 read 0), so the list would not have changed.
+- **Optics alarms:** the optics of every physical port that is up and whose counters the scan reads (about 310 of
+  327 on the last scan) are now read, not only the ends of adjacencies down and of links gaining errors. A port whose
+  own device reports a DOM alarm gives one Recommended follow-up item ("Investigate the optics alarms the devices
+  themselves report on 2 links that are up: …", five named, then "and N more") and, when there is any, an "Optics
+  alarms" line in the Result. It is a lead: the alarm is the device's own, no service status, count or issue rests
+  on it, and no cause is named. Ports already read for an adjacency down or a link gaining errors keep their own
+  report line. The reads are about 310 more `show` calls per scan (on about 9,000), under a limit of 400 reads of
+  their own that never takes reads from the 20 above; the run details' Optics reads line says how many were read,
+  how many have an alarm and how many the limit left out. How much longer a scan takes is not yet measured.
+- **Recommended follow-up:** a link that gained errors while the device itself reports an optics alarm at one end now
+  has its own item ("Investigate `toky-data-sw` TenGigE0/0/0/18/0 (lane 0 of 0/0/0/18): the device reports its
+  receive level (-18.3 dBm) below its low alarm (-16.4 dBm, LOW-RX1-PWR) while `seat-data-sw` transmits +1.1 to
+  +1.8 dBm; …"). Before, the finding appeared only in the "Links gaining errors while up" lead line and, on 13 Nov,
+  in the LLM's summary. The item is built from the readings, uses only the device's own alarm, names no cause and
+  proposes no change. On 13 Nov it would have been one item out of eight links gaining errors.
 - **Links gaining errors:** for a port with no CLI (a Ciena device read through `get_interface_health`), "went down and came
   back since the previous scan" is now decided by comparing the device's own last-change stamp in the two scans, not
   the stamp with the scan host's clock, so a device clock that is fast or slow can neither invent nor hide it. It is
@@ -63,6 +91,13 @@ status, count or phrase in the report means, so read it first.
 
 ### Added
 
+- `nso_link_utilization_percent{device,port,direction}` gives the ten busiest port directions of a scan: the device's
+  own 5-minute rate (`show interfaces`) over the port's bandwidth, one reading per scan. It is neither a peak nor a
+  daily average, so a burst between scans does not show; idle ports, ports that are down and devices read without
+  CLI (cien, cape) are left out, and the series is absent when no port carried traffic. Nothing in the report or in
+  any status uses it. On 11 to 13 Nov the busiest port averaged 19% over a gap, from the byte counters.
+- `nso_optics_alarm_ports` and `nso_optics_ports_read` give the sweep's ports with an optics alarm of their own and
+  the ports it read; both are absent when the scan did not sweep, so a gap is not drawn as no alarms.
 - **Links gaining errors while up:** each line now ends with the light at both ends of the link
   ("Optics, each end on its own: …"), read in the same scan with `show controllers <port>`, so "CRC rising" comes
   with a reading. The ports are chosen from this scan's counters and the previous scan's, after the adjacencies
@@ -192,6 +227,10 @@ status, count or phrase in the report means, so read it first.
 
 ### Fixed
 
+- A transceiver lane that the device flags (`H - Rx alarm high`) was dropped from the optics reading, so a port with
+  three flagged lanes showed only its one unflagged lane: on 13 Nov `wash-data-sw` FourHundredGigE0/0/0/64 was read
+  as a single lane at +1.6 dBm while the device reported lane 0 at 4.1 dBm, above its 3.501 dBm alarm. Every lane is
+  now read. The alarm itself was reported correctly: it is the device's own text.
 - LLM investigations get the readings of an interface-health or hardware-health read. They used to
   get only the platform name ("ios-xr" or "saos"), and a dig's saved evidence kept only that: 213
   reads in 51 of the last 53 scans. On 10 Nov the salt ↔ seat drill said its hardware read gave "no

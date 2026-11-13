@@ -29,7 +29,14 @@ _NUMBERS = {
     "bytes_in": r"^\s+\d+ packets input, (\d+) bytes",
     "bytes_out": r"^\s+\d+ packets output, (\d+) bytes",
 }
-_ERRORS = {"crc": "CRC", "input_errors": "input errors", "output_errors": "output errors"}
+# Not in _NUMBERS: a rate is not cumulative, so one that fell is not a counter that went back.
+_LOAD = {
+    "bw_kbit": r"\bBW (\d+) Kbit",
+    "rate_in_bps": r"^\s+5 minute input rate (\d+) bits/sec",
+    "rate_out_bps": r"^\s+5 minute output rate (\d+) bits/sec",
+}
+_ERRORS = {"crc": "CRC", "input_errors": "input errors", "output_errors": "output errors",
+           "output_drops": "output drops"}
 
 
 def parse_port_counters(text: str, port: str) -> dict[str, Any] | None:
@@ -42,11 +49,40 @@ def parse_port_counters(text: str, port: str) -> dict[str, Any] | None:
     for name, pattern in _NUMBERS.items():
         found = re.search(pattern, text, re.M)
         reading[name] = int(found[1]) if found else None
+    for name, pattern in _LOAD.items():
+        found = re.search(pattern, text, re.M)
+        reading[name] = int(found[1]) if found else None
     cleared = re.search(r'^\s+Last clearing of "show interface" counters (\S+)', text, re.M)
     described = re.search(r"^\s+Description: (.+?)\s*$", text, re.M)
     reading["cleared"] = cleared[1] if cleared else None
     reading["description"] = described[1][:120] if described else ""
     return reading
+
+
+def busiest_links(case: CaseFile, limit: int = 10) -> list[dict[str, Any]]:
+    """The port directions carrying the largest share of their bandwidth in this scan's reads, busiest first.
+
+    Each is the device's own 5-minute rate at the moment of the read over the port's own bandwidth: one reading
+    per scan, not a peak or a daily average. Idle ports, ports that are not up and ports without a bandwidth
+    (an older reading, a device read without CLI) are left out.
+    """
+    found = [ev.get("payload") for ev in case.evidence if ev.get("kind") == KIND]
+    ports = (found[-1] or {}).get("ports") if found and isinstance(found[-1], dict) else None
+    rows: list[dict[str, Any]] = []
+    for key, reading in (ports or {}).items():
+        if not isinstance(reading, dict) or reading.get("state") != "up":
+            continue
+        bandwidth = reading.get("bw_kbit")
+        if not isinstance(bandwidth, int) or bandwidth <= 0:
+            continue
+        device, _, port = key.partition(":")
+        for direction, name in (("in", "rate_in_bps"), ("out", "rate_out_bps")):
+            rate = reading.get(name)
+            if isinstance(rate, int) and rate > 0:
+                rows.append({"device": device, "port": port, "direction": direction,
+                             "percent": round(rate / (bandwidth * 1000) * 100, 2)})
+    rows.sort(key=lambda row: (-row["percent"], row["device"], row["port"], row["direction"]))
+    return rows[:max(0, limit)]
 
 
 def _parent_port(interface: str) -> str:

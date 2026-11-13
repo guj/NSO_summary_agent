@@ -290,7 +290,7 @@ def render_report(
         lines.extend(format_last_known_faults(case.last_known_service_faults))
     lines.append("## Recommended follow-up")
     lines.append("")
-    lines.extend(format_followup_operator(case, newness))
+    lines.extend(format_followup_operator(case, newness, case_delta=case_delta))
     lines.append("")
 
     from diagnostic_mas.run_configuration import format_run_configuration

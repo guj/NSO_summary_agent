@@ -1217,7 +1217,7 @@
       "gridPos": {
         "x": 0,
         "y": 29,
-        "w": 24,
+        "w": 14,
         "h": 8
       },
       "targets": [
@@ -1339,6 +1339,87 @@
           "mode": "multi",
           "sort": "desc"
         }
+      }
+    },
+    {
+      "id": 42,
+      "type": "table",
+      "title": "Busiest links, now",
+      "description": "The ten port directions carrying the largest share of their bandwidth when the last good scan read them: the device's own 5-minute rate over the port's bandwidth, one reading per scan. It is not a peak and not a daily average, so a short burst between scans does not show. A lead, not a status: a busy link is not a fault. Idle ports, ports that are down and devices read without CLI are not listed.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 14,
+        "y": 29,
+        "w": 10,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sort_desc(max by (device, port, direction) (nso_link_utilization_percent{instance=\"$instance\",pipeline=\"diagnostic\"}))",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "device": 0,
+              "port": 1,
+              "direction": 2,
+              "Value": 3
+            },
+            "renameByName": {
+              "device": "DEVICE",
+              "port": "PORT",
+              "direction": "DIRECTION",
+              "Value": "LOAD"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left"
+          },
+          "noValue": "after the next scan"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "LOAD"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
       }
     },
     {
@@ -1769,7 +1850,7 @@
       "gridPos": {
         "x": 0,
         "y": 44,
-        "w": 5,
+        "w": 4,
         "h": 3
       },
       "targets": [
@@ -1834,9 +1915,9 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 5,
+        "x": 4,
         "y": 44,
-        "w": 5,
+        "w": 4,
         "h": 3
       },
       "targets": [
@@ -1901,9 +1982,9 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 10,
+        "x": 8,
         "y": 44,
-        "w": 5,
+        "w": 4,
         "h": 3
       },
       "targets": [
@@ -1967,9 +2048,9 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 15,
+        "x": 12,
         "y": 44,
-        "w": 5,
+        "w": 4,
         "h": 3
       },
       "targets": [
@@ -2033,7 +2114,7 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 20,
+        "x": 16,
         "y": 44,
         "w": 4,
         "h": 3
@@ -2067,6 +2148,72 @@
               },
               {
                 "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 41,
+      "type": "stat",
+      "title": "Optics alarms",
+      "description": "Ports on links that are up whose own device reports an optics alarm, read when the last good scan swept every port that is up. A lead, not a status: no service or count rests on it, and no cause is named. The report lists the ports. Empty until the first scan after the exporter update.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 44,
+        "w": 4,
+        "h": 3
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(nso_optics_alarm_ports{instance=\"$instance\",pipeline=\"diagnostic\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "after the next scan",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
                 "value": 1
               }
             ]

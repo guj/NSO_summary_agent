@@ -26,9 +26,13 @@ from nso_facts.topology.interfaces import interface_variants
 
 KIND = "link_optics"
 CEILING = 20
+# Reads for the sweep of the other ports that are up; a ceiling of its own, so it never takes reads from the ports above.
+SWEEP_CEILING = 400
 _ADJACENCY_DOWN = frozenset({"configured_no_adjacency", "unidirectional_adjacency"})
-# One row of the DOM table: lane, wavelength, Tx dBm, Tx mW, Rx dBm, Rx mW, laser bias.
-_LANE = re.compile(r"^\s*(\d+)\s+(?:n/a|[\d.]+)\s+(-?\d+(?:\.\d+)?)\s+[\d.]+\s+(-?\d+(?:\.\d+)?)\s+[\d.]+\s+[\d.]+\s*$")
+# One row of the DOM table: lane, wavelength, Tx dBm, Tx mW, Rx dBm, Rx mW, laser bias, and a flag after it on a lane
+# the device marks (``H - Rx alarm high``).
+_LANE = re.compile(r"^\s*(\d+)\s+(?:n/a|[\d.]+)\s+(-?\d+(?:\.\d+)?)\s+[\d.]+\s+(-?\d+(?:\.\d+)?)\s+[\d.]+\s+[\d.]+"
+                   r"(?:\s+[A-Za-z-].*)?\s*$")
 _STAMP = re.compile(r"^\s*(\w{3} \w{3} +\d+ [\d:.]+ \w+)\s*$", re.M)
 _BUNDLE_PORT = re.compile(r"Bundle-Ether\d+")
 _BREAKOUT_LANE = re.compile(r"(\d+/\d+/\d+/\d+)/(\d+)$")
@@ -143,6 +147,8 @@ def optics_targets(case: CaseFile) -> list[tuple[str, str]]:
 def gaining_error_ends(case: CaseFile) -> list[tuple[str, str]]:
     """(device, port) of each port that is up and gained errors since the previous scan, and of its far end.
 
+    A port that gained only output drops is left out.
+
     Worked out from this scan's counters and the previous scan's, which the scan already holds; a port
     on its own is not enough to tell a dirty connector from a failing optic, but the light at both ends is.
     """
@@ -155,6 +161,9 @@ def gaining_error_ends(case: CaseFile) -> list[tuple[str, str]]:
                                 {"evidence": case.evidence})
     out: list[tuple[str, str]] = []
     for row in rows:
+        # Output drops alone are a congestion or policy count: the light at the ends says nothing about them.
+        if set(row["gained"]) <= {"output_drops"} and not row["state_changes"] and not row.get("bounced"):
+            continue
         ends = [(str(row["device"]), str(row["port"]))]
         far = row.get("far_end") or {}
         if far.get("interface") not in (None, "?"):
@@ -163,72 +172,102 @@ def gaining_error_ends(case: CaseFile) -> list[tuple[str, str]]:
     return out
 
 
-async def record_link_optics(client: Any, case: CaseFile, *, ceiling: int = CEILING, workers: int = 1,
-                             call: Any = None) -> None:
-    """Read each end's optics once, within ``ceiling``, and keep the readings with the scan.
+def sweep_ends(case: CaseFile, taken: set[str]) -> list[tuple[str, str]]:
+    """(device, port) of each physical port this scan read counters on that is up, bar a bundle and a port in ``taken``."""
+    found = [ev.get("payload") for ev in case.evidence if ev.get("kind") == "port_counters"]
+    ports = (found[-1] or {}).get("ports") if found and isinstance(found[-1], dict) else None
+    out = []
+    for key, reading in sorted((ports or {}).items()):
+        device, _, port = key.partition(":")
+        if (isinstance(reading, dict) and reading.get("state") == "up" and port and key not in taken
+                and not _BUNDLE_PORT.fullmatch(port)):
+            out.append((device, port))
+    return out
 
-    A bundle end is read as its member list instead, one ``show bundle`` read. Every read counts
-    against ``ceiling``, the bundle reads first.
-    """
-    targets = optics_targets(case)
-    # After the adjacencies down, so they keep their place under the ceiling.
-    extra = [end for end in gaining_error_ends(case) if end not in targets]
-    targets = targets + extra
-    if not targets:
-        return
-    from diagnostic_mas.operational_checks.probe import Probe, safe
-    from diagnostic_mas.operational_checks.scheduler import DeviceCalls, ProbeCache, run_groups
 
-    calls, cache = DeviceCalls(call or call_mcp, max(1, workers)), ProbeCache()
-    budget = max(0, ceiling)
+class _Reads:
+    """One scan's optics reads: the client, the call path with its cache, and the device concurrency."""
 
-    async def read_each(wanted: list[tuple[str, str]], command: str, parse: Any, into: dict[str, Any]) -> None:
+    def __init__(self, client: Any, call: Any, workers: int) -> None:
+        from diagnostic_mas.operational_checks.scheduler import DeviceCalls, ProbeCache
+
+        self.client, self.workers = client, max(1, workers)
+        self.calls, self.cache = DeviceCalls(call or call_mcp, self.workers), ProbeCache()
+
+    async def each(self, wanted: list[tuple[str, str]], command: str, parse: Any, into: dict[str, Any]) -> None:
+        from diagnostic_mas.operational_checks.probe import Probe, safe
+        from diagnostic_mas.operational_checks.scheduler import run_groups
+
         by_device: dict[str, list[str]] = {}
         for device, port in wanted:
             if safe(device) and safe(port):
                 by_device.setdefault(device, []).append(port)
 
         async def read(device: str) -> None:
-            probe = Probe(client, calls, cache, max_calls=len(by_device[device]))
+            probe = Probe(self.client, self.calls, self.cache, max_calls=len(by_device[device]))
             for port in by_device[device]:
                 into[f"{device}:{port}"] = parse(await probe.show(device, f"{command} {port}", required=False))
 
-        await run_groups(sorted(by_device), read, lambda device: device, max(1, workers))
+        await run_groups(sorted(by_device), read, lambda device: device, self.workers)
 
+    async def ports(self, wanted: list[tuple[str, str]], budget: int, found: dict[str, Any]) -> tuple[list[str], int]:
+        """Read ports (none a bundle) within ``budget`` reads into ``found``: the keys asked for and the count left out."""
+        from diagnostic_mas.operational_checks.probe import Probe, safe
+        from diagnostic_mas.operational_checks.scheduler import run_groups
+
+        plain = [end for end in wanted if not _BREAKOUT_LANE.search(end[1])]
+        plain_read = plain[:max(0, budget)]
+        await self.each(plain_read, "controllers", parse_optics, found)
+        # A breakout lane shares its parent port's optics: one read per parent, each lane keeping its own part.
+        by_parent: dict[tuple[str, str], list[tuple[str, int]]] = {}
+        for device, port in wanted:
+            if (lane := _BREAKOUT_LANE.search(port)) and safe(device) and safe(port):
+                by_parent.setdefault((device, lane[1]), []).append((port, int(lane[2])))
+        parents = list(by_parent)[:max(0, budget - len(plain_read))]
+
+        async def read_parents(device: str) -> None:
+            probe = Probe(self.client, self.calls, self.cache, max_calls=len(parents))
+            for owner, parent in (key for key in parents if key[0] == device):
+                reading = parse_parent_optics(await probe.show(device, f"controllers optics {parent}", required=False))
+                for port, lane in by_parent[owner, parent]:
+                    found[f"{device}:{port}"] = _lane_reading(reading, lane, parent) if reading else None
+
+        await run_groups(sorted({device for device, _ in parents}), read_parents, lambda device: device, self.workers)
+        asked = ([f"{device}:{port}" for device, port in plain_read if safe(device) and safe(port)]
+                 + [f"{owner[0]}:{port}" for owner in parents for port, _ in by_parent[owner]])
+        left = (len(plain) - len(plain_read)) + sum(len(lanes) for key, lanes in by_parent.items() if key not in parents)
+        return asked, left
+
+
+async def record_link_optics(client: Any, case: CaseFile, *, ceiling: int = CEILING, workers: int = 1,
+                             call: Any = None) -> None:
+    """Read each end's optics once, within ``ceiling``, and keep the readings with the scan.
+
+    A bundle end is read as its member list instead, one ``show bundle`` read. Every read counts
+    against ``ceiling``, the bundle reads first. The other ports that are up are then read within
+    ``SWEEP_CEILING``, so a transceiver in alarm shows before its link has any other sign.
+    """
+    targets = optics_targets(case)
+    # After the adjacencies down, so they keep their place under the ceiling.
+    extra = [end for end in gaining_error_ends(case) if end not in targets]
+    targets = targets + extra
+    sweep = sweep_ends(case, {f"{device}:{port}" for device, port in targets})
+    if not targets and not sweep:
+        return
+    reads, budget = _Reads(client, call, workers), max(0, ceiling)
     bundle_ends = [(device, port) for device, port in targets if _BUNDLE_PORT.fullmatch(port)][:budget]
     bundles: dict[str, dict[str, Any] | None] = {}
-    await read_each(bundle_ends, "bundle", parse_bundle, bundles)
-    budget -= len(bundle_ends)
+    await reads.each(bundle_ends, "bundle", parse_bundle, bundles)
     wanted = [(device, port) for device, port in targets if not _BUNDLE_PORT.fullmatch(port)]
-    plain = [end for end in wanted if not _BREAKOUT_LANE.search(end[1])]
     found: dict[str, dict[str, Any] | None] = {}
-    await read_each(plain[:budget], "controllers", parse_optics, found)
-    budget -= min(len(plain), budget)
-    # A breakout lane shares its parent port's optics: one read per parent, each lane keeping its own part.
-    by_parent: dict[tuple[str, str], list[tuple[str, int]]] = {}
-    for device, port in wanted:
-        if (lane := _BREAKOUT_LANE.search(port)) and safe(device) and safe(port):
-            by_parent.setdefault((device, lane[1]), []).append((port, int(lane[2])))
-    parents = list(by_parent)[:budget]
-    budget -= len(parents)
-
-    async def read_parents(device: str) -> None:
-        probe = Probe(client, calls, cache, max_calls=len(parents))
-        for owner, parent in (key for key in parents if key[0] == device):
-            reading = parse_parent_optics(await probe.show(device, f"controllers optics {parent}", required=False))
-            for port, lane in by_parent[owner, parent]:
-                found[f"{device}:{port}"] = _lane_reading(reading, lane, parent) if reading else None
-
-    await run_groups(sorted({device for device, _ in parents}), read_parents, lambda device: device, max(1, workers))
+    _, left_out = await reads.ports(wanted, budget - len(bundle_ends), found)
+    swept, sweep_left_out = await reads.ports(sweep, SWEEP_CEILING, found)
     ports = {key: reading for key, reading in found.items() if reading}
-    lane_ends = sum(len(lanes) for lanes in by_parent.values())
-    read_lane_ends = sum(len(by_parent[key]) for key in parents)
-    left_out = (len(plain) - min(len(plain), max(0, ceiling - len(bundle_ends)))) + (lane_ends - read_lane_ends)
     add_evidence(case, {"kind": KIND, "role": "physical", "layer": "physical", "payload": {
         "read_at": datetime.now(timezone.utc).isoformat(), "ports": dict(sorted(ports.items())),
         **({"bundles": dict(sorted(bundles.items()))} if bundles else {}),
-        "wanted": len(wanted), "left_out": max(0, left_out), "ceiling": ceiling,
-        "also_gaining": len(extra)}})
+        "wanted": len(wanted), "left_out": left_out, "ceiling": ceiling,
+        "also_gaining": len(extra), "swept": sorted(swept), "sweep_left_out": sweep_left_out}})
 
 
 def _saved(case: CaseFile) -> dict[str, Any] | None:
@@ -330,6 +369,24 @@ def _end(device: str, port: str | None, reading: dict[str, Any] | None) -> str:
             + (f" (receive low alarm {low:+.1f} dBm)" if low is not None else ""))
 
 
+def _alarm_findings(read: dict[str, dict[str, Any] | None], port_of: dict[str, str | None]) -> list[dict[str, Any]]:
+    """The alarms a device itself reported at one end of a link, with the other end's transmit for company."""
+    out = []
+    for device, reading in read.items():
+        said = (reading or {}).get("alarms") or ""
+        if not reading or not said or said.lower() == "no alarms":
+            continue
+        rx = [lane["rx_dbm"] for lane in reading["lanes"]]
+        other = next(((name, got) for name, got in read.items() if name != device and got), None)
+        out.append({
+            "device": device, "port": port_of[device], "alarms": said,
+            "rx_dbm": min(rx) if rx else None, "rx_low_alarm_dbm": reading.get("rx_low_alarm_dbm"),
+            **({"parent": reading["parent"], "lane": reading["lane"]} if reading.get("parent") else {}),
+            "other": ({"device": other[0], "tx": _span([lane["tx_dbm"] for lane in other[1]["lanes"]], "+.1f")}
+                      if other else None)})
+    return out
+
+
 def with_optics(rows: list[dict[str, Any]], case: dict[str, Any]) -> list[dict[str, Any]]:
     """Give each link-gaining-errors row the light read at its two ends, when this scan read any.
 
@@ -355,20 +412,64 @@ def with_optics(rows: list[dict[str, Any]], case: dict[str, Any]) -> list[dict[s
             continue
         alarms = [f"{device}: {reading['alarms']}" for device, reading in read.items()
                   if reading and reading.get("alarms") and reading["alarms"].lower() != "no alarms"]
+        found = _alarm_findings(read, port_of)
+        if found:
+            row["optics_alarms"] = found
         row["optics"] = ("Optics, each end on its own: " + "; ".join(_end(device, port_of[device], reading)
                                                                      for device, reading in read.items())
                          + ". " + (("DOM alarms on " + "; on ".join(alarms) + ".") if alarms else "No DOM alarms."))
     return rows
 
 
+def optics_alarm_leads(case: CaseFile) -> list[dict[str, Any]]:
+    """Swept ports (up, not otherwise read) whose own device reports an optics alarm: a lead, never a status.
+
+    A breakout lane carries only the alarms that name it. Ports read for a down adjacency or a link gaining
+    errors are not here: those reports already carry their alarm.
+    """
+    saved = _saved(case) or {}
+    ports = saved.get("ports") or {}
+    out = []
+    for key in saved.get("swept") or []:
+        reading = ports.get(key)
+        said = (reading or {}).get("alarms") or ""
+        if not said or said.lower() == "no alarms":
+            continue
+        device, _, port = key.partition(":")
+        out.append({"device": device, "port": port, "alarms": said,
+                    **({"parent": reading["parent"], "lane": reading["lane"]} if reading.get("parent") else {})})
+    return out
+
+
+def optics_sweep_counts(case: CaseFile) -> dict[str, int] | None:
+    """Ports with an alarm of their own and ports read in the sweep; None when the scan did not sweep."""
+    saved = _saved(case) or {}
+    if not (saved.get("swept") or saved.get("sweep_left_out")):
+        return None
+    ports = saved.get("ports") or {}
+    return {"alarm_ports": len(optics_alarm_leads(case)), "ports_read": sum(1 for k in saved["swept"] if ports.get(k))}
+
+
 def optics_reads_line(case: CaseFile) -> str | None:
-    """How many ends this scan read, for the run details."""
+    """How many ends this scan read, and how many ports of the sweep, for the run details."""
     saved = _saved(case)
     if saved is None:
         return None
     left = int(saved.get("left_out") or 0)
     bundles = sum(1 for info in (saved.get("bundles") or {}).values() if info)
-    return (f"**Optics reads:** {len(saved.get('ports') or {})} of {saved.get('wanted', 0)} ports at the ends "
-            "of IS-IS adjacencies down" + (" and of links gaining errors" if saved.get("also_gaining") else "")
-            + (f"; {bundles} bundle{'s' * (bundles != 1)} read for their members" if bundles else "")
-            + (f"; {left} left out by the {saved.get('ceiling', CEILING)}-read limit" if left else ""))
+    ports, swept = saved.get("ports") or {}, saved.get("swept") or []
+    ends = ""
+    if saved.get("wanted") or saved.get("bundles"):
+        ends = (f"{sum(1 for key in ports if key not in swept)} of {saved.get('wanted', 0)} ports at the ends "
+                "of IS-IS adjacencies down"
+                + (" and of links gaining errors" if saved.get("also_gaining") else "")
+                + (f"; {bundles} bundle{'s' * (bundles != 1)} read for their members" if bundles else "")
+                + (f"; {left} left out by the {saved.get('ceiling', CEILING)}-read limit" if left else ""))
+    sweep_left = int(saved.get("sweep_left_out") or 0)
+    sweep = ""
+    if swept or sweep_left:
+        read = sum(1 for key in swept if ports.get(key))
+        sweep = (f"sweep of ports on links that are up: {read} of {len(swept) + sweep_left} read, "
+                 f"{len(optics_alarm_leads(case))} with an alarm"
+                 + (f"; {sweep_left} left out by the {SWEEP_CEILING}-read limit" if sweep_left else ""))
+    return "**Optics reads:** " + "; ".join(part for part in (ends, sweep) if part)
