@@ -1209,7 +1209,7 @@
       "id": 22,
       "type": "timeseries",
       "title": "Links gaining errors while up",
-      "description": "Links that are up but gained errors since the previous scan, as listed in the report. Solid lines: CRC errors per minute (left, log scale). Dashed lines: times the link went down or up (right). Each value is the average over the gap between two scans, so it shows the trend, not when the errors happened. A lead to follow up, not a service status. A link drops off once a scan finds it no longer gaining errors. The dashed lines mark 0.1 CRC errors a minute (orange, about 6 an hour) and 10 a minute (red). Any steady CRC on a link that is up is worth a look: a dirty connector, a marginal optic or fibre.",
+      "description": "Links that are up but gained errors since the previous scan, as listed in the report. Solid lines: CRC errors per minute (left, log scale). Dashed lines in the series colour: times the link went down or up (right). Each value is the average over the gap between two scans, so it shows the trend, not when the errors happened. A lead to follow up, not a service status. A link drops off once a scan finds it no longer gaining errors. Horizontal reference lines across the panel mark 0.1 CRC errors a minute (orange, about 6 an hour) and 10 a minute (red). Any steady CRC on a link that is up is worth a look: a dirty connector, a marginal optic or fibre.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1217,7 +1217,7 @@
       "gridPos": {
         "x": 0,
         "y": 29,
-        "w": 14,
+        "w": 15,
         "h": 8
       },
       "targets": [
@@ -1333,11 +1333,12 @@
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": false
         },
         "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
+          "mode": "single",
+          "sort": "none"
         }
       }
     },
@@ -1351,9 +1352,9 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 14,
+        "x": 15,
         "y": 29,
-        "w": 10,
+        "w": 9,
         "h": 8
       },
       "targets": [
@@ -1394,11 +1395,48 @@
       "fieldConfig": {
         "defaults": {
           "custom": {
-            "align": "left"
+            "align": "left",
+            "minWidth": 60
           },
           "noValue": "after the next scan"
         },
         "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "DEVICE"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "PORT"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 165
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "DIRECTION"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
           {
             "matcher": {
               "id": "byName",
