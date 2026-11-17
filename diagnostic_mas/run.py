@@ -695,11 +695,13 @@ def _compare_with_previous(
     report_case, case_delta = _scoped_to_services(case, case_delta, plan)
 
     # What is still open, grouped by the port or device that explains it, with its age.
+    from diagnostic_mas.case_delta import counts_as_newly_failed
     from diagnostic_mas.open_faults import open_fault_groups
 
     open_faults = open_fault_groups(
         report_case, report_case.last_known_service_faults,
-        new=[row.get("service") for row in (case_delta or {}).get("newly_failed_services") or []])
+        new=[row.get("service") for row in (case_delta or {}).get("newly_failed_services") or []
+             if counts_as_newly_failed(row)])
     if case_delta is not None:
         case_delta["open_faults"] = open_faults
     return report_case, case_delta, previous_run_id, open_faults

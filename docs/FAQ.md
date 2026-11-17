@@ -28,6 +28,8 @@ legend and limits are described under
 When an earlier saved scan exists to compare with, the **Result** list tags each count:
 **(none new)** or **(not new)**, **(1 new: …)** naming what is new, or **(not read last scan)**
 when the previous scan could not read it; the Services line says which services newly failed.
+A Down service the previous scan did not list, on a lane that scan already found down (a redeploy), is
+listed apart in the changes section and is not counted as newly failed.
 Each **Recommended follow-up** item starts with **New this scan**, **Open since** the first day
 it was seen, **Carried over** (seen last scan, with no dated record) or **Not read last scan**,
 and within each kind of action the new items come first. **Changes since previous run** has the

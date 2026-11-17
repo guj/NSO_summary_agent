@@ -63,15 +63,15 @@ def newness_for(case: Any, delta: CaseDelta | None) -> Newness | None:
     """This scan's problems against the previous scan; None when there was none to compare with."""
     if delta is None:
         return None
-    from diagnostic_mas.case_delta import issue_key
+    from diagnostic_mas.case_delta import counts_as_newly_failed, issue_key
     from diagnostic_mas.item_history import ROUTING_FAULT_CODES, routing_key
 
-    services = {str(row["service"]): Seen(CARRIED, row.get("first_observed_run_id"),
+    services ={str(row["service"]): Seen(CARRIED, row.get("first_observed_run_id"),
                                           bool(row.get("first_observed_exact")))
                 for row in getattr(case, "last_known_service_faults", None) or []
                 if isinstance(row, dict) and row.get("service")}
     services.update({str(row["service"]): Seen(NEW) for row in delta.get("newly_failed_services") or []
-                     if isinstance(row, dict) and row.get("service")})
+                     if isinstance(row, dict) and row.get("service") and counts_as_newly_failed(row)})
     history = getattr(case, "item_history", None) or {}
     routing = {}
     for issue in getattr(case, "issues", None) or []:

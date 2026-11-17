@@ -1423,11 +1423,24 @@ def _newly_failed_services(pair: _ScanPair) -> list[dict[str, str]]:
     _, lanes_down_before = _lanes(pair.older)
     checks_then, checks_now = _fixed_checks(pair.older), _fixed_checks(pair.newer)
     for row in rows:
+        lane = lanes_now.get(row["service"])
+        if lane and lane[:2] in lanes_down_before and row["service"] in new_services:
+            # Same fault on the same lane, under a service the previous scan did not list (a redeploy or a
+            # new service): listed, but the lane going down is not new, so it is not counted as newly failed.
+            row["classification"] = NEW_ON_DOWN_LANE
         for note in (_lane_note(row["service"], lanes_now, lanes_down_before),
                      _earlier_check_note(checks_then.get(row["service"]), checks_now.get(row["service"]))):
             if note:
                 row["detail"] = f"{row['detail']}; {note}" if row.get("detail") else note
     return rows
+
+
+NEW_ON_DOWN_LANE = "new_service_on_down_lane"
+
+
+def counts_as_newly_failed(row: dict[str, Any]) -> bool:
+    """False for a service whose lane was already down in the previous scan; rows saved without a class count."""
+    return row.get("classification", "newly_detected_fault") != NEW_ON_DOWN_LANE
 
 
 def _scope_notes(pair: _ScanPair) -> list[str]:
@@ -1503,7 +1516,8 @@ def format_changes_since_previous(
         lines.append(f"*Note: {note}*")
         lines.append("")
 
-    failed = list(delta.get("newly_failed_services") or [])
+    failed = [row for row in delta.get("newly_failed_services") or [] if counts_as_newly_failed(row)]
+    on_down_lanes = [row for row in delta.get("newly_failed_services") or [] if not counts_as_newly_failed(row)]
     history = delta.get("item_history")
     recovered_devs = list(delta.get("recovered_devices") or [])
     missing = list(delta.get("newly_missing_evidence") or [])
@@ -1524,21 +1538,22 @@ def format_changes_since_previous(
         )
         return lines
 
-    lines.append("**Newly detected service faults:**")
-    if not failed:
-        lines.append("- None")
-    else:
-        for item in failed:
+    def _service_lines(rows: list[dict[str, Any]]) -> list[str]:
+        out = []
+        for item in rows:
             name = item.get("service") or "?"
-            st = item.get("status") or "?"
-            detail = item.get("detail") or ""
             stype = item.get("service_type")
-            label = f"`{stype}/{name}`" if stype else f"`{name}`"
-            bit = f"- {label} — {st}"
-            if detail:
-                bit += f" ({detail})"
-            lines.append(bit)
+            bit = f"- {f'`{stype}/{name}`' if stype else f'`{name}`'} — {item.get('status') or '?'}"
+            out.append(f"{bit} ({item['detail']})" if item.get("detail") else bit)
+        return out
+
+    lines.append("**Newly detected service faults:**")
+    lines.extend(_service_lines(failed) or ["- None"])
     lines.append("")
+    if on_down_lanes:
+        lines.append("**New services on lanes already down in the previous run (not counted as newly failed):**")
+        lines.extend(_service_lines(on_down_lanes))
+        lines.append("")
 
     if failed:
         lines.append("A newly detected fault does not prove a regression: prior "

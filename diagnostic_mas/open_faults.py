@@ -177,14 +177,16 @@ def _listed(items: list[str], limit: int) -> str:
 def digest_changes(delta: CaseDelta | None, previous_run_id: str | None,
                    groups: list[dict[str, Any]], *, limit: int = 5) -> list[str]:
     """The lines that lead the notification: changes since the previous scan, then what is still open."""
-    from diagnostic_mas.case_delta import _interface_lines, _routing_session_line, _status_change_line
+    from diagnostic_mas.case_delta import (
+        _interface_lines, _routing_session_line, _status_change_line, counts_as_newly_failed)
 
     if delta is None:
         lines = ["No previous scan to compare with."]
     else:
         lines = ["**Since the previous scan**" + (f" (`{previous_run_id}`):" if previous_run_id else ":")]
         lines.append("- New service faults: " + _listed(
-            [f"{_label(r, short=True)} {r.get('status')}" for r in delta.get("newly_failed_services") or []], limit))
+            [f"{_label(r, short=True)} {r.get('status')}" for r in delta.get("newly_failed_services") or []
+             if counts_as_newly_failed(r)], limit))
         lines.append("- Cleared: " + _listed(
             [_label(r, short=True) for r in delta.get("service_faults_cleared") or []], limit))
         moved = list(delta.get("status_changed_on_unchanged_checks") or [])

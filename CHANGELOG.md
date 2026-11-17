@@ -8,6 +8,12 @@ status, count or phrase in the report means, so read it first.
 
 ### Report meaning
 
+- **New service on a lane already down is not "newly failed":** a Down service that the previous scan did not list,
+  sitting on a lane the previous scan's port investigation found down, is a redeploy or a new service on an old fault.
+  It is listed under "New services on lanes already down in the previous run (not counted as newly failed)", and the
+  Services line, the "New service faults" count and the New tag leave it out. A new service on a lane that was up
+  before still counts as newly failed. Only lanes a port investigation covered in both scans can be matched, so an
+  uncovered lane still counts as new.
 - **Optics alarms follow-up:** when the device's own alarm names a side ("Alarm high", `LOW-RX1-PWR`) and its own
   threshold table is in the same reply, the item now sets the worst lane against that threshold: "`wash-data-sw`
   FourHundredGigE0/0/0/64 (Receive Power: Alarm high; lane 0 receives +4.1 dBm, above its high alarm threshold of +3.5

@@ -1333,6 +1333,55 @@ def test_a_newly_detected_fault_names_its_lane_and_whether_that_lane_was_down_be
     assert "last flapped" not in delta["newly_failed_services"][0]["detail"]
 
 
+def _lane_on(case: dict, links: dict, ages: dict) -> dict:
+    """The saved case with one concluded port investigation on fiu-data-sw Hu0/0/0/24."""
+    port = {"kind": "port_investigation", "role": "port", "layer": "physical", "payload": {
+        "device": "fiu-data-sw", "port": "HundredGigE0/0/0/24", "concluded": True, "links": links, "link_ages": ages}}
+    return {**case, "evidence": [*case["evidence"], port]}
+
+
+def test_a_new_service_on_a_lane_already_down_is_listed_but_not_counted_as_newly_failed():
+    from diagnostic_mas.case import Budget, CaseFile
+    from diagnostic_mas.case_delta import counts_as_newly_failed, format_changes_since_previous
+    from diagnostic_mas.newness import NEW, newness_for
+    from diagnostic_mas.open_faults import digest_changes
+
+    lane0, lane1 = "HundredGigE0/0/0/24/0", "HundredGigE0/0/0/24/1"
+    services = {"keep": "l2bridge", "circuit": "l2bridge"}
+    before = _lane_on(_scan({"keep": "l2bridge", "replaced": "l2bridge"}), {lane0: ["replaced"]}, {lane0: "2d01h"})
+
+    # Redeployed under a new name onto the lane that was already down.
+    newer = _lane_on(_down(_scan(services), "circuit", "l2bridge"), {lane0: ["circuit"]}, {lane0: "2d03h"})
+    delta = compute_case_delta(before, newer)
+
+    [row] = delta["newly_failed_services"]
+    assert row["classification"] == "new_service_on_down_lane" and row["regression_proven"] is False
+    assert "service not in the previous scan" in row["detail"] and "down in the previous run too" in row["detail"]
+    assert not counts_as_newly_failed(row)
+    text = "\n".join(format_changes_since_previous(delta))
+    assert "**Newly detected service faults:**\n- None" in text
+    assert ("**New services on lanes already down in the previous run (not counted as newly failed):**\n"
+            "- `l2bridge/circuit`") in text
+    assert "does not prove a regression" not in text                      # nothing is counted as new
+    assert newness_for(CaseFile(budget=Budget(0, 0)), delta).of_service("circuit") is None
+    assert "- New service faults: none" in digest_changes(delta, "R1", [])
+
+    # A lane that was up before is a new fault, even for a service that is new.
+    newer = _lane_on(_down(_scan(services), "circuit", "l2bridge"), {lane1: ["circuit"]}, {lane1: "02:15:40"})
+    [row] = compute_case_delta(before, newer)["newly_failed_services"]
+    assert row["classification"] == "newly_detected_fault" and counts_as_newly_failed(row)
+    assert newness_for(CaseFile(budget=Budget(0, 0)), compute_case_delta(before, newer)).of_service("circuit").state == NEW
+
+    # A service the previous scan listed is not a redeploy, whatever its lane did.
+    older = _lane_on(_scan(services), {lane0: ["circuit"]}, {lane0: "2d01h"})
+    newer = _lane_on(_down(_scan(services), "circuit", "l2bridge"), {lane0: ["circuit"]}, {lane0: "2d03h"})
+    [row] = compute_case_delta(older, newer)["newly_failed_services"]
+    assert row["classification"] == "newly_detected_fault"
+
+    # A row saved before the classification was split still counts.
+    assert counts_as_newly_failed({"service": "b2", "status": "Down"})
+
+
 def test_a_newly_down_lane_gives_the_time_it_flapped_not_an_age_from_an_earlier_read():
     lane = "HundredGigE0/0/0/24/1"
     newer = _with_lane(_dp_case("down"), {lane: ["circuit"]}, {lane: "07:32:18"},
