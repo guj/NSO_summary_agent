@@ -1348,6 +1348,7 @@ def _dataplane_by_name(case: CaseFile) -> dict[str, dict[str, Any]]:
             "fix_suggestion": dx.get("fix_suggestion"),
             "complete": dx["complete"],
             "source": dx["source"] or "llm",
+            "confidence": dx.get("confidence"),
             "verification_gap": dx.get("verification_gap"),
             "gate_review": dx.get("gate_review"),
             "investigation": dx.get("investigation"),
@@ -1729,6 +1730,18 @@ def _incomplete_dig_followup(name: str, dx: dict[str, Any]) -> str:
     )
 
 
+def _llm_basis(dx: dict[str, Any]) -> str:
+    """What the LLM's own finding rests on: its stated confidence, and when it concluded with every tool spent
+    (it may have wanted more reads). Nothing for a finding that is not the LLM's."""
+    if dx.get("source") != "llm" or not dx.get("confidence"):
+        return ""
+    bits = [f"LLM confidence {dx['confidence']}"]
+    run = dx.get("investigation") if isinstance(dx.get("investigation"), dict) else {}
+    if run.get("tools_allowed") and run.get("tools_remaining") == 0 and str(run.get("stop_reason")).startswith("concluded"):
+        bits.append(f"concluded at the tool limit, {run['tools_used']} of {run['tools_allowed']} tools used")
+    return f" ({'; '.join(bits)})"
+
+
 def format_services_operator(
     case: CaseFile, *, services_detail: bool = False
 ) -> list[str]:
@@ -1814,9 +1827,7 @@ def format_services_operator(
             elif status in {"up", "ok"}:
                 lines.append(f"**Result:** {RESULT_PE_SIDE_PASSED}")
             elif status in {"down", "degraded"}:
-                lines.append(
-                    f"**Result:** Confirmed fault — dataplane {status}"
-                )
+                lines.append(f"**Result:** Confirmed fault — dataplane {status}{_llm_basis(dx)}")
             else:
                 lines.append(f"**Result:** Dataplane={status}")
             cov = case.service_coverage.get(name)

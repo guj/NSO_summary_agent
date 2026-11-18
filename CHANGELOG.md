@@ -8,6 +8,11 @@ status, count or phrase in the report means, so read it first.
 
 ### Report meaning
 
+- **LLM basis on a service's Result line:** a Down or Degraded result the LLM reached now says its stated confidence,
+  "Confirmed fault — dataplane down (LLM confidence medium)", and, when the investigation had spent every tool, ";
+  concluded at the tool limit, 40 of 40 tools used". The model may have wanted more reads; the limit made it conclude.
+  A confidence the model left out is stored as medium and shown as medium. Nothing is added for a finding that is not
+  the LLM's.
 - **New service on a lane already down is not "newly failed":** a Down service that the previous scan did not list,
   sitting on a lane the previous scan's port investigation found down, is a redeploy or a new service on an old fault.
   It is listed under "New services on lanes already down in the previous run (not counted as newly failed)", and the

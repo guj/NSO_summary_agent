@@ -294,6 +294,36 @@ def _service_section(*, fix: str, observation) -> str:
     return "\n".join(format_services_operator(case, services_detail=False))
 
 
+def _fault_result(*, confidence: str = "medium", investigation: dict | None = None, source: str = "llm",
+                  status: str = "down") -> str:
+    """The Result line of one service block whose LLM finding carries the given confidence and metrics."""
+    from diagnostic_mas.operator_report import format_services_operator
+
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    add_evidence(case, {"kind": "spine", "role": "service", "layer": "services", "payload": {"extra": {"services": {
+        "l3rt/s1": {"name": "s1", "service_type": "l3rt", "devices": ["fiu-data-sw"]}}}}})
+    add_diagnosis(case, kind="dataplane", source=source, status=status, confidence=confidence,
+                  subject={"name": "s1", "service_type": "l3rt"}, observed="no route", cause="route absent")
+    if investigation:
+        case.diagnoses[-1]["investigation"] = investigation
+    text = "\n".join(format_services_operator(case, services_detail=False))
+    return next(line for line in text.splitlines() if line.startswith("**Result:**"))
+
+
+def test_a_fault_result_says_the_llm_confidence_and_a_conclusion_at_the_tool_limit():
+    spent = {"tools_used": 40, "tools_allowed": 40, "tools_remaining": 0, "stop_reason": "concluded"}
+    left = {"tools_used": 9, "tools_allowed": 40, "tools_remaining": 31, "stop_reason": "concluded"}
+
+    assert _fault_result(investigation=spent) == (
+        "**Result:** Confirmed fault — dataplane down (LLM confidence medium; concluded at the tool limit, "
+        "40 of 40 tools used)")
+    assert _fault_result(investigation=left) == "**Result:** Confirmed fault — dataplane down (LLM confidence medium)"
+    assert _fault_result(confidence="high", status="degraded") == (
+        "**Result:** Confirmed fault — dataplane degraded (LLM confidence high)")
+    # Nothing is said for a finding that is not the LLM's.
+    assert _fault_result(source="fixed_check", investigation=spent) == "**Result:** Confirmed fault — dataplane down"
+
+
 def test_collector_detail_prints_a_structured_observation_as_plain_pairs():
     text = _service_section(
         fix="Inspect the optic.",
