@@ -17,8 +17,13 @@ status, count or phrase in the report means, so read it first.
   sitting on a lane the previous scan's port investigation found down, is a redeploy or a new service on an old fault.
   It is listed under "New services on lanes already down in the previous run (not counted as newly failed)", and the
   Services line, the "New service faults" count and the New tag leave it out. A new service on a lane that was up
-  before still counts as newly failed. Only lanes a port investigation covered in both scans can be matched, so an
-  uncovered lane still counts as new.
+  before still counts as newly failed. A lane also counts as down in the previous scan when the device's own time since
+  the lane went down (its last flap, or "never came up") is longer than the days between the two scans plus one day, so a
+  redeploy is recognised even when the previous scan did not investigate that port. The line then says "that lane had been
+  down since before the previous run". A lane down for less than that, or a scan with no run time, still counts as new.
+- **Down → Degraded is not "newly failed":** a service whose dataplane was Down in the previous scan and is Degraded now
+  (a dig re-rated it) is no longer listed under "Newly detected service faults" or counted as newly failed; the
+  change shows as a changed status when the fixed check read the same. Degraded → Down still counts as newly failed.
 - **Optics alarms follow-up:** when the device's own alarm names a side ("Alarm high", `LOW-RX1-PWR`) and its own
   threshold table is in the same reply, the item now sets the worst lane against that threshold: "`wash-data-sw`
   FourHundredGigE0/0/0/64 (Receive Power: Alarm high; lane 0 receives +4.1 dBm, above its high alarm threshold of +3.5
@@ -108,6 +113,22 @@ status, count or phrase in the report means, so read it first.
 
 ### Added
 
+- **Service digs: a timed-out request is asked again:** a dig's LLM request that times out is sent once more as it
+  was; before this, one timeout ended the dig and left the service Unknown, as `PUBLIC-351e24eb` was in test92 and
+  test93. If that also times out and the request held more than `DATAPLANE_TIMEOUT_RETRY_CHARS` characters (default
+  100000; `0` turns this step off), it is asked a third time with the oldest tool results of more than 1,000
+  characters, outside the last 3 rounds, replaced by a one-line note naming the call; the model can call the tool
+  again. A dig that needed either says so on its line under "Per-service investigations" ("A request timed out and
+  was asked again, then again with earlier tool results left out: 7"). A request that times out every time ends the
+  dig as before; the saved exchange and the evidence keep every result in full. `DATAPLANE_TIMEOUT_RETRY=0` turns
+  both retries off. A dig that does not time out is not changed.
+- **Dashboard and metrics, devices needing attention:** the new `nso_fleet_devices_attention{reason}` counts each
+  device once under one reason: `locked`, `cannot_reach` (the sync check errored or the live collection timed out),
+  `config_drift`, or `checks_unavailable` (read, but some checks cannot run on it, such as a SAOS device that exposes
+  no IS-IS or BGP state); a device with several reasons takes the first in that order. The four add up to the devices
+  needing attention (test91: 1 + 2 + 0 + 1 = 4, with cien-data-sw the `checks_unavailable` one). The **NSO Diagnostic**
+  dashboard's donut "Devices needing attention" replaces the "Device sync" tile; the "Devices not covered" tile stays.
+  The older gauges, including `nso_fleet_devices_not_covered`, are still exported.
 - `case.json` of a run now keeps the raw reply of an optics read that gave no table or whose device reported an
   alarm (the `link_optics` evidence, key `raw_samples`): up to 3 of each kind, each a window of at most 2,500
   characters around the optics table, with the port, the command and why it was kept. Empty and error replies are not
@@ -249,6 +270,14 @@ status, count or phrase in the report means, so read it first.
 
 ### Fixed
 
+- A conclusion whose later fields arrived as bare tags inside the first is no longer refused. On 18 Nov the
+  `salt-data-sw` ↔ `seat-data-sw` drill sent three complete conclusions, each as one `observed` value holding
+  `</observed><cause>…</cause><headline>…` and a closing `</invoke>`, and stopped after three refusals ("no usable
+  cause"; the Result line said 17 of 18 investigations concluded). The 11 Nov repair only knew the
+  `<parameter name="cause">` form of this fault. The scan now also splits tags named after the tool's own fields
+  back into those fields, for drills and service digs, and logs "repaired … was inside another field". A tag that is
+  not preceded by a closing tag, or is not a field of the tool, is left alone, and a field the model also sent stays
+  as sent.
 - A 400G port with flagged lanes was read as one lane: the device glues its flag letter to the receive mW value
   (`2.5485H`, alarm high; `h` warning high), which the lane pattern did not accept, so only the unflagged lane was kept.
   On 13 Nov `wash-data-sw` FourHundredGigE0/0/0/64 showed a single lane at +1.6 dBm while the device reported lane 0 at

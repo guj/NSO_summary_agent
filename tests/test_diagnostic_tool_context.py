@@ -67,7 +67,7 @@ async def test_loop_stops_repeated_errors_and_supplies_schema(monkeypatch):
         def create(self, **kwargs):
             self.calls += 1
             assert any('input_schema' in str(m['content']) for m in kwargs['messages'])
-            if self.calls == 3:
+            if self.calls >= 3:                       # the forced conclusion times out, and so does the retry
                 assert len(kwargs['tools']) == 1
                 assert kwargs['tools'][0]['function']['name'] == 'conclude_dataplane'
                 raise TimeoutError('test timeout')
@@ -90,7 +90,7 @@ async def test_loop_stops_repeated_errors_and_supplies_schema(monkeypatch):
             record=record, device_names={'d'}, session=DrillSession(max_tools=40), openai_client=llm)
     finally:
         stop_mcp_cache()
-    assert llm.calls == 3
+    assert llm.calls == 4
     finding = next(e['payload'] for e in case.evidence if e['kind'] == 'dataplane_incomplete')
     assert finding['dataplane_status'] == 'unknown'
     assert len(finding['partial_tool_results']) == 2

@@ -189,6 +189,13 @@ def build_phase1_metrics(
         lines.append("# TYPE nso_fleet_devices_not_covered gauge")
         lines.append(g("nso_fleet_devices_not_covered", float(_intish(not_covered))))
 
+    attention = snapshot.get("devices_attention")
+    if isinstance(attention, dict):
+        # Each device once, under one reason, so the series add up to the devices needing attention.
+        lines.append("# TYPE nso_fleet_devices_attention gauge")
+        lines += [g("nso_fleet_devices_attention", float(_intish(count)), {"reason": str(reason)})
+                  for reason, count in attention.items()]
+
     scan = snapshot.get("scan")
     if isinstance(scan, dict) and scan.get("run_id"):
         # One series per scan: lets a dashboard show and link the latest report.

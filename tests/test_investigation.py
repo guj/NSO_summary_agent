@@ -68,7 +68,8 @@ async def test_timeout_loop_persists_telemetry_and_gap(monkeypatch):
         session=DrillSession(max_tools=40), openai_client=OAI())
     dx = case_to_dict(case)["diagnoses"][-1]
     assert dx["investigation"]["stop_reason"] == "llm_timeout"
-    assert dx["investigation"]["llm_requests"] == 1
+    assert dx["investigation"]["llm_requests"] == 2           # the request, then the same request again
+    assert dx["investigation"]["timeout_retries"] == 1
     assert dx["investigation"]["tools_remaining"] == 40
     assert dx["verification_gap"]["blocker"] == "llm_timeout"
     assert dx["verification_gap"]["source"] == "runner"
@@ -154,3 +155,21 @@ def test_failed_llm_retry_is_included_in_timing(monkeypatch):
     assert result["llm_seconds"] == 5
     assert result["llm_requests"] == 2
     assert result["stop_reason"] == "no_conclusion"
+
+
+def test_the_run_details_line_of_a_dig_whose_request_timed_out_says_how_it_was_asked_again():
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    run = {"duration_seconds": 400.0, "llm_seconds": 300.0, "mcp_seconds": 90.0, "other_seconds": 10.0,
+           "llm_requests": 20, "mcp_calls": 38, "query_errors": 0, "tools_used": 38, "tools_allowed": 40,
+           "tools_remaining": 2, "rounds_used": 20, "rounds_allowed": 30, "stop_reason": "concluded"}
+    case.diagnoses = [{"kind": "dataplane", "source": "llm", "status": "down", "complete": True,
+                       "observed": "o", "cause": "c", "subject": {"name": "svc", "service_type": "l3rt"},
+                       "investigation": dict(run)}]
+    assert "asked again" not in "\n".join(format_run_details(case))
+
+    case.diagnoses[0]["investigation"]["timeout_retries"] = 1
+    assert "tools remaining: 2. A request timed out and was asked again." in "\n".join(format_run_details(case))
+
+    case.diagnoses[0]["investigation"].update(timeout_retries=2, results_left_out=7)
+    assert ("tools remaining: 2. A request timed out and was asked again, then again with earlier tool results "
+            "left out: 7." in "\n".join(format_run_details(case)))

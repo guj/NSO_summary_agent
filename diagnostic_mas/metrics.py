@@ -67,6 +67,34 @@ def _llm_metrics(case: CaseFile) -> dict[str, Any]:
     return out
 
 
+def _devices_attention(case: CaseFile, fleet_sync: Any) -> dict[str, int]:
+    """Devices that are locked, unreachable, drifted or missing checks, each counted once under one reason.
+
+    Order decides a device with several: locked, then cannot_reach (sync check errored or the live
+    collection timed out), then config_drift, then checks_unavailable (read, but some checks could not run).
+    """
+    from diagnostic_mas.roles.summary import _collection_gap_devices
+    from nso_facts.health import build_device_sync_map
+
+    sync = {device: result.lower().replace("_", "-").replace(" ", "-")
+            for device, result in build_device_sync_map(fleet_sync).items()}
+    unreachable = {str(d) for issue in case.issues if issue.get("code") == "device_live_unreachable"
+                   for d in issue.get("devices") or []}
+    gaps = set(_collection_gap_devices(case))
+    counts = {"locked": 0, "cannot_reach": 0, "config_drift": 0, "checks_unavailable": 0}
+    for device in sorted(gaps | {d for d, result in sync.items() if result not in {"in-sync", ""}}):
+        result = sync.get(device, "")
+        if result == "locked":
+            counts["locked"] += 1
+        elif device in unreachable or result not in {"", "in-sync", "out-of-sync"}:
+            counts["cannot_reach"] += 1
+        elif result == "out-of-sync":
+            counts["config_drift"] += 1
+        else:
+            counts["checks_unavailable"] += 1
+    return counts
+
+
 def metrics_snapshot_from_case(
     case: CaseFile,
     *,
@@ -121,6 +149,7 @@ def metrics_snapshot_from_case(
         "service_status": service_status,
         "service_faults": service_faults,
         "devices_not_covered": len(_collection_gap_devices(case)),
+        "devices_attention": _devices_attention(case, fleet_sync),
     }
     llm = _llm_metrics(case)
     if llm:

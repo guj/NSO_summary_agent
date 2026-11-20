@@ -240,6 +240,61 @@ def _messages_chars(messages: list[dict[str, Any]]) -> int:
     return len(json.dumps(messages, default=str))
 
 
+# A result this small is never left out of a request, nor is anything from the last few rounds.
+_STUB_FLOOR = 1_000
+_ROUNDS_KEPT_WHOLE = 3
+
+
+def _call_label(messages: list[dict[str, Any]]) -> dict[str, str]:
+    """Tool call id -> the call in words (tool, device and command or path), from the model's own calls."""
+    labels: dict[str, str] = {}
+    for message in messages:
+        for call in message.get("tool_calls") or []:
+            function = call.get("function") or {}
+            try:
+                args = json.loads(function.get("arguments") or "{}")
+                params = args.get("params") or {}
+                what = " ".join(str(v) for v in (
+                    args.get("tool_name") or function.get("name"), params.get("device_name"),
+                    params.get("input_command") or params.get("path") or params.get("service_type")) if v)
+            except (ValueError, AttributeError):
+                what = str(function.get("name") or "tool")
+            labels[str(call.get("id"))] = what[:160]
+    return labels
+
+
+def _with_old_results_left_out(messages: list[dict[str, Any]], limit: int) -> tuple[list[dict[str, Any]], int]:
+    """(messages to send, results left out): above ``limit`` characters the oldest large tool results
+    give way to a one-line note, until the request fits or only recent and small results remain.
+
+    The last three rounds stay whole and so does any result of 1,000 characters or less. ``messages``
+    itself is never changed, so the saved exchange and the evidence keep every result in full.
+    """
+    if limit <= 0 or _messages_chars(messages) <= limit:
+        return messages, 0
+    rounds_before, seen = [], 0
+    for message in messages:
+        rounds_before.append(seen)
+        seen += message.get("role") == "assistant"
+    labels = _call_label(messages)
+    total, left_out = _messages_chars(messages), {}
+    for i, message in enumerate(messages):
+        if total <= limit:
+            break
+        content = message.get("content")
+        if (message.get("role") != "tool" or not isinstance(content, str) or len(content) <= _STUB_FLOOR
+                or seen - rounds_before[i] < _ROUNDS_KEPT_WHOLE):
+            continue
+        note = (f"[Earlier result of {labels.get(str(message.get('tool_call_id')), 'a tool')} "
+                f"({len(content):,} characters) left out of this request to keep it small. "
+                "Call the tool again if you need it.]")
+        total -= len(json.dumps(content)) - len(json.dumps(note))
+        left_out[i] = note
+    if not left_out:
+        return messages, 0
+    return [{**m, "content": left_out[i]} if i in left_out else m for i, m in enumerate(messages)], len(left_out)
+
+
 def _dump_failed_dataplane_llm_request(
     *,
     service_name: str,
@@ -2288,11 +2343,11 @@ async def _request_round(
 
     started = time.monotonic()
 
-    def ask(choice: Any) -> Any:
+    def ask(choice: Any, messages: list[dict[str, Any]] | None = None) -> Any:
         return llm_request(
             dig.investigation, dig.oai.chat.completions.create,
             model=dig.settings.fabric_model,
-            messages=dig.messages,
+            messages=dig.messages if messages is None else messages,
             tools=tools_payload,
             tool_choice=choice,
             **llm_temperature_kwargs(dig.settings),
@@ -2303,6 +2358,8 @@ async def _request_round(
     except Exception as exc:  # noqa: BLE001
         elapsed = time.monotonic() - started
         _halt_on_provider_budget(dig, exc, elapsed, round_i, tools_payload)
+        if (response := await _retry_after_timeout(dig, ask, tool_choice, round_i, tools_payload)) is not None:
+            return response
         if tool_choice == "auto":
             _request_failed(dig, exc, elapsed, round_i, tools_payload)
             return None
@@ -2317,6 +2374,52 @@ async def _request_round(
             _request_failed(dig, exc2, elapsed, round_i, tools_payload)
             return None
     _log(f"LLM round completed in {time.monotonic() - started:.2f}s")
+    return response
+
+
+async def _retry_after_timeout(
+    dig: _Dig, ask: Any, tool_choice: Any, round_i: int, tools_payload: list[dict[str, Any]],
+) -> Any | None:
+    """After a timed-out request, ask again; None when that does not give an answer and the dig stops.
+
+    First the same request once more: a provider that was briefly slow answers it. If that times out too
+    and the request held more than DATAPLANE_TIMEOUT_RETRY_CHARS characters, once more with old large tool
+    results left out. The dig's own messages stay whole. DATAPLANE_TIMEOUT_RETRY=0 turns both off.
+    """
+    run = dig.investigation
+    if run.stop_reason != "llm_timeout" or not getattr(dig.settings, "dataplane_timeout_retry", True):
+        return None
+    _log(f"LLM request round={round_i + 1} timed out; asking again")
+    if (response := await _ask_again(dig, ask, tool_choice, round_i, tools_payload, None)) is not None:
+        return response
+    limit = int(getattr(dig.settings, "dataplane_timeout_retry_chars", 0) or 0)
+    before = _messages_chars(dig.messages)
+    if run.stop_reason != "llm_timeout" or limit <= 0 or before <= limit:
+        return None
+    trimmed, left_out = _with_old_results_left_out(dig.messages, limit)
+    if not left_out:
+        return None
+    run.results_left_out = left_out
+    _log(f"LLM request round={round_i + 1} timed out again with {before} chars; asking again with {left_out} "
+         f"earlier results left out, {_messages_chars(trimmed)} chars")
+    return await _ask_again(dig, ask, tool_choice, round_i, tools_payload, trimmed)
+
+
+async def _ask_again(
+    dig: _Dig, ask: Any, tool_choice: Any, round_i: int, tools_payload: list[dict[str, Any]],
+    messages: list[dict[str, Any]] | None,
+) -> Any | None:
+    """One more request after a timeout; None when it fails (a provider spend-budget error halts the run)."""
+    dig.investigation.timeout_retries += 1
+    started = time.monotonic()
+    try:
+        response = await ask(tool_choice, messages)
+    except Exception as exc:  # noqa: BLE001
+        elapsed = time.monotonic() - started
+        _halt_on_provider_budget(dig, exc, elapsed, round_i, tools_payload)
+        _log(f"LLM request round={round_i + 1} failed again after {elapsed:.2f}s: {type(exc).__name__}")
+        return None
+    _log(f"LLM round completed in {time.monotonic() - started:.2f}s (asked again)")
     return response
 
 
@@ -2442,7 +2545,8 @@ async def _handle_call(dig: _Dig, call: Any, finish_reason: Any) -> None:
         why = conclusion_rejection(args, bad_json=bad_json, required=required,
                                    choices={"dataplane_status": _DATAPLANE_STATUSES})
         _log(rejected_call_log_line(fn_name, raw_args, why, finish_reason=finish_reason))
-        dig.tool_reply(call, refused_conclusion_reply(fn_name, why, required, markup=has_field_markup(args)))
+        dig.tool_reply(call, refused_conclusion_reply(fn_name, why, required, markup=has_field_markup(
+            args, CONCLUDE_DATAPLANE_TOOL["function"]["parameters"]["properties"])))
         dig.refused_in_a_row += 1
         # The report gives the stop reason; what each field held stays in the log.
         dig.last_refused = re.sub(r" \([^)]*\)", "", why)

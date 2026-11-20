@@ -306,3 +306,30 @@ def test_the_provider_message_never_reaches_the_metrics():
     text = _pushed(case)
 
     assert 'nso_llm_state{pipeline="diagnostic"} 4.0' in text and "ExceededBudget" not in text and "User=x" not in text
+
+
+def _attention_case() -> CaseFile:
+    """brist locked, cape and scm unreadable, mass drifted, cien in sync but with no routing state; rutg is fine."""
+    names = ["brist-data-sw", "cape-data-sw", "cien-data-sw", "mass-data-sw", "rutg-data-sw", "scm-data-sw"]
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0), device_names=names)
+    results = {"brist-data-sw": "locked", "cape-data-sw": "error", "cien-data-sw": "in-sync",
+               "mass-data-sw": "out-of-sync", "rutg-data-sw": "in-sync", "scm-data-sw": "error"}
+    eid = add_evidence(case, {"kind": "spine", "role": "service", "layer": "services", "payload": {"extra": {
+        "services": {},
+        "fleet_sync": {"status": "success", "data": {
+            "summary": {"in_sync": 2, "out_of_sync": 2, "error": 2},
+            "devices": [{"device": d, "result": r} for d, r in results.items()]}}}}})
+    for device in ("brist-data-sw", "cien-data-sw", "cape-data-sw"):
+        open_issue(case, code="collection_error", layer="routing", evidence_ids=[eid],
+                   message=f"{device}: BGP summary collection failed")
+    for device in ("cape-data-sw", "scm-data-sw"):
+        open_issue(case, code="device_live_unreachable", layer="device", evidence_ids=[eid],
+                   message=f"{device}: live query timed out", devices=[device])
+    return case
+
+
+def test_scan_pushes_each_device_needing_attention_once_under_one_reason():
+    text = _pushed(_attention_case())
+
+    for reason, count in (("locked", 1), ("cannot_reach", 2), ("config_drift", 1), ("checks_unavailable", 1)):
+        assert f'nso_fleet_devices_attention{{pipeline="diagnostic",reason="{reason}"}} {float(count)}' in text

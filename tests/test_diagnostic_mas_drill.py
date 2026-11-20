@@ -1817,6 +1817,45 @@ def test_a_field_swallowed_by_a_wrongly_closed_one_is_split_back_out():
     assert args["fix_suggestion"] == "No change is indicated on amst-data-sw."
 
 
+# test94's salt ↔ seat conclusions, shortened: the fields after the first arrive as bare tags named after the
+# fields, with the call's own closing tag at the end, all inside `observed`.
+_SWALLOWED_BARE = {"observed": "seat lists salt in Init; salt's parent port counter rises while .3000 stays at 0."
+                               "</observed>\n<cause>Ingress VLAN classification fault local to salt Hu0/0/0/21.</cause>\n"
+                               "<headline>seat's frames never reach the subinterface</headline>\n"
+                               "<next_step>Run shut / no shut on Hu0/0/0/21 in a maintenance window.</next_step>\n"
+                               "<confidence>high</confidence>\n"
+                               "<fix_requires_human_approval>true</fix_requires_human_approval>\n</invoke>"}
+
+
+def test_fields_swallowed_as_bare_tags_named_after_the_fields_are_split_back_out():
+    from diagnostic_mas.drill import DRILL_CONCLUDE_TOOL, has_field_markup, parse_drill_finding, unfold_swallowed_fields
+
+    fields = DRILL_CONCLUDE_TOOL["function"]["parameters"]["properties"]
+    assert has_field_markup(_SWALLOWED_BARE, fields)
+    args, recovered = unfold_swallowed_fields(_SWALLOWED_BARE, fields)
+
+    assert recovered == ["cause", "headline", "next_step", "confidence", "fix_requires_human_approval"]
+    assert args["observed"] == "seat lists salt in Init; salt's parent port counter rises while .3000 stays at 0."
+    assert args["cause"] == "Ingress VLAN classification fault local to salt Hu0/0/0/21."
+    assert args["next_step"] == "Run shut / no shut on Hu0/0/0/21 in a maintenance window."
+    assert args["confidence"] == "high" and args["fix_requires_human_approval"] is True
+    finding = parse_drill_finding(args)
+    assert finding["cause"] == "Ingress VLAN classification fault local to salt Hu0/0/0/21."
+
+
+def test_a_bare_tag_in_the_text_is_split_only_when_it_follows_a_closing_tag_and_names_a_field():
+    from diagnostic_mas.drill import DRILL_CONCLUDE_TOOL, has_field_markup, unfold_swallowed_fields
+
+    fields = DRILL_CONCLUDE_TOOL["function"]["parameters"]["properties"]
+    quoted = {"observed": "The config holds <cause>x</cause> and <vlan>3250</vlan>.", "cause": "c"}
+    assert unfold_swallowed_fields(quoted, fields) == (quoted, []) and not has_field_markup(quoted, fields)
+    unknown = {"observed": "o</observed>\n<vlan>3250</vlan>", "cause": "c"}
+    assert unfold_swallowed_fields(unknown, fields) == (unknown, [])
+    both = {"observed": "o</observed>\n<headline>swallowed</headline>", "headline": "sent", "cause": "c"}
+    args, recovered = unfold_swallowed_fields(both, fields)
+    assert args["headline"] == "sent" and recovered == []
+
+
 def test_only_the_tools_own_field_names_are_split_out_and_sent_fields_are_kept():
     from diagnostic_mas.drill import DRILL_CONCLUDE_TOOL, unfold_swallowed_fields
 

@@ -1085,19 +1085,30 @@ def refused_conclusion_reply(fn_name: str, why: str, required: tuple[str, ...], 
     reply = (f"ERROR: {fn_name} refused: {why}. Send it again with {', '.join(required)} as non-empty "
              "text. If the readings do not establish a cause, say that in cause.")
     if markup:
-        reply += (' Your text contained <parameter name="…"> markup: a field closed with the wrong tag took '
-                  "in the fields after it. Send each field as its own field.")
+        reply += (' Your text contained field markup (<parameter name="…"> or a tag named after a field): a field '
+                  "closed with the wrong tag took in the fields after it. Send each field as its own field.")
     return reply
 
 
 # A field the model closed with the wrong tag (``</observed>`` for ``</parameter>``) takes in the fields
-# after it: ``observed`` = ``…locked".</observed><parameter name="cause">The adjacency died…`` (11 Nov).
-_SWALLOWED_FIELD = re.compile(r'\s*</[A-Za-z_]+>\s*<parameter name="([A-Za-z_]+)">\s*')
-_TRAILING_CLOSE = re.compile(r'\s*</[A-Za-z_]+>\s*$')
+# after it: ``observed`` = ``…locked".</observed><parameter name="cause">The adjacency died…`` (11 Nov), or
+# with each following field as a bare tag named after it, ``…</observed><cause>…</cause><headline>…`` (18 Nov).
+_PARAMETER_FIELD = re.compile(r'\s*</[A-Za-z_]+>\s*<parameter name="([A-Za-z_]+)">\s*')
+_TRAILING_CLOSE = re.compile(r'(?:\s*</[A-Za-z_]+>)+\s*$')
 
 
-def has_field_markup(args: Any) -> bool:
-    return isinstance(args, dict) and any(isinstance(v, str) and '<parameter name="' in v for v in args.values())
+def _swallowed_field_pattern(fields: Mapping[str, Any]) -> re.Pattern[str]:
+    """A closing tag followed by the opening of one of the tool's fields, as ``<parameter name="x">`` or ``<x>``."""
+    names = "|".join(re.escape(name) for name in fields)
+    return re.compile(rf'\s*</[A-Za-z_]+>\s*<(?:parameter name="([A-Za-z_]+)"|({names}))>\s*')
+
+
+def has_field_markup(args: Any, fields: Mapping[str, Any] | None = None) -> bool:
+    if not isinstance(args, dict):
+        return False
+    pattern = _swallowed_field_pattern(fields) if fields else None
+    return any(isinstance(v, str) and ('<parameter name="' in v or (pattern is not None and pattern.search(v)))
+               for v in args.values())
 
 
 def unfold_swallowed_fields(args: Any, fields: Mapping[str, Any]) -> tuple[Any, list[str]]:
@@ -1105,19 +1116,21 @@ def unfold_swallowed_fields(args: Any, fields: Mapping[str, Any]) -> tuple[Any, 
 
     Only the tool's own field names are split out, and a field the model also sent stays as sent.
     """
-    if not has_field_markup(args):
+    if not has_field_markup(args, fields):
         return args, []
+    pattern = _swallowed_field_pattern(fields)
     out, recovered = dict(args), []
     for key, value in args.items():
         if not isinstance(value, str):
             continue
-        parts = _SWALLOWED_FIELD.split(value)
-        names = parts[1::2]
+        found = list(pattern.finditer(value))
+        names = [match[1] or match[2] for match in found]
         if not names or any(name not in fields for name in names):
             continue
-        out[key] = _TRAILING_CLOSE.sub("", parts[0]).strip()
-        for name, text in zip(names, parts[2::2]):
-            text = _TRAILING_CLOSE.sub("", text).strip()
+        out[key] = _TRAILING_CLOSE.sub("", value[:found[0].start()]).strip()
+        for i, (name, match) in enumerate(zip(names, found)):
+            end = found[i + 1].start() if i + 1 < len(found) else len(value)
+            text = _TRAILING_CLOSE.sub("", value[match.end():end]).strip()
             if (fields.get(name) or {}).get("type") == "boolean":
                 text = text.lower() == "true"
             if name not in args and name not in recovered:
@@ -1429,7 +1442,7 @@ async def llm_drill_tool_loop(
                     _log_drill(rejected_call_log_line(fn_name, raw_args, why, finish_reason=finish_reason))
                     messages.append({"role": "tool", "tool_call_id": call.id,
                                      "content": refused_conclusion_reply(fn_name, why, required,
-                                                                         markup=has_field_markup(args))})
+                                                                         markup=has_field_markup(args, DRILL_CONCLUDE_TOOL["function"]["parameters"]["properties"]))})
                     refused_in_a_row += 1
                 continue
 

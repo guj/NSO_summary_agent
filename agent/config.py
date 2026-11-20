@@ -56,6 +56,9 @@ class Settings:
     fabric_max_retries: int = 0
     fabric_chat_timeout_sec: float = 60.0
     fabric_chat_connect_timeout_sec: float = 20.0
+    # A service dig whose request timed out above this many characters is retried once, trimmed; 0 turns it off.
+    dataplane_timeout_retry: bool = True
+    dataplane_timeout_retry_chars: int = 100_000
     mcp_results_keep_days: int = 7
     # Saved scans under runs/ older than this many days are removed after a scan saves; 0 keeps all.
     runs_keep_days: int = 0
@@ -164,8 +167,8 @@ def _parse_max_retries(raw: str | None) -> int:
 
 
 def _parse_keep_days(raw: str | None, *, name: str = "MCP_RESULTS_KEEP_DAYS", default: int = 7) -> int:
-    """Days something saved is kept: a --save-mcp-results archive (default 7) or, with
-    ``name="RUNS_KEEP_DAYS"``, a saved scan (default 0). 0 keeps them all."""
+    """A nonnegative integer setting: days a --save-mcp-results archive is kept (default 7), with
+    ``name="RUNS_KEEP_DAYS"`` days a saved scan is kept (default 0 keeps all), or a character count."""
     if raw is None:
         return default
     try:
@@ -175,6 +178,12 @@ def _parse_keep_days(raw: str | None, *, name: str = "MCP_RESULTS_KEEP_DAYS", de
     if value < 0:
         raise ValueError(f"{name} must be a nonnegative integer")
     return value
+
+
+def _parse_timeout_retry_chars(raw: str | None) -> int:
+    """DATAPLANE_TIMEOUT_RETRY_CHARS: a service dig whose LLM request timed out with more than this many
+    characters is asked again once with its oldest large tool results left out (default 100000); 0 turns it off."""
+    return _parse_keep_days(raw, name="DATAPLANE_TIMEOUT_RETRY_CHARS", default=100_000)
 
 
 # .env.example's placeholders: a setting still holding one has not been filled in.
@@ -249,6 +258,8 @@ def load_settings(*, require_llm_key: bool = True) -> Settings:
         fabric_max_retries=_parse_max_retries(os.environ.get("FABRIC_CHAT_MAX_RETRIES")),
         fabric_chat_timeout_sec=_parse_chat_timeout(os.environ.get("FABRIC_CHAT_TIMEOUT_SEC")),
         fabric_chat_connect_timeout_sec=_parse_connect_timeout(os.environ.get("FABRIC_CHAT_CONNECT_TIMEOUT_SEC")),
+        dataplane_timeout_retry=_parse_bool_env(os.environ.get("DATAPLANE_TIMEOUT_RETRY"), default=True),
+        dataplane_timeout_retry_chars=_parse_timeout_retry_chars(os.environ.get("DATAPLANE_TIMEOUT_RETRY_CHARS")),
         state_dir=Path(os.environ.get("STATE_DIR", root / "state")),
         mcp_results_keep_days=_parse_keep_days(os.environ.get("MCP_RESULTS_KEEP_DAYS")),
         runs_keep_days=_parse_keep_days(os.environ.get("RUNS_KEEP_DAYS"), name="RUNS_KEEP_DAYS", default=0),

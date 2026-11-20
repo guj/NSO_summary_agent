@@ -56,6 +56,9 @@ class Investigation:
         # A failed request's category (never its text), and refused conclusions in a row at the stop.
         self.llm_error: str | None = None
         self.refused_conclusions = 0
+        # Requests asked again after a timeout, and the earlier tool results left out of the last of them.
+        self.timeout_retries = 0
+        self.results_left_out = 0
 
     def llm(self, create, **kwargs):
         started = time.monotonic()
@@ -108,7 +111,9 @@ class Investigation:
             "rounds_used": self.rounds, "rounds_allowed": self.round_limit,
             "stop_reason": self.stop_reason,
         } | ({"llm_error": self.llm_error} if self.llm_error else {}
-             ) | ({"refused_conclusions": self.refused_conclusions} if self.refused_conclusions else {})
+             ) | ({"refused_conclusions": self.refused_conclusions} if self.refused_conclusions else {}
+                   ) | ({"timeout_retries": self.timeout_retries} if self.timeout_retries else {}
+                         ) | ({"results_left_out": self.results_left_out} if self.results_left_out else {})
 
 
 def fallback_gap(metrics):

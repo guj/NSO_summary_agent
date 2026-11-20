@@ -3518,3 +3518,157 @@ def test_large_json_answer_keeps_whole_entries_for_the_service():
     # Each kept flow point arrives with every field, not just the line that matched.
     assert [(fp["name"], fp["logical-port"], fp["classifier-list"]) for fp in kept] == [
         ("fp-11_0", "11", ["vlan-0-of-11"]), ("fp-12_0", "12", ["vlan-0-of-12"])]
+
+
+def _dig_messages(sizes):
+    """A user message, then one round per size: the model's call and a tool result of that many characters."""
+    messages = [{"role": "user", "content": "investigate"}]
+    for i, size in enumerate(sizes):
+        arguments = json.dumps({"tool_name": "exec_show", "params": {
+            "device_name": "star-data-sw", "input_command": f"l2vpn bridge-domain brief {i}"}})
+        messages.append({"role": "assistant", "content": None, "tool_calls": [
+            {"id": f"c{i}", "type": "function", "function": {"name": "mcp_call", "arguments": arguments}}]})
+        messages.append({"role": "tool", "tool_call_id": f"c{i}", "content": "x" * size})
+    return messages
+
+
+def test_a_request_under_the_limit_is_sent_whole():
+    from diagnostic_mas.dataplane_verify import _with_old_results_left_out
+
+    messages = _dig_messages([8000] * 6)
+
+    sent, left_out = _with_old_results_left_out(messages, 100_000)
+
+    assert sent is messages and left_out == 0
+
+
+def test_a_request_over_the_limit_leaves_out_its_oldest_large_results_and_keeps_the_last_rounds():
+    from diagnostic_mas.dataplane_verify import _messages_chars, _with_old_results_left_out
+
+    messages = _dig_messages([8000] * 10)
+    before = json.dumps(messages)
+
+    sent, left_out = _with_old_results_left_out(messages, 60_000)
+
+    assert json.dumps(messages) == before
+    assert 0 < left_out < 10 and _messages_chars(sent) <= 60_000
+    tools = [m for m in sent if m["role"] == "tool"]
+    assert tools[0]["content"].startswith("[Earlier result of exec_show")
+    assert "star-data-sw" in tools[0]["content"] and "l2vpn bridge-domain brief 0" in tools[0]["content"]
+    assert "Call the tool again if you need it" in tools[0]["content"]
+    assert [m["content"] for m in tools[-4:]] == ["x" * 8000] * 4
+    assert sum(m["content"].startswith("[Earlier result") for m in tools) == left_out
+
+
+def test_small_results_and_the_last_three_rounds_are_never_left_out():
+    from diagnostic_mas.dataplane_verify import _with_old_results_left_out
+
+    small = _dig_messages([900] * 8)
+    assert _with_old_results_left_out(small, 1_000) == (small, 0)
+    recent = _dig_messages([20_000] * 3)
+    assert _with_old_results_left_out(recent, 1_000) == (recent, 0)
+
+
+def test_the_timeout_retry_setting_defaults_to_100000_and_takes_zero_to_turn_off():
+    from agent.config import _parse_timeout_retry_chars
+
+    assert _parse_timeout_retry_chars(None) == 100_000
+    assert _parse_timeout_retry_chars("0") == 0
+    assert _parse_timeout_retry_chars("90000") == 90_000
+    for bad in ("-1", "lots"):
+        with pytest.raises(ValueError, match="DATAPLANE_TIMEOUT_RETRY_CHARS"):
+            _parse_timeout_retry_chars(bad)
+
+
+def test_an_investigation_that_had_results_left_out_says_so_in_its_metrics():
+    from diagnostic_mas.investigation import Investigation
+
+    run = Investigation()
+    assert "results_left_out" not in run.finish(5, 40) and "timeout_retries" not in run.finish(5, 40)
+    run.results_left_out, run.timeout_retries = 7, 2
+    done = run.finish(38, 40)
+    assert done["results_left_out"] == 7 and done["timeout_retries"] == 2
+
+
+async def _round_after_a_timeout(sizes, *, limit, failures=1, retry=True):
+    """Ask one round whose first ``failures`` requests time out; returns (reply, the messages each request carried, dig)."""
+    from types import SimpleNamespace
+
+    from diagnostic_mas.dataplane_verify import _request_round
+    from diagnostic_mas.investigation import Investigation
+
+    asked = []
+
+    def create(**kwargs):
+        asked.append(kwargs["messages"])
+        if len(asked) <= failures:
+            raise TimeoutError("Request timed out")
+        return "reply"
+
+    dig = SimpleNamespace(
+        messages=_dig_messages(sizes), investigation=Investigation(), stop_reason="",
+        service_name="svc", settings=SimpleNamespace(
+            fabric_model="m", dataplane_timeout_retry_chars=limit, dataplane_timeout_retry=retry,
+            fabric_temperature=None, fabric_chat_timeout_sec=60.0),
+        oai=SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))))
+    return await _request_round(dig, 9, [], "auto"), asked, dig
+
+
+@pytest.mark.asyncio
+async def test_a_timed_out_request_is_first_asked_again_as_it_was():
+    for sizes in ([8000] * 6, [8000] * 14):                       # under and over the limit
+        reply, asked, dig = await _round_after_a_timeout(sizes, limit=100_000)
+
+        assert reply == "reply" and len(asked) == 2
+        assert asked[0] is dig.messages and asked[1] is dig.messages
+        assert dig.investigation.timeout_retries == 1 and dig.investigation.results_left_out == 0
+
+
+@pytest.mark.asyncio
+async def test_a_second_timeout_above_the_limit_is_asked_again_with_old_results_left_out():
+    from diagnostic_mas.dataplane_verify import _messages_chars
+
+    reply, asked, dig = await _round_after_a_timeout([8000] * 14, limit=100_000, failures=2)
+
+    assert reply == "reply" and len(asked) == 3
+    assert asked[1] is dig.messages
+    assert _messages_chars(asked[2]) <= 100_000 < _messages_chars(asked[0])
+    assert any(m["content"].startswith("[Earlier result of exec_show") for m in asked[2] if m["role"] == "tool")
+    assert dig.investigation.timeout_retries == 2 and dig.investigation.results_left_out > 0
+    assert all(m["content"] == "x" * 8000 for m in dig.messages if m["role"] == "tool")
+
+
+@pytest.mark.asyncio
+async def test_a_request_that_times_out_through_every_try_stops_the_dig_as_before():
+    reply, asked, dig = await _round_after_a_timeout([8000] * 14, limit=100_000, failures=3)
+
+    assert reply is None and len(asked) == 3
+    assert dig.investigation.stop_reason == "llm_timeout"
+
+
+@pytest.mark.asyncio
+async def test_a_second_timeout_is_not_trimmed_under_the_limit_with_nothing_to_leave_out_or_with_trimming_off():
+    for sizes, limit in (([8000] * 6, 100_000), ([40_000] * 3, 100_000), ([8000] * 14, 0)):
+        reply, asked, dig = await _round_after_a_timeout(sizes, limit=limit, failures=2)
+
+        assert reply is None and len(asked) == 2
+        assert dig.investigation.stop_reason == "llm_timeout" and dig.investigation.results_left_out == 0
+
+
+@pytest.mark.asyncio
+async def test_with_the_retry_setting_off_a_timeout_stops_the_dig_at_once():
+    reply, asked, dig = await _round_after_a_timeout([8000] * 14, limit=100_000, retry=False)
+
+    assert reply is None and len(asked) == 1
+    assert dig.investigation.stop_reason == "llm_timeout" and dig.investigation.timeout_retries == 0
+
+
+def test_the_retry_setting_defaults_on_and_reads_the_environment(monkeypatch):
+    from agent.config import load_settings
+
+    for name, value in {"NSO_ADDRESS": "localhost", "NSO_PASSWORD": "test", "FABRIC_AI_API_KEY": "test"}.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("DATAPLANE_TIMEOUT_RETRY", raising=False)
+    assert load_settings().dataplane_timeout_retry is True
+    monkeypatch.setenv("DATAPLANE_TIMEOUT_RETRY", "0")
+    assert load_settings().dataplane_timeout_retry is False

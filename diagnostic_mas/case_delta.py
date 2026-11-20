@@ -490,7 +490,27 @@ def _lanes(case: dict[str, Any]) -> tuple[dict[str, tuple[str, str, Any, Any]], 
     return on_lane, down
 
 
-def _lane_note(name: str, now: dict[str, tuple[str, str, Any, Any]], down_before: set[tuple[str, str]]) -> str | None:
+def _down_before_previous_scan(age: Any, older: dict[str, Any], newer: dict[str, Any]) -> bool:
+    """Whether the device's own time since a lane went down reaches back past the previous scan.
+
+    A down lane's last flap is when it went down. One down for longer than the days between the two
+    scans plus one more (the scan's own length, and the device rounding ages to the hour or day) was
+    already down when the previous scan ran, whether or not that scan investigated the port.
+    """
+    from diagnostic_mas.open_faults import age_days
+
+    try:
+        stamps = [datetime.strptime(str(case["run_id"]), "%Y%m%dT%H%M%SZ") for case in (older, newer)]
+    except (KeyError, ValueError):
+        return False
+    if age == "never":
+        return True
+    days = age_days(age)
+    return days is not None and days > (stamps[1] - stamps[0]).days + 1
+
+
+def _lane_note(name: str, now: dict[str, tuple[str, str, Any, Any]], down_before: set[tuple[str, str]],
+               down_since_before: bool = False) -> str | None:
     """Where a newly detected fault sits: a new service on a lane already down is not a new outage."""
     if name not in now:
         return None
@@ -500,7 +520,8 @@ def _lane_note(name: str, now: dict[str, tuple[str, str, Any, Any]], down_before
             else ", never came up" if age == "never"
             else f", last flapped {age} ago" if age else "")
     return (f"on {device} {lane}" + when
-            + ("; that lane was down in the previous run too" if (device, lane) in down_before else ""))
+            + ("; that lane was down in the previous run too" if (device, lane) in down_before
+               else "; that lane had been down since before the previous run" if down_since_before else ""))
 
 
 def _fixed_checks(case: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -1398,8 +1419,8 @@ def _newly_failed_services(pair: _ScanPair) -> list[dict[str, str]]:
                 ),
                 service_type=service_type,
             )
-        elif prev_st != st and prev_st in _FAULT_DP:
-            # severity change still operationally new
+        elif prev_st == "degraded" and st == "down":
+            # A fault that got worse is new; down → degraded is an easing, reported as a changed status.
             _add(name, status=st, detail=f"dataplane {prev_st} → {st}", service_type=service_type)
 
     old_svc_faults = _service_issue_faults(pair.older)
@@ -1424,11 +1445,14 @@ def _newly_failed_services(pair: _ScanPair) -> list[dict[str, str]]:
     checks_then, checks_now = _fixed_checks(pair.older), _fixed_checks(pair.newer)
     for row in rows:
         lane = lanes_now.get(row["service"])
-        if lane and lane[:2] in lanes_down_before and row["service"] in new_services:
+        # Down before the previous scan: that scan's own investigation found the lane down, or the device's
+        # time since the lane went down reaches back past that scan.
+        since_before = bool(lane) and _down_before_previous_scan(lane[2], pair.older, pair.newer)
+        if lane and (lane[:2] in lanes_down_before or since_before) and row["service"] in new_services:
             # Same fault on the same lane, under a service the previous scan did not list (a redeploy or a
             # new service): listed, but the lane going down is not new, so it is not counted as newly failed.
             row["classification"] = NEW_ON_DOWN_LANE
-        for note in (_lane_note(row["service"], lanes_now, lanes_down_before),
+        for note in (_lane_note(row["service"], lanes_now, lanes_down_before, since_before),
                      _earlier_check_note(checks_then.get(row["service"]), checks_now.get(row["service"]))):
             if note:
                 row["detail"] = f"{row['detail']}; {note}" if row.get("detail") else note

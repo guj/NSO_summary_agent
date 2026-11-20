@@ -1382,6 +1382,41 @@ def test_a_new_service_on_a_lane_already_down_is_listed_but_not_counted_as_newly
     assert counts_as_newly_failed({"service": "b2", "status": "Down"})
 
 
+def test_a_new_service_on_a_lane_the_device_says_went_down_before_the_previous_scan_is_not_counted_as_newly_failed():
+    """test93: ucsd's tofino services were redeployed after a scan that had not investigated the port."""
+    from diagnostic_mas.case_delta import counts_as_newly_failed
+
+    lane = "HundredGigE0/0/0/24/0"
+    services = {"keep": "l2bridge", "circuit": "l2bridge"}
+
+    def scans(age, older_run="20261118T182617Z", newer_run="20261118T201736Z"):
+        older = {**_scan({"keep": "l2bridge"}), "run_id": older_run}
+        newer = {**_lane_on(_down(_scan(services), "circuit", "l2bridge"), {lane: ["circuit"]}, {lane: age}),
+                 "run_id": newer_run}
+        return compute_case_delta(older, newer)["newly_failed_services"]
+
+    # Down for days, the scans two hours apart, and the previous scan did not look at the port.
+    [row] = scans("3d02h")
+    assert row["classification"] == "new_service_on_down_lane" and not counts_as_newly_failed(row)
+    assert row["detail"].endswith(f"; on fiu-data-sw {lane}, last flapped 3d02h ago; that lane had been down since "
+                                  "before the previous run")
+    assert scans("never")[0]["classification"] == "new_service_on_down_lane"
+    assert scans("38w1d")[0]["classification"] == "new_service_on_down_lane"
+
+    # Down for hours: it could have gone down after the previous scan read it.
+    assert scans("02:15:40")[0]["classification"] == "newly_detected_fault"
+    assert scans("1d05h")[0]["classification"] == "newly_detected_fault"
+
+    # Scans three days apart: three days down proves nothing about the earlier scan.
+    assert scans("3d02h", older_run="20261115T182617Z")[0]["classification"] == "newly_detected_fault"
+    assert scans("5d02h", older_run="20261115T182617Z")[0]["classification"] == "new_service_on_down_lane"
+
+    # Scans that carry no run time cannot say how far apart they were.
+    older, newer = _scan({"keep": "l2bridge"}), _lane_on(_down(_scan(services), "circuit", "l2bridge"),
+                                                          {lane: ["circuit"]}, {lane: "3d02h"})
+    assert compute_case_delta(older, newer)["newly_failed_services"][0]["classification"] == "newly_detected_fault"
+
+
 def test_a_newly_down_lane_gives_the_time_it_flapped_not_an_age_from_an_earlier_read():
     lane = "HundredGigE0/0/0/24/1"
     newer = _with_lane(_dp_case("down"), {lane: ["circuit"]}, {lane: "07:32:18"},
@@ -1612,11 +1647,17 @@ def test_a_device_newly_unreadable_is_missing_evidence_and_one_unreadable_before
         {"kind": "collection_gap", "subject": "cape-data-sw", "detail": "live MCP collection failed"}]
 
 
-def test_a_fault_that_changed_from_down_to_degraded_is_listed_with_both_states():
-    delta = compute_case_delta(case_to_dict(_dp_case("down")), case_to_dict(_dp_case("degraded")))
+def test_a_fault_that_got_worse_from_degraded_to_down_is_listed_with_both_states():
+    delta = compute_case_delta(case_to_dict(_dp_case("degraded")), case_to_dict(_dp_case("down")))
 
     [row] = delta["newly_failed_services"]
-    assert (row["service"], row["status"], row["detail"]) == ("circuit", "degraded", "dataplane down → degraded")
+    assert (row["service"], row["status"], row["detail"]) == ("circuit", "down", "dataplane degraded → down")
+
+
+def test_a_fault_that_eased_from_down_to_degraded_is_not_newly_failed():
+    delta = compute_case_delta(case_to_dict(_dp_case("down")), case_to_dict(_dp_case("degraded")))
+
+    assert delta["newly_failed_services"] == []
 
 
 def test_a_service_with_a_dataplane_fault_and_a_service_problem_is_listed_once_from_its_dataplane():

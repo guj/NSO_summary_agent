@@ -3135,6 +3135,9 @@ def format_run_details(
                 f"rounds {m['rounds_used']}/{m['rounds_allowed']}; "
                 f"LLM requests {m['llm_requests']}; stopped: {m['stop_reason']}; "
                 f"tools remaining: {m['tools_remaining']}."
+                + (" A request timed out and was asked again"
+                   + (f", then again with earlier tool results left out: {m['results_left_out']}"
+                      if m.get("results_left_out") else "") + "." if m.get("timeout_retries") else "")
             )
     for note in reporting_notes or []:
         if note.strip():

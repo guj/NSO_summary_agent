@@ -28,8 +28,11 @@ legend and limits are described under
 When an earlier saved scan exists to compare with, the **Result** list tags each count:
 **(none new)** or **(not new)**, **(1 new: …)** naming what is new, or **(not read last scan)**
 when the previous scan could not read it; the Services line says which services newly failed.
-A Down service the previous scan did not list, on a lane that scan already found down (a redeploy), is
-listed apart in the changes section and is not counted as newly failed.
+A Down service the previous scan did not list, on a lane that was already down then (a redeploy), is
+listed apart in the changes section and is not counted as newly failed. The lane counts as already down when the
+previous scan's port investigation found it down, or when the device says it went down longer ago than the days
+between the two scans plus one day. A service that went from Down to Degraded is not newly failed either; it
+shows as a changed status. Degraded to Down does count.
 Each **Recommended follow-up** item starts with **New this scan**, **Open since** the first day
 it was seen, **Carried over** (seen last scan, with no dated record) or **Not read last scan**,
 and within each kind of action the new items come first. **Changes since previous run** has the
@@ -349,6 +352,10 @@ Each service is counted once, and the four status columns add up to Total.
 | **Down** | A required service component or path is confirmed failed |
 | **Degraded** | Confirmed partial impairment |
 | **Unknown** | The sync prerequisite failed, or operational evidence is insufficient |
+
+A Down or Degraded result the LLM reached ends its Result line with "(LLM confidence medium)", the model's own
+stated confidence, or "(LLM confidence medium; concluded at the tool limit, 40 of 40 tools used)" when the
+investigation had spent every tool before concluding, so it may have wanted more reads.
 
 In the HTML report, expand a count to see what produced it, for example a basic operational pass
 or an LLM conclusion. The "basic operational checks" lines under the table report the deterministic

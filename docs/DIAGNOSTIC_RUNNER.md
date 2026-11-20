@@ -343,6 +343,16 @@ archives older than `MCP_RESULTS_KEEP_DAYS` (default 7 days; `0` keeps all).
 `RUNS_KEEP_DAYS` (default `0`, keep all) does the same for saved scans under `runs/`: a scan
 that saves removes those more than that many days older, never the one `latest.json` names.
 
+A service dig whose LLM request times out asks again before it gives up. Each round re-sends the whole
+conversation, so a long dig on a large device grows until a request can pass the provider timeout. First the same
+request is sent once more, since a provider that was briefly slow answers it. If that times out too and the request
+held more than `DATAPLANE_TIMEOUT_RETRY_CHARS` characters (default `100000`; `0` turns trimming off), it is asked once
+more with the oldest tool results of over 1,000 characters (never those of the last 3 rounds) replaced by a
+one-line note naming the call, until it fits; the model can call the tool again. A request that fails every time
+stops the dig as before. `DATAPLANE_TIMEOUT_RETRY=0` turns both retries off. The saved exchange and the evidence
+keep every result. The log names each retry, and the dig's line under "Per-service investigations" says it was
+asked again and counts the results left out. A dig that never times out is not touched.
+
 `--check-connection` starts the MCP server, asks NSO for its device list and, unless
 `--skip-llm` is given, checks the LLM key and model with a one-token request. When the
 provider reports spend, it also prints the LLM budget that is left. It prints one

@@ -1475,9 +1475,9 @@
     },
     {
       "id": 21,
-      "type": "stat",
-      "title": "Device sync",
-      "description": "NSO can't reach: devices whose sync check failed (NSO cannot connect or the check errored); nothing read from them in this scan is confirmed. Locked: devices NSO shows as locked (southbound lock), usually someone's maintenance or a stuck session; nothing was read from them. Config drift: devices NSO reports out of sync, a change-management question; a locked device is not counted here.",
+      "type": "piechart",
+      "title": "Devices needing attention",
+      "description": "Each device once, under one reason, from the last scan. Locked: NSO shows a southbound lock (maintenance or a stuck session); nothing was read from it. NSO can't reach: the sync check failed or the live collection timed out; nothing read from it is confirmed. Checks unavailable: the device was read, but some checks could not run on it (for example a SAOS device that exposes no IS-IS or BGP state). Config drift: NSO reports the device out of sync, a change-management question. Slices add up to the devices needing attention.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1485,7 +1485,7 @@
       "gridPos": {
         "x": 0,
         "y": 38,
-        "w": 6,
+        "w": 7,
         "h": 5
       },
       "targets": [
@@ -1494,19 +1494,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max(nso_fleet_devices_sync_error{instance=\"$instance\",pipeline=\"diagnostic\"})",
+          "expr": "max(nso_fleet_devices_attention{instance=\"$instance\",pipeline=\"diagnostic\",reason=\"locked\"})",
           "refId": "A",
-          "instant": true,
-          "range": false,
-          "legendFormat": "NSO can't reach"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "max(nso_fleet_devices_locked{instance=\"$instance\",pipeline=\"diagnostic\"})",
-          "refId": "B",
           "instant": true,
           "range": false,
           "legendFormat": "Locked"
@@ -1516,8 +1505,30 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max(nso_fleet_devices_out_of_sync{instance=\"$instance\",pipeline=\"diagnostic\"})",
+          "expr": "max(nso_fleet_devices_attention{instance=\"$instance\",pipeline=\"diagnostic\",reason=\"cannot_reach\"})",
+          "refId": "B",
+          "instant": true,
+          "range": false,
+          "legendFormat": "NSO can't reach"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(nso_fleet_devices_attention{instance=\"$instance\",pipeline=\"diagnostic\",reason=\"checks_unavailable\"})",
           "refId": "C",
+          "instant": true,
+          "range": false,
+          "legendFormat": "Checks unavailable"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(nso_fleet_devices_attention{instance=\"$instance\",pipeline=\"diagnostic\",reason=\"config_drift\"})",
+          "refId": "D",
           "instant": true,
           "range": false,
           "legendFormat": "Config drift"
@@ -1529,123 +1540,68 @@
           "decimals": 0,
           "noValue": "no data",
           "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 1
-              }
-            ]
+            "mode": "palette-classic"
           },
           "mappings": []
         },
         "overrides": [
           {
             "matcher": {
-              "id": "byFrameRefID",
-              "options": "A"
+              "id": "byName",
+              "options": "Locked"
             },
             "properties": [
               {
                 "id": "color",
                 "value": {
-                  "mode": "thresholds"
+                  "mode": "fixed",
+                  "fixedColor": "orange"
                 }
-              },
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "green",
-                      "value": null
-                    },
-                    {
-                      "color": "red",
-                      "value": 1
-                    }
-                  ]
-                }
-              },
-              {
-                "id": "unit",
-                "value": "suffix: NSO can't reach"
               }
             ]
           },
           {
             "matcher": {
-              "id": "byFrameRefID",
-              "options": "B"
+              "id": "byName",
+              "options": "NSO can't reach"
             },
             "properties": [
               {
                 "id": "color",
                 "value": {
-                  "mode": "thresholds"
+                  "mode": "fixed",
+                  "fixedColor": "red"
                 }
-              },
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "green",
-                      "value": null
-                    },
-                    {
-                      "color": "blue",
-                      "value": 1
-                    }
-                  ]
-                }
-              },
-              {
-                "id": "unit",
-                "value": "suffix: Locked"
               }
             ]
           },
           {
             "matcher": {
-              "id": "byFrameRefID",
-              "options": "C"
+              "id": "byName",
+              "options": "Checks unavailable"
             },
             "properties": [
               {
                 "id": "color",
                 "value": {
-                  "mode": "thresholds"
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
                 }
-              },
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Config drift"
+            },
+            "properties": [
               {
-                "id": "thresholds",
+                "id": "color",
                 "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "green",
-                      "value": null
-                    },
-                    {
-                      "color": "orange",
-                      "value": 1
-                    }
-                  ]
+                  "mode": "fixed",
+                  "fixedColor": "purple"
                 }
-              },
-              {
-                "id": "unit",
-                "value": "suffix: Config drift"
               }
             ]
           }
@@ -1659,11 +1615,20 @@
           "fields": "",
           "values": false
         },
-        "colorMode": "value",
-        "graphMode": "none",
-        "textMode": "value",
-        "justifyMode": "auto",
-        "orientation": "horizontal"
+        "pieType": "donut",
+        "displayLabels": [
+          "value"
+        ],
+        "legend": {
+          "displayMode": "list",
+          "placement": "right",
+          "showLegend": true,
+          "values": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
       }
     },
     {
@@ -1676,9 +1641,9 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 6,
+        "x": 7,
         "y": 38,
-        "w": 6,
+        "w": 7,
         "h": 5
       },
       "targets": [
@@ -1740,9 +1705,9 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 12,
+        "x": 14,
         "y": 38,
-        "w": 6,
+        "w": 5,
         "h": 5
       },
       "targets": [
@@ -1807,9 +1772,9 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 18,
+        "x": 19,
         "y": 38,
-        "w": 6,
+        "w": 5,
         "h": 5
       },
       "targets": [
@@ -1878,7 +1843,7 @@
     },
     {
       "id": 34,
-      "type": "stat",
+      "type": "gauge",
       "title": "Busiest CPU",
       "description": "Busiest device by 5-minute CPU. The highest 5-minute CPU of any device when the last good scan read them, with the device's name. Red at 80% or more. Devices the scan could not read are not included: see Devices not covered. Shows no data until a scan has run on the newer image.",
       "datasource": {
@@ -1889,7 +1854,7 @@
         "x": 0,
         "y": 44,
         "w": 4,
-        "h": 3
+        "h": 5
       },
       "targets": [
         {
@@ -1907,7 +1872,10 @@
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
+          "displayName": "${__field.labels.device}",
           "decimals": 0,
+          "min": 0,
+          "max": 100,
           "noValue": "after the next scan",
           "color": {
             "mode": "thresholds"
@@ -1930,22 +1898,22 @@
         "overrides": []
       },
       "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "value",
-        "graphMode": "none",
-        "textMode": "value_and_name",
-        "justifyMode": "center"
-      }
+    "reduceOptions": {
+      "calcs": [
+        "lastNotNull"
+      ],
+      "fields": "",
+      "values": false
+    },
+    "textMode": "value_and_name",
+    "orientation": "auto",
+    "showThresholdLabels": false,
+    "showThresholdMarkers": true
+  }
     },
     {
       "id": 35,
-      "type": "stat",
+      "type": "gauge",
       "title": "Fullest memory",
       "description": "Fullest device by memory use. The highest memory use of any device when the last good scan read them, with the device's name. Red at 85% or more. Devices the scan could not read are not included: see Devices not covered. Shows no data until a scan has run on the newer image.",
       "datasource": {
@@ -1956,7 +1924,7 @@
         "x": 4,
         "y": 44,
         "w": 4,
-        "h": 3
+        "h": 5
       },
       "targets": [
         {
@@ -1974,7 +1942,10 @@
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
+          "displayName": "${__field.labels.device}",
           "decimals": 0,
+          "min": 0,
+          "max": 100,
           "noValue": "after the next scan",
           "color": {
             "mode": "thresholds"
@@ -1997,18 +1968,18 @@
         "overrides": []
       },
       "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "value",
-        "graphMode": "none",
-        "textMode": "value_and_name",
-        "justifyMode": "center"
-      }
+    "reduceOptions": {
+      "calcs": [
+        "lastNotNull"
+      ],
+      "fields": "",
+      "values": false
+    },
+    "textMode": "value_and_name",
+    "orientation": "auto",
+    "showThresholdLabels": false,
+    "showThresholdMarkers": true
+  }
     },
     {
       "id": 36,
@@ -2023,7 +1994,7 @@
         "x": 8,
         "y": 44,
         "w": 4,
-        "h": 3
+        "h": 5
       },
       "targets": [
         {
@@ -2089,7 +2060,7 @@
         "x": 12,
         "y": 44,
         "w": 4,
-        "h": 3
+        "h": 5
       },
       "targets": [
         {
@@ -2155,7 +2126,7 @@
         "x": 16,
         "y": 44,
         "w": 4,
-        "h": 3
+        "h": 5
       },
       "targets": [
         {
@@ -2221,7 +2192,7 @@
         "x": 20,
         "y": 44,
         "w": 4,
-        "h": 3
+        "h": 5
       },
       "targets": [
         {
@@ -2281,7 +2252,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 47,
+        "y": 49,
         "w": 24,
         "h": 1
       },
@@ -2298,7 +2269,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 48,
+        "y": 50,
         "w": 7,
         "h": 3
       },
@@ -2456,7 +2427,7 @@
       },
       "gridPos": {
         "x": 7,
-        "y": 48,
+        "y": 50,
         "w": 5,
         "h": 3
       },
@@ -2520,7 +2491,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 48,
+        "y": 50,
         "w": 12,
         "h": 6
       },
@@ -2576,7 +2547,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 51,
+        "y": 53,
         "w": 7,
         "h": 3
       },
@@ -2704,7 +2675,7 @@
       },
       "gridPos": {
         "x": 7,
-        "y": 51,
+        "y": 53,
         "w": 5,
         "h": 3
       },
