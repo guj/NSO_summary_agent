@@ -352,3 +352,20 @@ def test_dataplane_tally_lists_no_investigations_when_none_explained_a_service()
         "links": {"HundredGigE0/0/0/24/0": ["cs"]}}})
 
     assert dataplane_tally_for_summary(case)["investigated"] == []
+
+
+def test_dataplane_tally_counts_only_services_dug_on_their_own_as_digs():
+    """test101: 6 digs ran and 19 services were explained by ports; the summary said "21 of 25 digs concluded Down"."""
+    case = CaseFile(budget=Budget(max_deep_checks=0, max_handoffs=0))
+    for name in ("a", "b", "c"):
+        _port_diagnosis(case, name)
+    _port_diagnosis(case, "via_cape", source="device_investigation")
+    _port_diagnosis(case, "own_down", source="llm", status="down")
+    _port_diagnosis(case, "own_up", source="llm", status="up")
+
+    tally = dataplane_tally_for_summary(case)
+
+    assert tally["digs_total"] == 2
+    assert tally["by_status"] == {"down": 1, "up": 1}
+    assert tally["explained_by_port_or_device"] == 4
+    assert _compact_case_for_llm(case)["dataplane_budget"]["digs"] == 2

@@ -197,6 +197,17 @@ def test_scan_pushes_faulted_services_by_the_device_they_point_to():
     assert 'nso_service_faults{device="rutg-data-sw"' not in text
 
 
+def test_scan_pushes_how_many_services_each_device_has_by_type():
+    """test101: gpn-data-sw had 567 of 1,722 services and nothing in Grafana said so; only the not-OpUp ones were pushed."""
+    text = _pushed(scan_case())
+
+    for device, kind, count in (("fiu-data-sw", "l2sts", 3), ("rutg-data-sw", "l2sts", 2),
+                                ("mass-data-sw", "l2sts", 1), ("cien-data-sw", "l3rt", 1)):
+        assert (f'nso_services_by_device{{device="{device}",pipeline="diagnostic",service_type="{kind}"}} '
+                f"{float(count)}") in text
+    assert 'nso_services_by_device{device="scm-data-sw"' not in text      # no service on it, no series
+
+
 def test_scan_pushes_how_many_devices_it_could_not_cover():
     assert 'nso_fleet_devices_not_covered{pipeline="diagnostic"} 2.0' in _pushed(scan_case())
 

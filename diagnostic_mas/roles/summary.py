@@ -100,18 +100,26 @@ def _dataplane_conclusion_rows(case: CaseFile) -> list[dict[str, Any]]:
 def dataplane_tally_for_summary(case: CaseFile) -> dict[str, Any]:
     """Authoritative dig counts for the summary LLM (avoids undercount drift).
 
+    ``digs_total`` and ``by_status`` count only services dug on their own; a service a port or device
+    investigation explained is counted apart, so the model does not call it a dig.
+
     Incomplete / unresolved = ``complete is False`` or status in
     ``unknown`` / ``not_checked``. Names are listed per service_type so the
     model can group without inventing a lower instance count. ``investigated``
     lists each port or cut-off device a finding came from, with its services,
     so the model neither drops a port nor merges two.
     """
+    from diagnostic_mas.port_investigation import SOURCES
+
     rows = _dataplane_conclusion_rows(case)
+    dug = [p for p in rows if p.get("source") not in SOURCES]
     by_status: dict[str, int] = {}
+    for p in dug:
+        st = str(p.get("dataplane_status") or "unknown").strip().lower() or "unknown"
+        by_status[st] = by_status.get(st, 0) + 1
     by_type: dict[str, dict[str, Any]] = {}
     for p in rows:
         st = str(p.get("dataplane_status") or "unknown").strip().lower() or "unknown"
-        by_status[st] = by_status.get(st, 0) + 1
         incomplete = p.get("complete") is False or st in {
             "unknown",
             "not_checked",
@@ -128,8 +136,9 @@ def dataplane_tally_for_summary(case: CaseFile) -> dict[str, Any]:
         assert isinstance(names, list)
         names.append(name)
     return {
-        "digs_total": len(rows),
+        "digs_total": len(dug),
         "by_status": by_status,
+        "explained_by_port_or_device": len(rows) - len(dug),
         "incomplete_or_unresolved_total": sum(
             int(b["count"]) for b in by_type.values()
         ),

@@ -242,3 +242,48 @@ async def test_device_finding_is_shown_by_its_headline_in_the_report_and_in_its_
     assert ("**Cut off:** Its only uplink receives no light. "
             "(2 services that use another device; investigated once)") in block
     assert "The device was investigated once: Its only uplink receives no light." in by_name["two-site"]["cause"]
+
+
+@pytest.mark.asyncio
+async def test_the_device_block_names_the_services_that_are_not_marked_down_while_it_is_cut_off():
+    """A cut-off PE's services that name no other device pass on their own device, so nothing in the block said they stayed Up."""
+    from diagnostic_mas.operator_report import format_devices_operator
+
+    case = _pe_case()
+    await _run(case, _loop([]))
+
+    block = "\n".join(format_devices_operator(case)).split(f"### {PE}\n", 1)[1].split("\n### ", 1)[0]
+
+    assert ("**Not marked Down while cut off:** 1 service on this device names no other device and passed its "
+            "fixed check, which reads only a service's own device. Traffic beyond this site was not tested: "
+            "local-routed.") in block
+    # Not the one whose own check did not pass, nor a service on another device.
+    assert "local-unknown" not in block.split("**Not marked Down while cut off:**", 1)[1]
+    assert "elsewhere" not in block.split("**Not marked Down while cut off:**", 1)[1]
+
+
+@pytest.mark.asyncio
+async def test_the_not_marked_down_line_is_plural_and_names_at_most_five():
+    from diagnostic_mas.operator_report import format_devices_operator
+
+    case = _case(_service("external", "l3rt", [PE, HUB], "unknown"),
+                 *[_service(f"local-{i}", "l3rt", [PE], "up") for i in range(7)])
+    await _run(case, _loop([]))
+
+    block = "\n".join(format_devices_operator(case)).split(f"### {PE}\n", 1)[1].split("\n### ", 1)[0]
+
+    assert ("**Not marked Down while cut off:** 7 services on this device name no other device and passed their "
+            "fixed check, which reads only a service's own device. Traffic beyond this site was not tested: "
+            "local-0, local-1, local-2, local-3, local-4 and 2 more.") in block
+
+
+@pytest.mark.asyncio
+async def test_no_not_marked_down_line_when_the_re_read_found_the_sessions_up():
+    from diagnostic_mas.operator_report import format_devices_operator
+
+    case = _pe_case()
+    await _run(case, _loop([], sessions="Established"))
+
+    block = "\n".join(format_devices_operator(case)).split(f"### {PE}\n", 1)[1].split("\n### ", 1)[0]
+
+    assert "not confirmed when re-read" in block and "Not marked Down" not in block

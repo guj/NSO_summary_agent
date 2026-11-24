@@ -1749,6 +1749,7 @@ def compact_delta_for_llm(delta: CaseDelta | None) -> dict[str, Any] | None:
             )
         return out
 
+    on_down_lanes = [row for row in delta.get("newly_failed_services") or [] if not counts_as_newly_failed(row)]
     gone = [f"{row['service']} (was {was})" if was else row["service"] for row, was in _gone_faults_first(delta)]
     lost = [_routing_session_line(row).replace("`", "")
             for row in delta.get("routing_sessions_lost") or []]
@@ -1840,7 +1841,14 @@ def compact_delta_for_llm(delta: CaseDelta | None) -> dict[str, Any] | None:
                         "its fault ended with the deletion, so the Down or Degraded count fell without "
                         "any service recovering." if delta.get("service_faults_no_longer_present") else "")),
         }} if gone else {}),
-        "newly_failed_services": list(delta.get("newly_failed_services") or [])[:20],
+        "newly_failed_services": [row for row in delta.get("newly_failed_services") or []
+                                  if counts_as_newly_failed(row)][:20],
+        **({"new_services_on_lanes_already_down": {
+            "count": len(on_down_lanes),
+            "services": on_down_lanes[:20],
+            "note": ("Down, not in the previous scan, on a lane that was already down: a redeploy or a new "
+                     "service on an old fault, not newly failed. Do not add them to the newly failed count."),
+        }} if on_down_lanes else {}),
         "recovered_devices": list(delta.get("recovered_devices") or [])[:20],
         "newly_missing_evidence": list(delta.get("newly_missing_evidence") or [])[
             :20

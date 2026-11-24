@@ -1104,7 +1104,7 @@
       "gridPos": {
         "x": 0,
         "y": 21,
-        "w": 12,
+        "w": 8,
         "h": 8
       },
       "targets": [
@@ -1160,9 +1160,9 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 12,
+        "x": 8,
         "y": 21,
-        "w": 12,
+        "w": 8,
         "h": 8
       },
       "targets": [
@@ -1203,6 +1203,62 @@
           "mode": "multi",
           "sort": "desc"
         }
+      }
+    },
+    {
+      "id": 43,
+      "type": "table",
+      "title": "Services per device, now",
+      "description": "Services with an endpoint on the device, so a service on two devices counts on both and rows overlap. Read it beside the not-OpUp table.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 21,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sort_desc(sum by (device) (nso_services_by_device{instance=\"$instance\",pipeline=\"diagnostic\"}))",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "device": "Device",
+              "Value": "Services"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left"
+          },
+          "noValue": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
       }
     },
     {
@@ -1698,7 +1754,6 @@
       "id": 20,
       "type": "stat",
       "title": "IS-IS down",
-      "description": "IS-IS adjacencies down.",
       "description": "",
       "datasource": {
         "type": "prometheus",
@@ -1765,7 +1820,6 @@
       "id": 19,
       "type": "stat",
       "title": "BGP down",
-      "description": "BGP sessions down.",
       "description": "",
       "datasource": {
         "type": "prometheus",
@@ -1898,18 +1952,18 @@
         "overrides": []
       },
       "options": {
-    "reduceOptions": {
-      "calcs": [
-        "lastNotNull"
-      ],
-      "fields": "",
-      "values": false
-    },
-    "textMode": "value_and_name",
-    "orientation": "auto",
-    "showThresholdLabels": false,
-    "showThresholdMarkers": true
-  }
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "orientation": "auto",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      }
     },
     {
       "id": 35,
@@ -1968,18 +2022,18 @@
         "overrides": []
       },
       "options": {
-    "reduceOptions": {
-      "calcs": [
-        "lastNotNull"
-      ],
-      "fields": "",
-      "values": false
-    },
-    "textMode": "value_and_name",
-    "orientation": "auto",
-    "showThresholdLabels": false,
-    "showThresholdMarkers": true
-  }
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "orientation": "auto",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      }
     },
     {
       "id": 36,

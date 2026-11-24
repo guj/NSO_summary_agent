@@ -46,6 +46,23 @@ def _final_status_metrics(case: CaseFile) -> tuple[dict[str, dict[str, int]], li
     return by_type, faults
 
 
+def _services_by_device(case: CaseFile) -> list[dict[str, Any]]:
+    """Services with an endpoint on each device, by type (what the report's device sizes count).
+
+    A service with endpoints on two devices counts under both, so the rows overlap and must not be summed.
+    """
+    from diagnostic_mas.service_final_status import final_service_assessments
+
+    counts: Counter[tuple[str, str]] = Counter()
+    for kind, _name, service, _status, _reason in final_service_assessments(case):
+        endpoints = {str(d) for d in service.get("devices") or [] if d}
+        endpoints.update(str(d) for d in service.get("device_sync") or {} if d)
+        for device in endpoints:
+            counts[device, kind] += 1
+    return [{"device": device, "service_type": kind, "count": count}
+            for (device, kind), count in sorted(counts.items())]
+
+
 def _llm_metrics(case: CaseFile) -> dict[str, Any]:
     """How the scan's LLM work went and what it cost; numbers and the model's name, never a provider's text.
 
@@ -148,6 +165,7 @@ def metrics_snapshot_from_case(
         "hardware_health": hardware_health,
         "service_status": service_status,
         "service_faults": service_faults,
+        "services_by_device": _services_by_device(case),
         "devices_not_covered": len(_collection_gap_devices(case)),
         "devices_attention": _devices_attention(case, fleet_sync),
     }

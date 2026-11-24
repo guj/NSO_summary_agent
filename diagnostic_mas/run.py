@@ -680,7 +680,8 @@ def _compare_with_previous(
         previous_run_id=previous_run_id, run_id=plan.run_id,
     )
     first_seen_from_saved_scans(case.last_known_service_faults, Path(state_dir) / "runs", before=plan.run_id)
-    current = case_to_dict(case)
+    # A saved case carries its run id; this one is saved after the comparison, so it is added here.
+    current = {**case_to_dict(case), "run_id": plan.run_id}
     case_delta = None
     if previous_case is not None:
         case_delta = compute_case_delta(previous_case, current)

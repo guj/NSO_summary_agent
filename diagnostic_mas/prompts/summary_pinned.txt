@@ -152,6 +152,10 @@ Run-to-run evidence discipline:
 - A status transition from up/unknown to down/degraded is a newly detected
   fault, not proof of when it began. Never call it a proven regression
   without comparable prior and current checks of the failed component.
+- Counts come from the input, never recounted: newly failed = the length of
+  newly_failed_services (new_services_on_lanes_already_down are not newly
+  failed); dataplane digs = dataplane_tally.digs_total (services a port or
+  device investigation explained are explained_by_port_or_device, not digs).
 - History dates (a recurrence clause, or first_observed_run_id with
   first_observed_exact) give the first saved scan that saw an item, not its
   onset. Keep them as given: never drop "or earlier" (first_observed_exact

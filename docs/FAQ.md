@@ -497,7 +497,8 @@ push off for one run. Only counts, the scan's LLM spend and the model's name are
 topology itself. See `deploy/monitoring/`.
 
 The counts include the report's final status per service type (`nso_services`), services that are
-not OpUp per device (`nso_service_faults`), and how many devices could not be covered. Links that
+not OpUp per device (`nso_service_faults`), how many services each device has (`nso_services_by_device`),
+and how many devices could not be covered. Links that
 gained errors while up since the previous scan add CRC errors per minute (`nso_link_crc_per_minute`)
 and down/up changes (`nso_link_state_changes`); a rate is the average over the gap between the two
 scans, a lead rather than a service status. The scan's LLM work adds its state (`nso_llm_state`), how many

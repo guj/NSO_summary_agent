@@ -245,6 +245,7 @@ It also pushes:
 |---|---|
 | `nso_services{service_type,status}` | The report's final status per service type: `up`, `down`, `degraded`, `unknown` |
 | `nso_service_faults{device,service_type,status}` | Services that are not OpUp, by the device their failed check points to |
+| `nso_services_by_device{device,service_type}` | Services with an endpoint on each device, by type; a service on two devices counts on both, so read it beside `nso_service_faults` and do not sum devices |
 | `nso_fleet_devices_not_covered` | Devices dropped or not collected in the scan |
 | `nso_fleet_devices_attention{reason}` | Devices needing attention, each counted once under one reason: `locked` (NSO's southbound is locked), `cannot_reach` (the sync check errored or the live collection timed out), `config_drift` (out of sync) or `checks_unavailable` (collected with no usable read, such as a Ciena device with no CLI) |
 | `nso_link_crc_per_minute{device,port}` | CRC errors per minute on a link that is up, averaged over the gap since the previous scan; only links that gained CRC errors |

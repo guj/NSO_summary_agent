@@ -586,6 +586,19 @@ def _dependents(case: CaseFile, device: str):
             yield ev, record
 
 
+def stays_up_services(case: CaseFile, device: str) -> list[str]:
+    """Services whose own config names only this device and that passed their fixed check.
+
+    The cut-off investigation explains the services that name another device; these name none, so the
+    fixed check, which reads only a service's own device, passes them whatever the network beyond does.
+    """
+    diagnosed = {dx["subject"]["name"] for dx in case.diagnoses if dx["kind"] == "dataplane"}
+    return sorted({record["name"] for _ev, record in _records(case)
+                   if {str(d) for d in record.get("devices") or []} == {device}
+                   and (record.get("basic_checks") or {}).get("status") == "up"
+                   and record["name"] not in diagnosed})
+
+
 def _device_prompt() -> str:
     if _DEVICE_PROMPT.is_file():
         return _DEVICE_PROMPT.read_text(encoding="utf-8")

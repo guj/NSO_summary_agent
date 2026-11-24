@@ -1284,7 +1284,8 @@ def _unfinished(finding: dict[str, Any], n: int) -> str:
 
 def _port_finding_lines(case: CaseFile, device: str) -> list[str]:
     """One line per port investigated on this device, or explained by an earlier scan's finding."""
-    from diagnostic_mas.port_investigation import device_findings, earlier_when, port_findings, short_cause
+    from diagnostic_mas.port_investigation import (
+        device_findings, earlier_when, port_findings, short_cause, stays_up_services)
 
     lines: list[str] = []
     for finding in device_findings(case):
@@ -1296,11 +1297,19 @@ def _port_finding_lines(case: CaseFile, device: str) -> list[str]:
             cause = scrub_internal_ids(short_cause(finding, 300))
             lines.append(f"**Cut off:** {cause} (not confirmed when re-read; "
                          f"{services} left to {'their' if n != 1 else 'its'} own investigation)")
-        elif finding.get("concluded"):
+            continue
+        if finding.get("concluded"):
             cause = scrub_internal_ids(short_cause(finding, 300))
             lines.append(f"**Cut off:** {cause} ({services} that use another device; investigated once)")
         else:
             lines.append(f"**Cut off:** {_unfinished(finding, n)}")
+        stay = stays_up_services(case, device)
+        if stay:
+            shown = ", ".join(stay[:5]) + (f" and {len(stay) - 5} more" if len(stay) > 5 else "")
+            lines.append(f"**Not marked Down while cut off:** {len(stay)} service{'s' if len(stay) != 1 else ''} on this "
+                         f"device {'name' if len(stay) != 1 else 'names'} no other device and passed "
+                         f"{'their' if len(stay) != 1 else 'its'} fixed check, which reads only a service's own device. "
+                         f"Traffic beyond this site was not tested: {shown}.")
     for finding in port_findings(case):
         if finding.get("device") != device:
             continue

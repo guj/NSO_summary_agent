@@ -1679,3 +1679,45 @@ def test_a_service_unknown_only_for_its_sync_or_collection_is_not_a_newly_failed
     delta = compute_case_delta(case_to_dict(_blank()), case_to_dict(newer))
 
     assert [(r["service"], r["detail"]) for r in delta["newly_failed_services"]] == [("svc-down", "svc-down message")]
+
+
+def test_the_scan_hands_its_own_run_id_to_the_comparison(tmp_path, monkeypatch):
+    """test99: a case has no run id until it is saved, so the since-before-the-previous-scan rule never ran live."""
+    from types import SimpleNamespace
+
+    from diagnostic_mas import case_delta, run
+
+    seen = {}
+    real = case_delta.compute_case_delta
+
+    def capture(older, newer):
+        seen["newer"] = newer
+        return real(older, newer)
+
+    older = {**_scan({"keep": "l2bridge"}), "run_id": "20261120T172547Z"}
+    monkeypatch.setattr(case_delta, "load_previous_case", lambda _dir: (older, "20261120T172547Z"))
+    monkeypatch.setattr(case_delta, "compute_case_delta", capture)
+    plan = SimpleNamespace(run_id="20261120T220459Z", service_type=None, service_id=None)
+    run._compare_with_previous(CaseFile(budget=Budget(0, 0)), SimpleNamespace(state_dir=tmp_path), plan)
+
+    assert seen["newer"]["run_id"] == "20261120T220459Z"
+
+
+def test_the_summary_is_handed_only_counted_services_as_newly_failed():
+    """test101: nine services on lanes already down sat in newly_failed_services and the summary called all ten new."""
+    from diagnostic_mas.case_delta import compact_delta_for_llm
+
+    lane0, lane1 = "HundredGigE0/0/0/24/0", "HundredGigE0/0/0/24/1"
+    before = _lane_on(_scan({"keep": "l2bridge", "replaced": "l2bridge"}), {lane0: ["replaced"]}, {lane0: "2d01h"})
+    services = {"keep": "l2bridge", "on_old_lane": "l2bridge", "on_new_lane": "l2bridge"}
+    newer = _down(_scan(services), "on_old_lane", "l2bridge")
+    second = _down(_scan(services), "on_new_lane", "l2bridge")
+    newer = {**newer, "diagnoses": [*newer["diagnoses"], *second["diagnoses"]]}
+    newer = _lane_on(newer, {lane0: ["on_old_lane"], lane1: ["on_new_lane"]}, {lane0: "2d03h", lane1: "02:15:40"})
+
+    compact = compact_delta_for_llm(compute_case_delta(before, newer))
+
+    assert [row["service"] for row in compact["newly_failed_services"]] == ["on_new_lane"]
+    [other] = compact["new_services_on_lanes_already_down"]["services"]
+    assert other["service"] == "on_old_lane"
+    assert "not newly failed" in compact["new_services_on_lanes_already_down"]["note"]

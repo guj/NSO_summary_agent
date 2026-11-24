@@ -8,6 +8,12 @@ status, count or phrase in the report means, so read it first.
 
 ### Report meaning
 
+- **A cut-off device names the services it does not mark Down:** under a device's "Cut off" line, a new line
+  "Not marked Down while cut off" lists up to five services whose config names only that device and that passed their
+  fixed check (and says how many more). The fixed check reads only a service's own device, and the admins ruled on
+  14 Oct that these l3rt stay Up, so the isolation never reached their status. Nothing else changes: their status, the
+  counts and the Slack text stay as they were, and the line says traffic beyond the site was not tested. It is left
+  out when the re-read found the sessions up, and a cut-off device with nothing to explain still gets no "Cut off" line.
 - **LLM basis on a service's Result line:** a Down or Degraded result the LLM reached now says its stated confidence,
   "Confirmed fault — dataplane down (LLM confidence medium)", and, when the investigation had spent every tool, ";
   concluded at the tool limit, 40 of 40 tools used". The model may have wanted more reads; the limit made it conclude.
@@ -113,6 +119,11 @@ status, count or phrase in the report means, so read it first.
 
 ### Added
 
+- **Services per device in Grafana:** each scan now pushes `nso_services_by_device{device,service_type}`, the number of
+  services with an endpoint on each device, and the dashboard has a table "Services per device, now" beside the
+  not-OpUp tables. Until now only the not-OpUp services were pushed per device, so a device with none showed nothing and
+  a count had no total to read against (gpn-data-sw has 567 of 1,722 services in test101; the median device has 27). A
+  service on two devices counts on both, so the rows overlap. The report and its HTML are unchanged.
 - **Service digs: a timed-out request is asked again:** a dig's LLM request that times out is sent once more as it
   was; before this, one timeout ended the dig and left the service Unknown, as `PUBLIC-351e24eb` was in test92 and
   test93. If that also times out and the request held more than `DATAPLANE_TIMEOUT_RETRY_CHARS` characters (default
@@ -270,6 +281,16 @@ status, count or phrase in the report means, so read it first.
 
 ### Fixed
 
+- The Summary's opening lines no longer miscount. On 23 Nov (test101) it said "10 newly detected faults" when only 1
+  service was newly failed (nine were new services on lanes already down), and "21 of 25 dataplane digs concluded
+  Down" when 6 digs ran (the other services were explained by port investigations). The LLM was handed the nine
+  services in its newly failed list, and port-explained services in its dig count; it now gets them apart.
+- A new service on a lane the device says went down before the previous scan is now left out of the "newly failed"
+  count in a live scan, as the rule above says. It only worked when two saved scans were compared afterwards: a
+  scan has no run id until it is saved, so the live comparison could not tell how far apart the scans were. On 20 Nov
+  (test99) the five ucsd tofino services, back under new ids after the previous scan had not listed them, were
+  counted as 5 newly failed although their lanes had been down for 5 days to over a year. The scan now gives the
+  comparison its own run id. Takes effect from the first scan after the image is rebuilt.
 - A conclusion whose later fields arrived as bare tags inside the first is no longer refused. On 18 Nov the
   `salt-data-sw` ↔ `seat-data-sw` drill sent three complete conclusions, each as one `observed` value holding
   `</observed><cause>…</cause><headline>…` and a closing `</invoke>`, and stopped after three refusals ("no usable

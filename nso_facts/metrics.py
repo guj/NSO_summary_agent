@@ -221,6 +221,11 @@ def build_phase1_metrics(
             lines.append(g("nso_service_faults", float(_intish(row.get("count"))), {
                 "device": str(row.get("device")), "service_type": str(row.get("service_type")),
                 "status": str(row.get("status"))}))
+        # How many services each device has, so a not-OpUp count can be read against its total.
+        lines.append("# TYPE nso_services_by_device gauge")
+        for row in snapshot.get("services_by_device") or []:
+            lines.append(g("nso_services_by_device", float(_intish(row.get("count"))), {
+                "device": str(row.get("device")), "service_type": str(row.get("service_type"))}))
         counts = None
 
     if isinstance(counts, dict):
